@@ -15,3 +15,13 @@ def test_unknown_symbol_is_not_whitelisted() -> None:
     assert sym.is_whitelisted("NOTACOIN") is False
     with pytest.raises(sym.UnknownSymbol):
         sym.to_kraken_pair("NOTACOIN")
+
+
+def test_pair_notation_is_normalized_to_base() -> None:
+    sym = load_module("symbols")
+    assert sym.normalize("BTC/USDT") == "BTC"
+    assert sym.normalize("SOL-PERP") == "SOL"
+    assert sym.normalize("eth") == "ETH"
+    # whitelist + mapping accept pair notation via normalization
+    assert sym.is_whitelisted("BTC/USDT") is True
+    assert sym.to_kraken_pair("SOL/USDT") == "PF_SOLUSD"

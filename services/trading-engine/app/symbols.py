@@ -23,12 +23,26 @@ _WHITELIST: dict[str, str] = {
 }
 
 
+def normalize(symbol: str) -> str:
+    """Reduce a user-facing symbol to its base ticker.
+
+    The UI may send pair notation like ``"BTC/USDT"`` or ``"BTC-PERP"``; the
+    whitelist is keyed by the bare base ticker (``"BTC"``). Split on the quote
+    separator and take the base. Bare tickers (auto-signal path) pass through.
+    """
+    base = symbol.upper()
+    for sep in ("/", "-", ":"):
+        if sep in base:
+            return base.split(sep)[0]
+    return base
+
+
 def is_whitelisted(symbol: str) -> bool:
-    return symbol.upper() in _WHITELIST
+    return normalize(symbol) in _WHITELIST
 
 
 def to_kraken_pair(symbol: str) -> str:
     try:
-        return _WHITELIST[symbol.upper()]
+        return _WHITELIST[normalize(symbol)]
     except KeyError as exc:
         raise UnknownSymbol(symbol) from exc

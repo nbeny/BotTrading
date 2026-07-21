@@ -239,20 +239,31 @@ class TradingEngine:
         if not symbols.is_whitelisted(symbol):
             logger.info("manual_order rejected: unknown symbol %s", symbol)
             return
+        base = symbols.normalize(symbol)
         pair = symbols.to_kraken_pair(symbol)
         kraken_type = "mkt" if order_type == "market" else "lmt"
-        # Notional cap check via sizing (quantity is explicit but must respect MAX_ORDER_USD).
+        # Notional cap: for a limit order use its price; for a market order fall
+        # back to the latest known price (features:{base}, written by the pipeline)
+        # so market orders can't silently exceed MAX_ORDER_USD. If no price can be
+        # resolved we can't compute notional — proceed but warn.
         ref_price = price or 0.0
-        if kraken_type == "lmt" and ref_price > 0:
+        if ref_price <= 0:
+            features = await self._cache.get_json(f"features:{base}")
+            ref_price = float((features or {}).get("price", 0.0))
+        if ref_price > 0:
             notional = quantity * ref_price
             if notional > config.max_order_usd:
                 logger.info("manual_order rejected: notional %.2f over cap", notional)
                 return
+        else:
+            logger.warning(
+                "manual_order %s: no reference price, notional cap not enforced", base
+            )
         await self._kraken.send_order(
             pair=pair, side=side, order_type=kraken_type, size=quantity,
-            limit_price=price, cli_ord_id=f"manual-{symbol}-{side}",
+            limit_price=price, cli_ord_id=f"manual-{base}-{side}",
         )
-        logger.info("MANUAL ORDER %s %s %s qty=%s by %s", symbol, side, order_type, quantity,
+        logger.info("MANUAL ORDER %s %s %s qty=%s by %s", base, side, order_type, quantity,
                     issued_by)
 
     async def _equity(self) -> float:

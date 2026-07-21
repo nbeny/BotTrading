@@ -21,37 +21,66 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     cache = Cache(settings.redis)
     producer = EventProducer(settings.kafka)
     await producer.start()
-    kraken = KrakenFuturesClient(config)
+
+    from .runtime import RuntimeConfig
+    from .control import ControlHandler
+    from cmi_common.events.control import ControlCommandEvent  # noqa: F401 (topic import)
+
+    await RuntimeConfig.write_defaults_if_absent(cache, config)
+
+    # Cache the latest mode so the Kraken client resolves it cheaply per call.
+    app.state.mode = config.mode
+
+    async def _current_mode():
+        eff = await RuntimeConfig.load(cache, config)
+        app.state.mode = eff.mode
+        return eff.mode
+
+    kraken = KrakenFuturesClient(config, mode_provider=lambda: app.state.mode)
     await kraken.start()
 
     engine = TradingEngine(cache, producer, kraken, config)
-    consumer = EventConsumer(
-        settings.kafka,
-        [Topic.RISK_APPROVED],
-        engine.handle,
-        group_id="trading-engine",
+    signals = EventConsumer(
+        settings.kafka, [Topic.RISK_APPROVED], engine.handle, group_id="trading-engine",
     )
-    await consumer.start()
+    await signals.start()
+
+    control = ControlHandler(cache, engine=engine, kraken=kraken, defaults=config)
+
+    async def _control_handle(event):
+        await control.handle(event)
+        await _current_mode()  # refresh cached mode after any settings command
+
+    # Each engine replica must apply every command -> unique group per instance.
+    import os
+    replica = os.getenv("HOSTNAME", "local")
+    commands = EventConsumer(
+        settings.kafka, [Topic.CONTROL], _control_handle,
+        group_id=f"trading-engine-control-{replica}",
+    )
+    await commands.start()
 
     reconciler = Reconciler(cache, producer, kraken)
-    await reconciler.sweep()  # resync at boot
+    await reconciler.sweep()
 
     app.state.cache = cache
     app.state.producer = producer
     app.state.kraken = kraken
-    app.state.consumer = consumer
+    app.state.signals = signals
+    app.state.commands = commands
     app.state.reconciler = reconciler
-    app.state.consumer_task = asyncio.create_task(consumer.run())
-    app.state.reconcile_task = asyncio.create_task(
-        reconciler.run(config.reconcile_interval_s)
-    )
+    app.state.signals_task = asyncio.create_task(signals.run())
+    app.state.commands_task = asyncio.create_task(commands.run())
+    app.state.reconcile_task = asyncio.create_task(reconciler.run(config.reconcile_interval_s))
 
 
 async def _shutdown(app: FastAPI, settings: Settings) -> None:
     app.state.reconciler.stop()
-    await app.state.consumer.stop()
+    await app.state.signals.stop()
+    await app.state.commands.stop()
     await asyncio.gather(
-        app.state.consumer_task, app.state.reconcile_task, return_exceptions=True
+        app.state.signals_task, app.state.commands_task, app.state.reconcile_task,
+        return_exceptions=True,
     )
     await app.state.kraken.close()
     await app.state.producer.stop()

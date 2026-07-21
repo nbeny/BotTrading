@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from cmi_common.events import BaseEvent, RiskApprovedEvent
 from cmi_common.events.decision import Direction
@@ -16,7 +15,6 @@ from .guards import check_guards
 from .sizing import compute_size
 
 logger = logging.getLogger(__name__)
-SERVICE = "trading-engine"
 
 SUBMITTED_KEY = "trading:submitted:{event_id}"
 POSITIONS_SET = "trading:positions"

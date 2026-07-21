@@ -84,3 +84,22 @@ def test_adjust_sltp_dispatches_to_engine() -> None:
     asyncio.run(_handler_with_engine(FakeCache(), engine).handle(
         _cmd(ControlCommand.ADJUST_SLTP, event_id="e1", stop_loss=140.0)))
     assert engine.adjusted == [("e1", 140.0, None, "admin")]
+
+
+def test_approve_reject_dispatch() -> None:
+    control = load_module("control")
+    config = load_module("config")
+
+    class E:
+        def __init__(self): self.calls = []
+        async def approve_opportunity(self, event_id, *, issued_by=None):
+            self.calls.append(("approve", event_id, issued_by))
+        async def reject_opportunity(self, event_id, *, reason="operator_reject", issued_by=None):
+            self.calls.append(("reject", event_id, reason, issued_by))
+
+    e = E()
+    h = control.ControlHandler(FakeCache(), engine=e, kraken=None, defaults=config.TradingConfig())
+    asyncio.run(h.handle(_cmd(ControlCommand.APPROVE_OPPORTUNITY, event_id="e1")))
+    asyncio.run(h.handle(_cmd(ControlCommand.REJECT_OPPORTUNITY, event_id="e2", reason="no")))
+    assert ("approve", "e1", "admin") in e.calls
+    assert ("reject", "e2", "no", "admin") in e.calls

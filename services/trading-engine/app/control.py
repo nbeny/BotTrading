@@ -53,5 +53,12 @@ class ControlHandler:
                 p["event_id"], stop_loss=p.get("stop_loss"),
                 take_profit=p.get("take_profit"), issued_by=event.issued_by,
             )
+        elif cmd == ControlCommand.APPROVE_OPPORTUNITY:
+            await self._engine.approve_opportunity(p["event_id"], issued_by=event.issued_by)
+        elif cmd == ControlCommand.REJECT_OPPORTUNITY:
+            await self._engine.reject_opportunity(
+                p["event_id"], reason=p.get("reason", "operator_reject"),
+                issued_by=event.issued_by,
+            )
         else:
             logger.info("command %s not handled in this phase", cmd)

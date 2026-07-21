@@ -33,8 +33,8 @@ def test_sign_changes_with_nonce() -> None:
 def test_base_url_per_mode() -> None:
     kraken, live = _client("live")
     _k, demo = _client("demo")
-    assert live.base_url == "https://futures.kraken.com/derivatives"
-    assert demo.base_url == "https://demo-futures.kraken.com/derivatives"
+    assert live.current_base_url() == "https://futures.kraken.com/derivatives"
+    assert demo.current_base_url() == "https://demo-futures.kraken.com/derivatives"
 
 
 def test_dry_run_send_order_makes_no_network_call() -> None:

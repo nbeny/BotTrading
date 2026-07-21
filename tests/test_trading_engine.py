@@ -103,7 +103,7 @@ def test_unknown_symbol_is_rejected_not_traded() -> None:
 
 
 def test_kill_switch_rejects() -> None:
-    cache, producer, kraken = FakeCache(values={"trading:enabled": False}), FakeProducer(), FakeKraken()
+    cache, producer, kraken = FakeCache(values={"trading:runtime": {"trading_enabled": False}}), FakeProducer(), FakeKraken()
     engine = _engine(cache, producer, kraken)
     asyncio.run(engine.handle(_signal()))
     assert kraken.orders == []

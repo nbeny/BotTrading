@@ -28,11 +28,11 @@ def _order_id(resp: dict) -> str | None:
 
 
 class TradingEngine:
-    def __init__(self, cache, producer, kraken, config: TradingConfig) -> None:
+    def __init__(self, cache, producer, kraken, defaults: TradingConfig) -> None:
         self._cache = cache
         self._producer = producer
         self._kraken = kraken
-        self._config = config
+        self._defaults = defaults
 
     async def handle(self, event: BaseEvent) -> None:
         if not isinstance(event, RiskApprovedEvent):
@@ -46,8 +46,10 @@ class TradingEngine:
             logger.info("skip duplicate %s", event.event_id)
             return
 
-        # 2. Guards.
-        reason = await check_guards(self._cache, self._config)
+        # 2. Guards (against effective runtime config).
+        from .runtime import RuntimeConfig
+        config = await RuntimeConfig.load(self._cache, self._defaults)
+        reason = await check_guards(self._cache, config)
         if reason is not None:
             await self._reject(event, reason)
             return
@@ -64,8 +66,8 @@ class TradingEngine:
             equity_usd=equity,
             position_size_pct=event.position_size_pct,
             entry_price=event.entry_price,
-            max_order_usd=self._config.max_order_usd,
-            max_leverage=self._config.max_leverage,
+            max_order_usd=config.max_order_usd,
+            max_leverage=config.max_leverage,
             contract_step=CONTRACT_STEP,
             min_contracts=MIN_CONTRACTS,
         )

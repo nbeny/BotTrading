@@ -28,16 +28,21 @@ _HOSTS = {
 
 
 class KrakenFuturesClient:
-    def __init__(self, config: TradingConfig) -> None:
+    def __init__(self, config: TradingConfig, *, mode_provider=None) -> None:
         self._config = config
-        self.base_url = _HOSTS[config.mode]
+        self._mode_provider = mode_provider or (lambda: config.mode)
         self._secret = config.api_secret
         self._key = config.api_key
         self._http: httpx.AsyncClient | None = None
 
+    def _mode(self) -> Mode:
+        return self._mode_provider()
+
+    def current_base_url(self) -> str:
+        return _HOSTS[self._mode()]
+
     async def start(self) -> None:
-        if self._config.mode is not Mode.DRY_RUN:
-            self._http = httpx.AsyncClient(timeout=10.0)
+        self._http = httpx.AsyncClient(timeout=10.0)
 
     async def close(self) -> None:
         if self._http is not None:
@@ -67,7 +72,7 @@ class KrakenFuturesClient:
         }
         assert self._http is not None, "client not started"
         resp = await self._http.post(
-            self.base_url + endpoint_path, content=post_data, headers=headers
+            self.current_base_url() + endpoint_path, content=post_data, headers=headers
         )
         resp.raise_for_status()
         return resp.json()
@@ -85,7 +90,7 @@ class KrakenFuturesClient:
         reduce_only: bool = False,
         cli_ord_id: str | None = None,
     ) -> dict[str, Any]:
-        if self._config.mode is Mode.DRY_RUN:
+        if self._mode() is Mode.DRY_RUN:
             logger.info(
                 "[DRY_RUN] send_order %s %s %s size=%s lmt=%s stop=%s ro=%s cli=%s",
                 pair, side, order_type, size, limit_price, stop_price,
@@ -112,22 +117,22 @@ class KrakenFuturesClient:
         return await self._post("/api/v3/sendorder", params)
 
     async def cancel_order(self, *, cli_ord_id: str) -> dict[str, Any]:
-        if self._config.mode is Mode.DRY_RUN:
+        if self._mode() is Mode.DRY_RUN:
             logger.info("[DRY_RUN] cancel_order cli=%s", cli_ord_id)
             return {"result": "success", "dry_run": True}
         return await self._post("/api/v3/cancelorder", {"cliOrdId": cli_ord_id})
 
     async def get_accounts(self) -> dict[str, Any]:
-        if self._config.mode is Mode.DRY_RUN:
+        if self._mode() is Mode.DRY_RUN:
             return {"accounts": {"flex": {"portfolioValue": 10_000.0}}, "dry_run": True}
         return await self._post("/api/v3/accounts", {})
 
     async def get_open_positions(self) -> dict[str, Any]:
-        if self._config.mode is Mode.DRY_RUN:
+        if self._mode() is Mode.DRY_RUN:
             return {"openPositions": [], "dry_run": True}
         return await self._post("/api/v3/openpositions", {})
 
     async def get_open_orders(self) -> dict[str, Any]:
-        if self._config.mode is Mode.DRY_RUN:
+        if self._mode() is Mode.DRY_RUN:
             return {"openOrders": [], "dry_run": True}
         return await self._post("/api/v3/openorders", {})

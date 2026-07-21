@@ -32,16 +32,6 @@ def test_kill_switch_env_blocks() -> None:
     assert reason == "kill_switch"
 
 
-def test_kill_switch_redis_blocks() -> None:
-    guards = load_module("guards")
-    config_mod = load_module("config")
-    cache = FakeCache(values={"trading:enabled": False})
-    reason = asyncio.run(
-        guards.check_guards(cache, _cfg(config_mod, trading_enabled=True))
-    )
-    assert reason == "kill_switch"
-
-
 def test_rate_limit_blocks() -> None:
     guards = load_module("guards")
     config_mod = load_module("config")

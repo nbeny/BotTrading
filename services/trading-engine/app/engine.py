@@ -58,7 +58,6 @@ class TradingEngine:
             return
 
         # 2. Guards (against effective runtime config).
-        from .runtime import RuntimeConfig
         config = await RuntimeConfig.load(self._cache, self._defaults)
         reason = await check_guards(self._cache, config)
         if reason is not None:

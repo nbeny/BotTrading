@@ -6,6 +6,7 @@ from enum import Enum
 
 from ..events.analysis import AnalysisEvent
 from ..events.decision import DecisionEvent
+from ..events.execution import ExecutionEvent
 from ..events.market import DexEvent, PriceEvent, VolumeEvent
 from ..events.news import NewsEvent
 from ..events.risk import RiskApprovedEvent
@@ -23,6 +24,7 @@ class Topic(str, Enum):
     ANALYSIS = "market.analysis.events"
     DECISION = "decision.events"
     RISK_APPROVED = "risk.approved.events"
+    EXECUTION = "execution.events"
 
 
 # Which event type is expected on each topic (for validation / documentation).
@@ -36,6 +38,7 @@ TOPIC_EVENT = {
     Topic.ANALYSIS: AnalysisEvent,
     Topic.DECISION: DecisionEvent,
     Topic.RISK_APPROVED: RiskApprovedEvent,
+    Topic.EXECUTION: ExecutionEvent,
 }
 
 # Recommended partition counts (see docs/scaling.md). High-fan-in topics get
@@ -50,4 +53,5 @@ TOPIC_PARTITIONS = {
     Topic.ANALYSIS: 6,
     Topic.DECISION: 3,
     Topic.RISK_APPROVED: 3,
+    Topic.EXECUTION: 3,
 }

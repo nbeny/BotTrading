@@ -13,6 +13,7 @@ from .decision import Direction
 
 class ExecutionKind(str, Enum):
     SUBMITTED = "submitted"   # order sent to Kraken
+    PENDING = "pending"       # queued awaiting operator approval (auto-trading off)
     FILLED = "filled"         # entry filled, SL/TP placed
     CLOSED = "closed"         # position closed (SL/TP hit or manual)
     FAILED = "failed"         # Kraken rejected / error mid-flight

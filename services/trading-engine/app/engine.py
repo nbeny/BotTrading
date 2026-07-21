@@ -227,6 +227,34 @@ class TradingEngine:
             )
         logger.info("adjust_sltp %s sl=%s tp=%s by %s", event_id, stop_loss, take_profit, issued_by)
 
+    async def manual_order(
+        self, *, symbol: str, side: str, order_type: str, quantity: float,
+        price: float | None = None, issued_by: str | None = None,
+    ) -> None:
+        config = await RuntimeConfig.load(self._cache, self._defaults)
+        reason = await check_guards(self._cache, config)
+        if reason is not None:
+            logger.info("manual_order blocked: %s", reason)
+            return
+        if not symbols.is_whitelisted(symbol):
+            logger.info("manual_order rejected: unknown symbol %s", symbol)
+            return
+        pair = symbols.to_kraken_pair(symbol)
+        kraken_type = "mkt" if order_type == "market" else "lmt"
+        # Notional cap check via sizing (quantity is explicit but must respect MAX_ORDER_USD).
+        ref_price = price or 0.0
+        if kraken_type == "lmt" and ref_price > 0:
+            notional = quantity * ref_price
+            if notional > config.max_order_usd:
+                logger.info("manual_order rejected: notional %.2f over cap", notional)
+                return
+        await self._kraken.send_order(
+            pair=pair, side=side, order_type=kraken_type, size=quantity,
+            limit_price=price, cli_ord_id=f"manual-{symbol}-{side}",
+        )
+        logger.info("MANUAL ORDER %s %s %s qty=%s by %s", symbol, side, order_type, quantity,
+                    issued_by)
+
     async def _equity(self) -> float:
         accounts = await self._kraken.get_accounts()
         flex = accounts.get("accounts", {}).get("flex", {})

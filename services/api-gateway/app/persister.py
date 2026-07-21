@@ -5,10 +5,12 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
+from sqlalchemy import update
 from sqlalchemy.dialects.postgresql import insert
 
 from cmi_common.db import Database, Decision, Signal, Trade
 from cmi_common.events import AnalysisEvent, BaseEvent, DecisionEvent, RiskApprovedEvent
+from cmi_common.events.execution import ExecutionEvent
 from cmi_common.kafka import Topic
 from cmi_common.observability import EVENTS_CONSUMED
 
@@ -27,6 +29,8 @@ class Persister:
             await self._save_decision(event)
         elif isinstance(event, RiskApprovedEvent):
             await self._save_trade(event)
+        elif isinstance(event, ExecutionEvent):
+            await self._update_trade(event)
 
     async def _save_signal(self, e: AnalysisEvent) -> None:
         EVENTS_CONSUMED.labels(SERVICE, Topic.ANALYSIS.value, e.event_type).inc()
@@ -78,3 +82,20 @@ class Persister:
             await s.execute(stmt)
             await s.commit()
         logger.info("persisted trade %s @ %s", e.symbol, e.entry_price)
+
+    async def _update_trade(self, e: ExecutionEvent) -> None:
+        EVENTS_CONSUMED.labels(SERVICE, Topic.EXECUTION.value, e.event_type).inc()
+        async with self._db._sessionmaker() as s:  # noqa: SLF001
+            stmt = (
+                update(Trade)
+                .where(Trade.event_id == e.risk_event_id)
+                .values(
+                    status=e.kind,
+                    kraken_order_id=e.kraken_order_id,
+                    fill_price=e.fill_price,
+                    pnl=e.pnl,
+                )
+            )
+            await s.execute(stmt)
+            await s.commit()
+        logger.info("updated trade %s -> %s", e.risk_event_id, e.kind)

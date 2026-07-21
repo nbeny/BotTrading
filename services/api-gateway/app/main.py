@@ -19,7 +19,7 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     persister = Persister(db)
     consumer = EventConsumer(
         settings.kafka,
-        [Topic.ANALYSIS, Topic.DECISION, Topic.RISK_APPROVED],
+        [Topic.ANALYSIS, Topic.DECISION, Topic.RISK_APPROVED, Topic.EXECUTION],
         persister.handle,
         group_id="api-gateway-persister",
     )

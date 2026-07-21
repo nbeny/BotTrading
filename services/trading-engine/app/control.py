@@ -53,6 +53,11 @@ class ControlHandler:
                 p["event_id"], stop_loss=p.get("stop_loss"),
                 take_profit=p.get("take_profit"), issued_by=event.issued_by,
             )
+        elif cmd == ControlCommand.MANUAL_ORDER:
+            await self._engine.manual_order(
+                symbol=p["symbol"], side=p["side"], order_type=p["order_type"],
+                quantity=p["quantity"], price=p.get("price"), issued_by=event.issued_by,
+            )
         elif cmd == ControlCommand.APPROVE_OPPORTUNITY:
             await self._engine.approve_opportunity(p["event_id"], issued_by=event.issued_by)
         elif cmd == ControlCommand.REJECT_OPPORTUNITY:

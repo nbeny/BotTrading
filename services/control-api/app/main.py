@@ -12,6 +12,7 @@ from .commands import CommandPublisher
 from .state import StateReader
 from .routers import auth as auth_router
 from .routers import opportunities as opportunities_router
+from .routers import orders as orders_router
 from .routers import positions as positions_router
 from .routers import settings as settings_router
 
@@ -29,6 +30,7 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     app.state.settings_service = settings_router.SettingsService(publisher, reader)
     app.state.positions_service = positions_router.PositionsService(publisher, reader)
     app.state.opportunities_service = opportunities_router.OpportunitiesService(publisher, reader)
+    app.state.orders_service = orders_router.OrdersService(publisher)
     app.state.publisher = publisher
     app.state.reader = reader
 
@@ -44,3 +46,4 @@ app.include_router(auth_router.router)
 app.include_router(settings_router.router)
 app.include_router(positions_router.router)
 app.include_router(opportunities_router.router)
+app.include_router(orders_router.router)

@@ -103,3 +103,19 @@ def test_approve_reject_dispatch() -> None:
     asyncio.run(h.handle(_cmd(ControlCommand.REJECT_OPPORTUNITY, event_id="e2", reason="no")))
     assert ("approve", "e1", "admin") in e.calls
     assert ("reject", "e2", "no", "admin") in e.calls
+
+
+def test_manual_order_dispatch() -> None:
+    control = load_module("control")
+    config = load_module("config")
+
+    class E:
+        def __init__(self): self.calls = []
+        async def manual_order(self, *, symbol, side, order_type, quantity, price=None, issued_by=None):
+            self.calls.append((symbol, side, order_type, quantity, price, issued_by))
+
+    e = E()
+    h = control.ControlHandler(FakeCache(), engine=e, kraken=None, defaults=config.TradingConfig())
+    asyncio.run(h.handle(_cmd(ControlCommand.MANUAL_ORDER, symbol="SOL", side="buy",
+                              order_type="market", quantity=1.0)))
+    assert e.calls == [("SOL", "buy", "market", 1.0, None, "admin")]

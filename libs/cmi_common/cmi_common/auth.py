@@ -15,6 +15,7 @@ import hmac
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -100,20 +101,15 @@ def decode_token(token: str | None) -> Principal:
     return Principal(sub=sub, role=role, verified=False)
 
 
-# append to libs/cmi_common/cmi_common/auth.py (after decode_token)
-import json as _json
-import time as _time
-
-
 def encode_token(claims: dict[str, Any], *, secret: str, ttl_seconds: int = 3600) -> str:
     """Mint an HS256 JWT. `exp` is added from ttl_seconds (informational; decode_token
     does not enforce expiry, matching the existing lenient decoder)."""
     header = {"alg": "HS256", "typ": "JWT"}
     body = dict(claims)
-    body.setdefault("iat", int(_time.time()))
-    body["exp"] = int(_time.time()) + ttl_seconds
-    header_b64 = _b64url_encode(_json.dumps(header, separators=(",", ":")).encode())
-    payload_b64 = _b64url_encode(_json.dumps(body, separators=(",", ":")).encode())
+    body.setdefault("iat", int(time.time()))
+    body["exp"] = int(time.time()) + ttl_seconds
+    header_b64 = _b64url_encode(json.dumps(header, separators=(",", ":")).encode())
+    payload_b64 = _b64url_encode(json.dumps(body, separators=(",", ":")).encode())
     signature = hmac.new(
         secret.encode("utf-8"),
         f"{header_b64}.{payload_b64}".encode("ascii"),

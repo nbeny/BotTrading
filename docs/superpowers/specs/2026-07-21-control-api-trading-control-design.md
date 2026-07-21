@@ -118,12 +118,17 @@ Sur `reject_opportunity` : `ExecutionEvent(kind=rejected, reason="operator_rejec
 
 `ExecutionKind` gagne une valeur **`PENDING`**.
 
-## 7. Garde-fous unifiés
+## 7. Garde-fous — actions créatrices vs réductrices de risque
 
-Les actions `manual_order`, `close_position`, `adjust_sltp` et l'exécution d'une opportunité
-approuvée passent par les **mêmes** garde-fous que le flux auto (`check_guards` : kill-switch +
-rate-limit ; whitelist ; plafonds notional/levier via `sizing`). Un ordre manuel hors whitelist
-est rejeté (`ExecutionEvent(kind=rejected, reason="unknown_symbol")`), exactement comme un signal.
+Distinction importante (affinée en implémentation, Phase B) :
+
+- **Actions créatrices de risque** (`manual_order`, exécution d'une opportunité approuvée) passent
+  par les **mêmes** garde-fous que le flux auto (`check_guards` : kill-switch + rate-limit ;
+  whitelist ; plafonds notional/levier via `sizing`). Un ordre manuel hors whitelist
+  est rejeté (`ExecutionEvent(kind=rejected, reason="unknown_symbol")`), exactement comme un signal.
+- **Actions réductrices de risque** (`close_position`, `adjust_sltp`) sont **exemptées du
+  kill-switch** : l'opérateur doit toujours pouvoir aplatir/ajuster une position pour réduire son
+  exposition, même trading coupé. Les bloquer inverserait la sémantique du kill-switch.
 
 ## 8. Auth (JWT mutualisé)
 

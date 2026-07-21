@@ -25,6 +25,7 @@ class TradingConfig:
     api_key: str = ""
     api_secret: str = ""
     trading_enabled: bool = True
+    auto_trading_enabled: bool = True
     max_order_usd: float = 500.0
     max_leverage: float = 3.0
     max_orders_per_hour: int = 10
@@ -38,6 +39,7 @@ class TradingConfig:
             api_key=os.getenv("KRAKEN_API_KEY", ""),
             api_secret=os.getenv("KRAKEN_API_SECRET", ""),
             trading_enabled=_bool("TRADING_ENABLED", True),
+            auto_trading_enabled=_bool("AUTO_TRADING_ENABLED", True),
             max_order_usd=float(os.getenv("MAX_ORDER_USD", "500")),
             max_leverage=float(os.getenv("MAX_LEVERAGE", "3")),
             max_orders_per_hour=int(os.getenv("MAX_ORDERS_PER_HOUR", "10")),

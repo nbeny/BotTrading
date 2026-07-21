@@ -16,7 +16,7 @@ _APP_DIR = (
 )
 _PKG = "tengine"
 # Dependency order: leaf modules first, composers last.
-_MODULES = ["config", "symbols", "sizing", "guards", "kraken", "engine", "reconcile"]
+_MODULES = ["config", "symbols", "sizing", "guards", "runtime", "kraken", "control", "engine", "reconcile"]
 
 
 def load_app() -> types.ModuleType:

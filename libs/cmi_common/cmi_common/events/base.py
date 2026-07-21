@@ -36,6 +36,8 @@ class EventType(str, Enum):
     DECISION = "DecisionEvent"
     RISK_APPROVED = "RiskApprovedEvent"
     RISK_REJECTED = "RiskRejectedEvent"
+    EXECUTION = "ExecutionEvent"
+    CONTROL_COMMAND = "ControlCommandEvent"
 
 
 class Source(str, Enum):
@@ -49,6 +51,8 @@ class Source(str, Enum):
     AI_SONNET = "ai-worker-sonnet"
     DECISION_ENGINE = "decision-engine"
     RISK_ENGINE = "risk-engine"
+    TRADING_ENGINE = "trading-engine"
+    CONTROL_API = "control-api"
 
 
 class BaseEvent(BaseModel):

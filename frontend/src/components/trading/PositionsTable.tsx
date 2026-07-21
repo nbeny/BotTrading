@@ -114,7 +114,7 @@ export function PositionsTable({ onSuccess, onError }: Props) {
 
   function handleCloseConfirm() {
     if (!closeDialog.position) return;
-    closeMutation.mutate(closeDialog.position.position_id);
+    closeMutation.mutate(closeDialog.position.event_id ?? closeDialog.position.position_id);
   }
 
   function handleSlTpConfirm() {
@@ -123,7 +123,10 @@ export function PositionsTable({ onSuccess, onError }: Props) {
       stop_loss: slTpDialog.stop_loss ? parseFloat(slTpDialog.stop_loss) : null,
       take_profit: slTpDialog.take_profit ? parseFloat(slTpDialog.take_profit) : null,
     };
-    adjustSlTpMutation.mutate({ id: slTpDialog.position.position_id, input });
+    adjustSlTpMutation.mutate({
+      id: slTpDialog.position.event_id ?? slTpDialog.position.position_id,
+      input,
+    });
   }
 
   return (

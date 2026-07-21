@@ -14,7 +14,9 @@ from pydantic import Field, TypeAdapter
 
 from .analysis import AnalysisEvent
 from .base import BaseEvent, EventType, Source
+from .control import ControlCommand, ControlCommandEvent
 from .decision import DecisionEvent, Direction
+from .execution import ExecutionEvent, ExecutionKind
 from .market import DexEvent, PriceEvent, VolumeEvent
 from .news import NewsEvent
 from .risk import RiskApprovedEvent, RiskRejectedEvent
@@ -35,6 +37,8 @@ AnyEvent = Annotated[
         DecisionEvent,
         RiskApprovedEvent,
         RiskRejectedEvent,
+        ExecutionEvent,
+        ControlCommandEvent,
     ],
     Field(discriminator="event_type"),
 ]
@@ -55,10 +59,14 @@ __all__ = [
     "AnalysisEvent",
     "AnyEvent",
     "BaseEvent",
+    "ControlCommand",
+    "ControlCommandEvent",
     "DecisionEvent",
     "DexEvent",
     "Direction",
     "EventType",
+    "ExecutionEvent",
+    "ExecutionKind",
     "NewsEvent",
     "PriceEvent",
     "RiskApprovedEvent",

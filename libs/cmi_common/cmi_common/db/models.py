@@ -127,7 +127,11 @@ class Trade(Base, TimestampMixin):
     confidence: Mapped[float] = mapped_column(Float)
     position_size_pct: Mapped[float] = mapped_column(Float, default=0.0)
     risk_reward_ratio: Mapped[float] = mapped_column(Float, default=0.0)
+    # Lifecycle: approved -> submitted -> filled -> closed / failed / rejected
     status: Mapped[str] = mapped_column(String(16), default="approved")
+    kraken_order_id: Mapped[str | None] = mapped_column(String(64), default=None)
+    fill_price: Mapped[float | None] = mapped_column(Float, default=None)
+    pnl: Mapped[float | None] = mapped_column(Float, default=None)
 
     decision: Mapped[Decision | None] = relationship()
 

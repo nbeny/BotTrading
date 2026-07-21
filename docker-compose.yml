@@ -272,6 +272,21 @@ services:
       <<: *common-env
       RISK_MAX_POSITION_PCT: ${RISK_MAX_POSITION_PCT:-0.05}
 
+  trading-engine:
+    <<: *service-defaults
+    build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/trading-engine } }
+    environment:
+      <<: *common-env
+      TRADING_MODE: dry_run
+      TRADING_ENABLED: "true"
+      MAX_ORDER_USD: ${MAX_ORDER_USD:-500}
+      MAX_LEVERAGE: ${MAX_LEVERAGE:-3}
+      MAX_ORDERS_PER_HOUR: ${MAX_ORDERS_PER_HOUR:-10}
+      ENTRY_TIMEOUT_S: ${ENTRY_TIMEOUT_S:-30}
+      RECONCILE_INTERVAL_S: ${RECONCILE_INTERVAL_S:-10}
+      KRAKEN_API_KEY: ${KRAKEN_API_KEY:-}
+      KRAKEN_API_SECRET: ${KRAKEN_API_SECRET:-}
+
   api-gateway:
     <<: *service-defaults
     build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/api-gateway } }
@@ -289,6 +304,28 @@ services:
       - traefik.http.routers.api.entrypoints=websecure
       - traefik.http.routers.api.tls=true
       - traefik.http.services.api.loadbalancer.server.port=8000
+
+  control-api:
+    <<: *service-defaults
+    build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/control-api } }
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      JWT_SECRET: ${JWT_SECRET:-}
+      CONTROL_ADMIN_USER: ${CONTROL_ADMIN_USER:-admin}
+      CONTROL_ADMIN_PASSWORD: ${CONTROL_ADMIN_PASSWORD:-admin}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.control.rule=Host(`control.cmi.localhost`)
+      - traefik.http.routers.control.entrypoints=websecure
+      - traefik.http.routers.control.tls=true
+      - traefik.http.services.control.loadbalancer.server.port=8000
 
   websocket-gateway:
     <<: *service-defaults

@@ -19,7 +19,7 @@ import type { Permission } from '@/lib/auth/types';
 
 const PERMISSION_LABEL: Record<Permission, string> = {
   'trading.toggle_auto': 'Activer / désactiver le trading automatique',
-  'trading.switch_mode': 'Basculer entre mode paper et mode live',
+  'trading.switch_mode': 'Basculer entre les modes dry_run, demo et live',
   'trading.approve_opportunity': 'Valider ou rejeter les opportunités en attente',
   'trading.manual_order': 'Passer des ordres manuels',
   'trading.close_position': 'Clôturer des positions ouvertes',

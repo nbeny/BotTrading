@@ -148,7 +148,7 @@ export class MockEventSource {
       cost: round(rand(500, 6000), 2),
       fee: round(rand(1, 12), 2),
       status: 'filled',
-      mode: 'paper',
+      mode: 'dry_run',
     };
     this.emit(e, 'trading.orders.events');
   }

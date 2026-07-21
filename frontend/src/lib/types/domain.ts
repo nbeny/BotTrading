@@ -1,6 +1,6 @@
 /** REST/domain models consumed by the terminal (portfolio, trading, risk). */
 
-export type TradingMode = 'paper' | 'live';
+export type TradingMode = 'dry_run' | 'demo' | 'live';
 
 export interface Portfolio {
   total_value_usd: number;
@@ -16,6 +16,7 @@ export interface Portfolio {
 
 export interface Position {
   position_id: string;
+  event_id?: string;
   symbol: string;
   direction: 'long' | 'short';
   quantity: number;
@@ -149,8 +150,23 @@ export interface PricePoint {
   volume?: number;
 }
 
+export interface EngineCaps {
+  max_order_usd: number;
+  max_leverage: number;
+  max_orders_per_hour: number;
+  entry_timeout_s: number;
+  reconcile_interval_s: number;
+}
+
 export interface TradingStatus {
   auto_trading_enabled: boolean;
+  trading_enabled: boolean;
   mode: TradingMode;
-  updated_at: string;
+  updated_at?: string;
+}
+
+export interface EngineSettings extends EngineCaps {
+  mode: TradingMode;
+  trading_enabled: boolean;
+  auto_trading_enabled: boolean;
 }

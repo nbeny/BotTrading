@@ -39,7 +39,8 @@ function daysAgo(d: number): string {
 
 let _status: TradingStatus = {
   auto_trading_enabled: false,
-  mode: 'paper',
+  trading_enabled: true,
+  mode: 'dry_run',
   updated_at: isoNow(),
 };
 
@@ -49,6 +50,12 @@ export function getTradingStatus(): TradingStatus {
 
 export function setAuto(enabled: boolean): TradingStatus {
   _status = { ..._status, auto_trading_enabled: enabled, updated_at: isoNow() };
+  return getTradingStatus();
+}
+
+export function setKill(enabled: boolean): TradingStatus {
+  // Kill switch engaged disables trading; releasing it re-enables trading.
+  _status = { ..._status, trading_enabled: !enabled, updated_at: isoNow() };
   return getTradingStatus();
 }
 
@@ -94,7 +101,7 @@ function makePosition(
     take_profit: tp,
     protected: hasSL && hasTP,
     opened_at: hoursAgo(hoursOpen),
-    mode: 'paper',
+    mode: 'dry_run',
   };
 }
 
@@ -174,7 +181,7 @@ function makeTrade(
     fee_usd: round(cost * 0.001, 4),
     pnl_usd: pnl,
     status,
-    mode: 'paper',
+    mode: 'dry_run',
     executed_at: hoursAgo(hoursBack),
   };
 }

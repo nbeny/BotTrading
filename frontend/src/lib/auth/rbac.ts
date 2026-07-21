@@ -4,7 +4,7 @@ import type { Permission, Role } from './types';
  * Role -> permission matrix.
  *  - admin:    full control incl. live-mode switch and settings
  *  - operator: can supervise, validate opportunities, place/close orders
- *              in the current mode, but cannot flip paper<->live or edit settings
+ *              in the current mode, but cannot switch trading mode or edit settings
  *  - viewer:   read-only supervision
  */
 const ROLE_PERMISSIONS: Record<Role, Permission[]> = {

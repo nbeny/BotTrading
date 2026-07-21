@@ -114,6 +114,42 @@ class TradingEngine:
                          kraken_order_id=_order_id(entry))
         logger.info("EXECUTED %s size=%s @ %s", event.symbol, size, event.entry_price)
 
+    async def close_position(self, event_id: str, *, issued_by: str | None = None) -> None:
+        pos = await self._cache.get_json(f"trading:position:{event_id}")
+        if not pos:
+            logger.info("close_position: %s not tracked", event_id)
+            return
+        exit_side = "sell" if pos["side"] == "buy" else "buy"
+        await self._kraken.send_order(
+            pair=pos["pair"], side=exit_side, order_type="mkt", size=pos["size"],
+            reduce_only=True, cli_ord_id=f"{event_id}-close",
+        )
+        logger.info("close_position %s by %s", event_id, issued_by)
+        # reconcile will detect the closed position and emit CLOSED + free exposure
+
+    async def adjust_sltp(
+        self, event_id: str, *, stop_loss: float | None = None,
+        take_profit: float | None = None, issued_by: str | None = None,
+    ) -> None:
+        pos = await self._cache.get_json(f"trading:position:{event_id}")
+        if not pos:
+            logger.info("adjust_sltp: %s not tracked", event_id)
+            return
+        exit_side = "sell" if pos["side"] == "buy" else "buy"
+        if stop_loss is not None:
+            await self._kraken.cancel_order(cli_ord_id=f"{event_id}-sl")
+            await self._kraken.send_order(
+                pair=pos["pair"], side=exit_side, order_type="stp", size=pos["size"],
+                stop_price=stop_loss, reduce_only=True, cli_ord_id=f"{event_id}-sl",
+            )
+        if take_profit is not None:
+            await self._kraken.cancel_order(cli_ord_id=f"{event_id}-tp")
+            await self._kraken.send_order(
+                pair=pos["pair"], side=exit_side, order_type="take_profit", size=pos["size"],
+                stop_price=take_profit, reduce_only=True, cli_ord_id=f"{event_id}-tp",
+            )
+        logger.info("adjust_sltp %s sl=%s tp=%s by %s", event_id, stop_loss, take_profit, issued_by)
+
     async def _equity(self) -> float:
         accounts = await self._kraken.get_accounts()
         flex = accounts.get("accounts", {}).get("flex", {})

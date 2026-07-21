@@ -39,6 +39,10 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     kraken = KrakenFuturesClient(config, mode_provider=lambda: app.state.mode)
     await kraken.start()
 
+    # Adopt any operator-persisted runtime mode at boot (not just after the first
+    # control command), so the Kraken client routes correctly from the start.
+    await _current_mode()
+
     engine = TradingEngine(cache, producer, kraken, config)
     signals = EventConsumer(
         settings.kafka, [Topic.RISK_APPROVED], engine.handle, group_id="trading-engine",

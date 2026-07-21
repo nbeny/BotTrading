@@ -1,0 +1,16 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "collector-coingecko"
+version = "0.1.0"
+description = "CoinGecko collector — publishes market.price.events / market.volume.events"
+requires-python = ">=3.12"
+dependencies = [
+    "cmi-common",
+    "httpx>=0.27",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]

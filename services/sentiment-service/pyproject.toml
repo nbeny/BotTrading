@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sentiment-service"
+version = "0.1.0"
+description = "Hybrid sentiment service (HuggingFace L1) — publishes market.sentiment.events"
+requires-python = ">=3.12"
+dependencies = [
+    "cmi-common",
+    # Heavy ML deps are optional at runtime; install with the 'ml' extra.
+]
+
+[project.optional-dependencies]
+ml = [
+    "transformers>=4.42",
+    "torch>=2.3",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]

@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cmi-migrations"
+version = "0.1.0"
+description = "Alembic migrations for the CMI platform"
+requires-python = ">=3.12"
+dependencies = ["cmi-common", "alembic>=1.13", "psycopg[binary]>=3.2"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["_pkg"]

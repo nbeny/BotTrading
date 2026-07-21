@@ -1,0 +1,24 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: traefik
+    static_configs:
+      - targets: ["traefik:8080"]
+
+  # Each CMI service exposes /metrics on port 8000.
+  - job_name: cmi-services
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - collector-coingecko:8000
+          - collector-dexscreener:8000
+          - collector-cryptocompare:8000
+          - collector-reddit:8000
+          - sentiment-service:8000
+          - ai-worker-haiku:8000
+          - ai-worker-sonnet:8000
+          - decision-engine:8000
+          - risk-engine:8000
+          - api-gateway:8000

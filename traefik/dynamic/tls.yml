@@ -1,0 +1,26 @@
+# Traefik dynamic configuration.
+# Local dev uses Traefik's built-in self-signed cert; production uses the
+# Let's Encrypt resolver 'le' declared as static args in docker-compose.yml.
+# Add hardening middlewares here and reference them from service labels.
+
+http:
+  middlewares:
+    secure-headers:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        frameDeny: true
+        contentTypeNosniff: true
+        browserXssFilter: true
+        referrerPolicy: "strict-origin-when-cross-origin"
+
+    rate-limit:
+      rateLimit:
+        average: 100
+        burst: 50
+
+tls:
+  options:
+    default:
+      minVersion: VersionTLS12
+      sniStrict: false

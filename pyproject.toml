@@ -1,0 +1,56 @@
+# Root project — dev tooling config shared across the monorepo.
+# Each service has its own pyproject for runtime deps; this one drives quality.
+
+[project]
+name = "crypto-market-intelligence"
+version = "0.1.0"
+description = "Event-driven Crypto Market Intelligence platform (monorepo root)"
+requires-python = ">=3.12"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+src = ["libs/cmi_common", "services"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "C4", "SIM", "ASYNC", "RUF"]
+ignore = ["B008"]  # FastAPI Depends() in defaults is idiomatic
+
+[tool.ruff.lint.isort]
+known-first-party = ["cmi_common"]
+
+[tool.black]
+line-length = 88
+target-version = ["py312"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+plugins = ["pydantic.mypy"]
+mypy_path = "libs/cmi_common"
+explicit_package_bases = true
+# Third-party libs without stubs.
+[[tool.mypy.overrides]]
+module = ["aiokafka.*", "transformers.*", "anthropic.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = [
+    "libs/cmi_common",
+    "services/decision-engine",
+    "services/risk-engine",
+    "services/sentiment-service",
+]
+addopts = "-q --strict-markers"
+
+[tool.coverage.run]
+branch = true
+source = ["cmi_common", "app"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

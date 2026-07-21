@@ -1,0 +1,90 @@
+"""Claude Sonnet worker: senior analyst validating high-value opportunities.
+
+Consumes market.analysis.events, ignores everything below the escalation bar,
+and performs deep multi-signal validation on strong candidates, producing
+decision.events with an explicit rationale and enumerated risks.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from cmi_common.ai import ClaudeClient
+from cmi_common.events import AnalysisEvent, BaseEvent
+from cmi_common.events.base import Source
+from cmi_common.events.decision import DecisionEvent, Direction
+from cmi_common.kafka import EventProducer, Topic
+from cmi_common.observability import EVENTS_CONSUMED, EVENTS_PRODUCED
+
+logger = logging.getLogger(__name__)
+SERVICE = "ai-worker-sonnet"
+
+SYSTEM = (
+    "You are a senior crypto market analyst. You receive a pre-scored "
+    "opportunity with correlated evidence and must decide whether it is a "
+    "genuine, actionable trade idea. Weigh momentum, liquidity, sentiment and "
+    "news impact against manipulation and liquidity risk. Respond ONLY with a "
+    'JSON object: {"validated": bool, "direction": "long|short|watch", '
+    '"opportunity_score": int 0-100, "confidence": float 0-1, '
+    '"rationale": str, "key_risks": [str]}. Reject thin, contradictory or '
+    "manipulation-prone setups."
+)
+
+
+class SonnetWorker:
+    def __init__(self, claude: ClaudeClient, producer: EventProducer) -> None:
+        self._claude = claude
+        self._producer = producer
+
+    async def handle(self, event: BaseEvent) -> None:
+        if not isinstance(event, AnalysisEvent):
+            return
+        EVENTS_CONSUMED.labels(SERVICE, Topic.ANALYSIS.value, event.event_type).inc()
+        # Senior analyst only intervenes on important signals.
+        if not event.escalate:
+            return
+        decision = await self._validate(event)
+        if decision is None:
+            return
+        await self._producer.publish(Topic.DECISION, decision)
+        EVENTS_PRODUCED.labels(SERVICE, Topic.DECISION.value, decision.event_type).inc()
+
+    async def _validate(self, event: AnalysisEvent) -> DecisionEvent | None:
+        prompt = (
+            f"Symbol: {event.symbol}\n"
+            f"Haiku score: {event.opportunity_score} (conf {event.confidence})\n"
+            f"Reason: {event.reason}\n"
+            f"Summary: {event.summary}\n"
+            f"price_change_pct_24h: {event.price_change_pct_24h}\n"
+            f"volume_spike_ratio: {event.volume_spike_ratio}\n"
+            f"sentiment_score: {event.sentiment_score}\n"
+            f"social_growth: {event.social_growth}\n"
+            f"Full features: {event.meta.get('features', {})}"
+        )
+        resp = await self._claude.complete(system=SYSTEM, prompt=prompt, service=SERVICE)
+        try:
+            data = resp.json()
+        except Exception:  # noqa: BLE001
+            logger.warning("sonnet response parse failed for %s", event.symbol)
+            return None
+        if not data.get("validated", False):
+            logger.info("sonnet rejected %s", event.symbol)
+            return None
+        try:
+            direction = Direction(data.get("direction", "long"))
+        except ValueError:
+            direction = Direction.LONG
+        return DecisionEvent(
+            source=Source.AI_SONNET,
+            correlation_id=event.correlation_id,
+            symbol=event.symbol,
+            direction=direction,
+            opportunity_score=int(
+                max(0, min(100, data.get("opportunity_score", event.opportunity_score)))
+            ),
+            confidence=float(data.get("confidence", event.confidence)),
+            rationale=data.get("rationale", ""),
+            key_risks=list(data.get("key_risks", [])),
+            ai_validated=True,
+            correlated_event_ids=[event.event_id, *event.correlated_event_ids],
+        )

@@ -1,0 +1,89 @@
+"""Pure risk rules: stop-loss / take-profit / position sizing. No I/O."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from cmi_common.events.decision import Direction
+
+
+@dataclass(slots=True)
+class RiskConfig:
+    stop_loss_pct: float = 0.05  # 5% below entry (long)
+    take_profit_pct: float = 0.10  # 10% above entry (long)
+    max_position_pct: float = 0.05  # max 5% of portfolio per trade
+    min_confidence: float = 0.55
+    min_score: int = 70
+    min_risk_reward: float = 1.5
+
+
+@dataclass(slots=True)
+class RiskLevels:
+    entry_price: float
+    stop_loss: float
+    take_profit: float
+    position_size_pct: float
+    risk_reward_ratio: float
+
+
+@dataclass(slots=True)
+class RiskDecision:
+    approved: bool
+    reason: str
+    levels: RiskLevels | None = None
+
+
+def evaluate(
+    *,
+    entry_price: float,
+    direction: Direction,
+    confidence: float,
+    opportunity_score: int,
+    is_blacklisted: bool,
+    current_exposure_pct: float,
+    config: RiskConfig,
+) -> RiskDecision:
+    """Deterministically validate a decision and size the position."""
+    if is_blacklisted:
+        return RiskDecision(False, "token blacklisted")
+    if entry_price <= 0:
+        return RiskDecision(False, "no valid entry price")
+    if confidence < config.min_confidence:
+        return RiskDecision(False, f"confidence {confidence:.2f} below floor")
+    if opportunity_score < config.min_score:
+        return RiskDecision(False, f"score {opportunity_score} below floor")
+
+    levels = _compute_levels(entry_price, direction, confidence, config)
+    if levels.risk_reward_ratio < config.min_risk_reward:
+        return RiskDecision(
+            False, f"risk/reward {levels.risk_reward_ratio:.2f} too low"
+        )
+    if current_exposure_pct + levels.position_size_pct > 1.0:
+        return RiskDecision(False, "max portfolio exposure reached")
+    return RiskDecision(True, "approved", levels)
+
+
+def _compute_levels(
+    entry: float, direction: Direction, confidence: float, cfg: RiskConfig
+) -> RiskLevels:
+    if direction == Direction.SHORT:
+        stop = entry * (1 + cfg.stop_loss_pct)
+        target = entry * (1 - cfg.take_profit_pct)
+        risk = stop - entry
+        reward = entry - target
+    else:  # LONG / WATCH treated as long-side sizing
+        stop = entry * (1 - cfg.stop_loss_pct)
+        target = entry * (1 + cfg.take_profit_pct)
+        risk = entry - stop
+        reward = target - entry
+
+    rr = round(reward / risk, 3) if risk > 0 else 0.0
+    # Confidence-scaled fractional sizing, capped at the per-trade max.
+    size = round(cfg.max_position_pct * min(1.0, confidence), 4)
+    return RiskLevels(
+        entry_price=round(entry, 8),
+        stop_loss=round(stop, 8),
+        take_profit=round(target, 8),
+        position_size_pct=size,
+        risk_reward_ratio=rr,
+    )

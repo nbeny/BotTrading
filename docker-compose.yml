@@ -1,0 +1,392 @@
+# Crypto Market Intelligence — full stack orchestration.
+# Build context is the repo root for every service so the shared library
+# (libs/cmi_common) is available to the shared docker/Dockerfile.
+
+x-common-env: &common-env
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  DB_HOST: postgres
+  DB_USER: ${DB_USER:-cmi}
+  DB_PASSWORD: ${DB_PASSWORD:-cmi}
+  DB_NAME: ${DB_NAME:-cmi}
+  REDIS_HOST: redis
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+  OTEL_SENTRY_DSN: ${SENTRY_DSN:-}
+  OTEL_ENVIRONMENT: ${ENVIRONMENT:-development}
+
+x-service-defaults: &service-defaults
+  restart: unless-stopped
+  depends_on:
+    kafka:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  networks:
+    - cmi
+
+services:
+  # ----------------------------------------------------------------- edge
+  traefik:
+    image: traefik:v3.1
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL:-admin@example.com}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.le.acme.tlschallenge=true
+      - --api.dashboard=true
+      - --metrics.prometheus=true
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - traefik-acme:/letsencrypt
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.dashboard.rule=Host(`traefik.cmi.localhost`)
+      - traefik.http.routers.dashboard.service=api@internal
+      - traefik.http.routers.dashboard.entrypoints=websecure
+      - traefik.http.routers.dashboard.tls=true
+    networks:
+      - cmi
+
+  # ------------------------------------------------------------ event bus
+  kafka:
+    image: bitnami/kafka:3.7
+    environment:
+      KAFKA_CFG_NODE_ID: "1"
+      KAFKA_CFG_PROCESS_ROLES: broker,controller
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    volumes:
+      - kafka-data:/bitnami/kafka
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    networks:
+      - cmi
+
+  kafka-init:
+    image: bitnami/kafka:3.7
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "/init/create-topics.sh"]
+    volumes:
+      - ./scripts/create-topics.sh:/init/create-topics.sh:ro
+    networks:
+      - cmi
+
+  # ------------------------------------------------------------- storage
+  postgres:
+    image: timescale/timescaledb:2.15.3-pg16
+    environment:
+      POSTGRES_USER: ${DB_USER:-cmi}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-cmi}
+      POSTGRES_DB: ${DB_NAME:-cmi}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-cmi}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - cmi
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - cmi
+
+  # --------------------------------------------------------- migrations
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        SERVICE_PATH: migrations
+        APP_MODULE: unused
+    command: ["sh", "-c", "alembic upgrade head"]
+    environment: *common-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: on-failure
+    networks:
+      - cmi
+
+  # --------------------------------------------------------- collectors
+  collector-coingecko:
+    <<: *service-defaults
+    build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/collector-coingecko } }
+    environment:
+      <<: *common-env
+      COINGECKO_API_KEY: ${COINGECKO_API_KEY:-}
+      COINGECKO_POLL_INTERVAL: ${COINGECKO_POLL_INTERVAL:-60}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.coingecko.rule=Host(`coingecko.cmi.localhost`)
+      - traefik.http.routers.coingecko.entrypoints=websecure
+      - traefik.http.routers.coingecko.tls=true
+      - traefik.http.services.coingecko.loadbalancer.server.port=8000
+
+  collector-dexscreener:
+    <<: *service-defaults
+    build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/collector-dexscreener } }
+    environment:
+      <<: *common-env
+      DEXSCREENER_POLL_INTERVAL: ${DEXSCREENER_POLL_INTERVAL:-30}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.dexscreener.rule=Host(`dexscreener.cmi.localhost`)
+      - traefik.http.routers.dexscreener.entrypoints=websecure
+      - traefik.http.routers.dexscreener.tls=true
+      - traefik.http.services.dexscreener.loadbalancer.server.port=8000
+
+  collector-cryptocompare:
+    <<: *service-defaults
+    build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/collector-cryptocompare } }
+    environment:
+      <<: *common-env
+      CRYPTOCOMPARE_API_KEY: ${CRYPTOCOMPARE_API_KEY:-}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.cryptocompare.rule=Host(`cryptocompare.cmi.localhost`)
+      - traefik.http.routers.cryptocompare.entrypoints=websecure
+      - traefik.http.routers.cryptocompare.tls=true
+      - traefik.http.services.cryptocompare.loadbalancer.server.port=8000
+
+  collector-reddit:
+    <<: *service-defaults
+    build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/collector-reddit } }
+    environment:
+      <<: *common-env
+      REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID:-}
+      REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET:-}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.reddit.rule=Host(`reddit.cmi.localhost`)
+      - traefik.http.routers.reddit.entrypoints=websecure
+      - traefik.http.routers.reddit.tls=true
+      - traefik.http.services.reddit.loadbalancer.server.port=8000
+
+  collector-twitter:
+    <<: *service-defaults
+    build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/collector-twitter } }
+    environment:
+      <<: *common-env
+      TWITTER_BEARER_TOKEN: ${TWITTER_BEARER_TOKEN:-}
+      TWITTER_POLL_INTERVAL: ${TWITTER_POLL_INTERVAL:-300}
+      TWITTER_QUERY: ${TWITTER_QUERY:-}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.twitter.rule=Host(`twitter.cmi.localhost`)
+      - traefik.http.routers.twitter.entrypoints=websecure
+      - traefik.http.routers.twitter.tls=true
+      - traefik.http.services.twitter.loadbalancer.server.port=8000
+
+  # ----------------------------------------------------------- analytics
+  sentiment-service:
+    <<: *service-defaults
+    build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/sentiment-service } }
+    environment:
+      <<: *common-env
+      SENTIMENT_MODEL: ${SENTIMENT_MODEL:-ElKulako/cryptobert}
+
+  ai-worker-haiku:
+    <<: *service-defaults
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        SERVICE_PATH: services/ai-worker-haiku
+        INSTALL_CLAUDE_CLI: "true"
+    environment:
+      <<: *common-env
+      ANTHROPIC_HAIKU_MODEL: ${ANTHROPIC_HAIKU_MODEL:-claude-haiku-4-5-20251001}
+      ANTHROPIC_ESCALATION_THRESHOLD: ${ANTHROPIC_ESCALATION_THRESHOLD:-75}
+      ANTHROPIC_TRANSPORT: ${ANTHROPIC_TRANSPORT:-cli}
+      ANTHROPIC_CLI_PATH: ${ANTHROPIC_CLI_PATH:-claude}
+      ANTHROPIC_CLI_TIMEOUT_MS: ${ANTHROPIC_CLI_TIMEOUT_MS:-120000}
+      ANTHROPIC_CLI_CONCURRENCY: ${ANTHROPIC_CLI_CONCURRENCY:-4}
+    volumes:
+      - ${CLAUDE_DIR}:/home/appuser/.claude:ro
+      - ${CLAUDE_CONFIG}:/home/appuser/.claude.json:ro
+    deploy:
+      replicas: ${HAIKU_REPLICAS:-2}
+
+  ai-worker-sonnet:
+    <<: *service-defaults
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        SERVICE_PATH: services/ai-worker-sonnet
+        INSTALL_CLAUDE_CLI: "true"
+    environment:
+      <<: *common-env
+      ANTHROPIC_SONNET_MODEL: ${ANTHROPIC_SONNET_MODEL:-claude-sonnet-4-6}
+      ANTHROPIC_TRANSPORT: ${ANTHROPIC_TRANSPORT:-cli}
+      ANTHROPIC_CLI_PATH: ${ANTHROPIC_CLI_PATH:-claude}
+      ANTHROPIC_CLI_TIMEOUT_MS: ${ANTHROPIC_CLI_TIMEOUT_MS:-120000}
+      ANTHROPIC_CLI_CONCURRENCY: ${ANTHROPIC_CLI_CONCURRENCY:-4}
+    volumes:
+      - ${CLAUDE_DIR}:/home/appuser/.claude:ro
+      - ${CLAUDE_CONFIG}:/home/appuser/.claude.json:ro
+
+  decision-engine:
+    <<: *service-defaults
+    build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/decision-engine } }
+    environment:
+      <<: *common-env
+      DECISION_THRESHOLD: ${DECISION_THRESHOLD:-70}
+
+  risk-engine:
+    <<: *service-defaults
+    build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/risk-engine } }
+    environment:
+      <<: *common-env
+      RISK_MAX_POSITION_PCT: ${RISK_MAX_POSITION_PCT:-0.05}
+
+  api-gateway:
+    <<: *service-defaults
+    build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/api-gateway } }
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment: *common-env
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.api.rule=Host(`api.cmi.localhost`)
+      - traefik.http.routers.api.entrypoints=websecure
+      - traefik.http.routers.api.tls=true
+      - traefik.http.services.api.loadbalancer.server.port=8000
+
+  websocket-gateway:
+    <<: *service-defaults
+    build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/websocket-gateway } }
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      JWT_SECRET: ${JWT_SECRET:-}
+    # Direct host port so the Next.js terminal can reach ws://localhost:8080/ws
+    # without going through Traefik/TLS during local development.
+    ports:
+      - "8080:8000"
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.ws.rule=Host(`ws.cmi.localhost`)
+      - traefik.http.routers.ws.entrypoints=websecure
+      - traefik.http.routers.ws.tls=true
+      - traefik.http.services.ws.loadbalancer.server.port=8000
+
+  # -------------------------------------------------------- web terminal (frontend)
+  web-terminal:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Default to standalone demo (mock) mode so the terminal is fully
+        # functional out of the box. Set NEXT_PUBLIC_USE_MOCK=0 (and add the
+        # backend portfolio/trading/risk/auth endpoints) for live mode.
+        NEXT_PUBLIC_USE_MOCK: ${WEB_USE_MOCK:-1}
+        NEXT_PUBLIC_WS_URL: ${WEB_WS_URL:-wss://ws.cmi.localhost/ws}
+        NEXT_PUBLIC_API_BASE: /api/gateway
+    environment:
+      # Server-side rewrite target for /api/gateway/* -> FastAPI api-gateway.
+      API_GATEWAY_URL: http://api-gateway:8000
+      NODE_ENV: production
+    depends_on:
+      - api-gateway
+      - websocket-gateway
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.web.rule=Host(`app.cmi.localhost`)
+      - traefik.http.routers.web.entrypoints=websecure
+      - traefik.http.routers.web.tls=true
+      - traefik.http.services.web.loadbalancer.server.port=3000
+    networks:
+      - cmi
+
+  # -------------------------------------------------------- observability
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom-data:/prometheus
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.prometheus.rule=Host(`prometheus.cmi.localhost`)
+      - traefik.http.routers.prometheus.entrypoints=websecure
+      - traefik.http.routers.prometheus.tls=true
+      - traefik.http.services.prometheus.loadbalancer.server.port=9090
+    networks:
+      - cmi
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.grafana.rule=Host(`grafana.cmi.localhost`)
+      - traefik.http.routers.grafana.entrypoints=websecure
+      - traefik.http.routers.grafana.tls=true
+      - traefik.http.services.grafana.loadbalancer.server.port=3000
+    networks:
+      - cmi
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.104.0
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./observability/otel-collector.yaml:/etc/otel/config.yaml:ro
+    networks:
+      - cmi
+
+networks:
+  cmi:
+    driver: bridge
+
+volumes:
+  kafka-data:
+  pg-data:
+  redis-data:
+  prom-data:
+  grafana-data:
+  traefik-acme:

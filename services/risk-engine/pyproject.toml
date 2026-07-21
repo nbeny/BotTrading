@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "risk-engine"
+version = "0.1.0"
+description = "Independent risk engine — publishes risk.approved.events"
+requires-python = ">=3.12"
+dependencies = ["cmi-common"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]

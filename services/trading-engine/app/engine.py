@@ -27,6 +27,16 @@ def _order_id(resp: dict) -> str | None:
     return (resp.get("sendStatus") or {}).get("order_id") or resp.get("order_id")
 
 
+def _signal_payload(event) -> dict:
+    return {
+        "symbol": event.symbol, "direction": event.direction,
+        "entry_price": event.entry_price, "stop_loss": event.stop_loss,
+        "take_profit": event.take_profit, "confidence": event.confidence,
+        "position_size_pct": event.position_size_pct,
+        "correlation_id": event.correlation_id, "event_id": event.event_id,
+    }
+
+
 class TradingEngine:
     def __init__(self, cache, producer, kraken, defaults: TradingConfig) -> None:
         self._cache = cache
@@ -58,7 +68,6 @@ class TradingEngine:
         if not symbols.is_whitelisted(event.symbol):
             await self._reject(event, "unknown_symbol")
             return
-        pair = symbols.to_kraken_pair(event.symbol)
 
         # 4. Sizing.
         equity = await self._equity()
@@ -75,7 +84,27 @@ class TradingEngine:
             await self._reject(event, "below_min_size")
             return
 
-        # 5. Entry (limit, market fallback handled by reconcile/timeout in prod).
+        # 5. Auto-trading gate: if off, queue for human approval and stop.
+        if not config.auto_trading_enabled:
+            await self._queue_pending(event)
+            return
+        await self._execute(event, config, size)
+
+    PENDING_SET = "trading:pending"
+
+    async def _queue_pending(self, event) -> None:
+        await self._cache.set_json(
+            f"trading:pending:{event.event_id}", _signal_payload(event), ttl_seconds=86_400
+        )
+        await self._cache.client.sadd("trading:pending", event.event_id)
+        await self._emit(event, ExecutionKind.PENDING)
+        logger.info("PENDING %s (auto-trading off)", event.symbol)
+
+    async def _execute(self, event, config, size) -> None:
+        pair = symbols.to_kraken_pair(event.symbol)
+
+        # Entry (limit, market fallback handled by reconcile/timeout in prod).
+        submitted_key = SUBMITTED_KEY.format(event_id=event.event_id)
         await self._cache.set_json(submitted_key, True, ttl_seconds=86_400)
         side = "buy" if event.direction == Direction.LONG else "sell"
         entry = await self._kraken.send_order(
@@ -85,7 +114,7 @@ class TradingEngine:
         await self._emit(event, ExecutionKind.SUBMITTED, size=size,
                          kraken_order_id=_order_id(entry))
 
-        # 6. SL/TP reduce-only (opposite side).
+        # SL/TP reduce-only (opposite side).
         exit_side = "sell" if side == "buy" else "buy"
         await self._kraken.send_order(
             pair=pair, side=exit_side, order_type="stp", size=size,
@@ -98,7 +127,7 @@ class TradingEngine:
             cli_ord_id=f"{event.event_id}-tp",
         )
 
-        # 7. Track position + emit filled.
+        # Track position + emit filled.
         await self._cache.client.sadd(POSITIONS_SET, event.event_id)
         await self._cache.set_json(
             f"trading:position:{event.event_id}",

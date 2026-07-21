@@ -11,6 +11,7 @@ from cmi_common.kafka import EventProducer
 from .commands import CommandPublisher
 from .state import StateReader
 from .routers import auth as auth_router
+from .routers import positions as positions_router
 from .routers import settings as settings_router
 
 
@@ -25,6 +26,7 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     app.state.db = db
     app.state.producer = producer
     app.state.settings_service = settings_router.SettingsService(publisher, reader)
+    app.state.positions_service = positions_router.PositionsService(publisher, reader)
     app.state.publisher = publisher
     app.state.reader = reader
 
@@ -38,3 +40,4 @@ async def _shutdown(app: FastAPI, settings: Settings) -> None:
 app = create_app("control-api", on_startup=_startup, on_shutdown=_shutdown)
 app.include_router(auth_router.router)
 app.include_router(settings_router.router)
+app.include_router(positions_router.router)

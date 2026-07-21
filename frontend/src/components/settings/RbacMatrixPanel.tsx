@@ -30,7 +30,7 @@ const ALL_PERMISSIONS: Permission[] = [
 
 const PERMISSION_SHORT_LABEL: Record<Permission, string> = {
   'trading.toggle_auto': 'Auto-trading on/off',
-  'trading.switch_mode': 'Basculer paper/live',
+  'trading.switch_mode': 'Basculer dry_run/demo/live',
   'trading.approve_opportunity': 'Valider opportunités',
   'trading.manual_order': 'Ordres manuels',
   'trading.close_position': 'Clôturer positions',

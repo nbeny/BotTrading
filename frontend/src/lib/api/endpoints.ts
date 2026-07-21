@@ -1,5 +1,6 @@
 import { api } from './client';
 import type {
+  EngineCaps,
   MarketToken,
   NewsItem,
   Opportunity,
@@ -87,6 +88,15 @@ export const tradingApi = {
     api
       .patch<Position>(`/trading/positions/${positionId}/sltp`, input)
       .then((r) => r.data),
+};
+
+// ── Engine settings ─────────────────────────────────────────────────────────────
+export const settingsApi = {
+  status: () => api.get<TradingStatus>('/trading/status').then((r) => r.data),
+  setMode: (mode: TradingMode) => api.post('/trading/mode', { mode }).then((r) => r.data),
+  setKill: (enabled: boolean) => api.post('/trading/kill', { enabled }).then((r) => r.data),
+  setAuto: (enabled: boolean) => api.post('/trading/auto', { enabled }).then((r) => r.data),
+  setCaps: (caps: Partial<EngineCaps>) => api.post('/trading/caps', caps).then((r) => r.data),
 };
 
 // ── Risk ──────────────────────────────────────────────────────────────────────

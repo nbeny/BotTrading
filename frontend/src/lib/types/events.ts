@@ -133,7 +133,7 @@ export interface OrderExecutedEvent extends EventBase {
   cost: number;
   fee?: number;
   status: 'filled' | 'partial' | 'rejected';
-  mode: 'paper' | 'live';
+  mode: 'dry_run' | 'demo' | 'live';
 }
 
 /** Position lifecycle change. */

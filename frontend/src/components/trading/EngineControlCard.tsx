@@ -14,14 +14,15 @@ import {
   FormControlLabel,
   Stack,
   Switch,
+  ToggleButton,
+  ToggleButtonGroup,
   Tooltip,
   Typography,
 } from '@mui/material';
 import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
-import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { tradingApi } from '@/lib/api/endpoints';
+import { settingsApi } from '@/lib/api/endpoints';
 import { useAuth } from '@/lib/auth/AuthProvider';
 import { apiErrorMessage } from '@/lib/api/client';
 import type { TradingMode } from '@/lib/types/domain';
@@ -31,58 +32,89 @@ interface Props {
   onError: (msg: string) => void;
 }
 
+const MODES: { value: TradingMode; label: string }[] = [
+  { value: 'dry_run', label: 'Dry Run' },
+  { value: 'demo', label: 'Demo' },
+  { value: 'live', label: 'Live' },
+];
+
 export function EngineControlCard({ onSuccess, onError }: Props) {
   const { can } = useAuth();
   const qc = useQueryClient();
   const [liveConfirmOpen, setLiveConfirmOpen] = useState(false);
+  // Double-confirm: the second checkbox-style acknowledgement inside the dialog.
+  const [liveAcknowledged, setLiveAcknowledged] = useState(false);
 
   const { data: status, isLoading } = useQuery({
     queryKey: ['trading', 'status'],
-    queryFn: tradingApi.status,
+    queryFn: settingsApi.status,
     refetchInterval: 10_000,
   });
 
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['trading', 'status'] });
+
   const toggleAutoMutation = useMutation({
-    mutationFn: (enabled: boolean) => tradingApi.setAutoTrading(enabled),
+    mutationFn: (enabled: boolean) => settingsApi.setAuto(enabled),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['trading', 'status'] });
+      invalidate();
       onSuccess('Trading automatique mis à jour');
     },
     onError: (err) => onError(apiErrorMessage(err, 'Erreur lors de la mise à jour')),
   });
 
+  const toggleKillMutation = useMutation({
+    mutationFn: (enabled: boolean) => settingsApi.setKill(enabled),
+    onSuccess: () => {
+      invalidate();
+      onSuccess('Kill-switch mis à jour');
+    },
+    onError: (err) => onError(apiErrorMessage(err, 'Erreur lors de la mise à jour du kill-switch')),
+  });
+
   const setModeMutation = useMutation({
-    mutationFn: (mode: TradingMode) => tradingApi.setMode(mode),
-    onSuccess: (data) => {
-      qc.invalidateQueries({ queryKey: ['trading', 'status'] });
-      onSuccess(`Mode basculé vers ${data.mode.toUpperCase()}`);
-      setLiveConfirmOpen(false);
+    mutationFn: (mode: TradingMode) => settingsApi.setMode(mode),
+    onSuccess: (_data, mode) => {
+      invalidate();
+      onSuccess(`Mode basculé vers ${mode.toUpperCase()}`);
+      closeLiveDialog();
     },
     onError: (err) => {
       onError(apiErrorMessage(err, 'Erreur lors du changement de mode'));
-      setLiveConfirmOpen(false);
+      closeLiveDialog();
     },
   });
 
   const canToggleAuto = can('trading.toggle_auto');
   const canSwitchMode = can('trading.switch_mode');
+  // Kill-switch is engaged when trading is disabled.
+  const killEngaged = status ? !status.trading_enabled : false;
+
+  function closeLiveDialog() {
+    setLiveConfirmOpen(false);
+    setLiveAcknowledged(false);
+  }
 
   function handleAutoToggle(checked: boolean) {
     if (!canToggleAuto) return;
     toggleAutoMutation.mutate(checked);
   }
 
-  function handleModeSwitch() {
-    if (!canSwitchMode || !status) return;
-    const targetMode: TradingMode = status.mode === 'paper' ? 'live' : 'paper';
-    if (targetMode === 'live') {
+  function handleKillToggle(checked: boolean) {
+    if (!canSwitchMode) return;
+    toggleKillMutation.mutate(checked);
+  }
+
+  function handleModeChange(next: TradingMode | null) {
+    if (!next || !canSwitchMode || !status || next === status.mode) return;
+    if (next === 'live') {
       setLiveConfirmOpen(true);
     } else {
-      setModeMutation.mutate('paper');
+      setModeMutation.mutate(next);
     }
   }
 
   function handleLiveConfirm() {
+    if (!liveAcknowledged) return;
     setModeMutation.mutate('live');
   }
 
@@ -132,69 +164,108 @@ export function EngineControlCard({ onSuccess, onError }: Props) {
                 </Box>
               </Box>
 
-              {/* Paper / Live mode */}
+              {/* Kill switch */}
+              <Box>
+                <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 0.6 }}>
+                  Kill-switch
+                </Typography>
+                <Box sx={{ mt: 1 }}>
+                  <Tooltip
+                    title={!canSwitchMode ? 'Permission requise' : 'Coupe immédiatement toute prise d\'ordre'}
+                    disableHoverListener={false}
+                  >
+                    <span>
+                      <FormControlLabel
+                        control={
+                          <Switch
+                            checked={killEngaged}
+                            onChange={(_, checked) => handleKillToggle(checked)}
+                            disabled={!canSwitchMode || toggleKillMutation.isPending}
+                            color="error"
+                          />
+                        }
+                        label={
+                          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                            {killEngaged ? 'Engagé (trading coupé)' : 'Relâché'}
+                          </Typography>
+                        }
+                      />
+                    </span>
+                  </Tooltip>
+                </Box>
+              </Box>
+
+              {/* Trading mode — 3-way selector */}
               <Box>
                 <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 0.6 }}>
                   Mode de trading
                 </Typography>
-                <Stack direction="row" alignItems="center" spacing={2} sx={{ mt: 1 }}>
-                  <Box
-                    sx={{
-                      px: 2,
-                      py: 0.5,
-                      borderRadius: 1,
-                      bgcolor: status?.mode === 'paper' ? 'primary.main' : 'warning.main',
-                      color: '#fff',
-                      fontWeight: 700,
-                      fontSize: 13,
-                      letterSpacing: 1,
-                    }}
-                  >
-                    {status?.mode?.toUpperCase() ?? '—'}
-                  </Box>
+                <Box sx={{ mt: 1 }}>
                   <Tooltip
-                    title={!canSwitchMode ? 'Permission requise' : status?.mode === 'paper' ? 'Basculer en LIVE (ordres réels Kraken)' : 'Basculer en PAPER'}
-                    disableHoverListener={false}
+                    title={!canSwitchMode ? 'Permission requise' : ''}
+                    disableHoverListener={canSwitchMode}
                   >
                     <span>
-                      <Button
-                        variant="outlined"
+                      <ToggleButtonGroup
+                        exclusive
                         size="small"
-                        startIcon={setModeMutation.isPending ? <CircularProgress size={14} /> : <SwapHorizIcon />}
-                        onClick={handleModeSwitch}
+                        value={status?.mode ?? null}
+                        onChange={(_, v) => handleModeChange(v as TradingMode | null)}
                         disabled={!canSwitchMode || setModeMutation.isPending}
-                        color={status?.mode === 'paper' ? 'warning' : 'primary'}
                       >
-                        {status?.mode === 'paper' ? 'Passer en LIVE' : 'Passer en PAPER'}
-                      </Button>
+                        {MODES.map((m) => (
+                          <ToggleButton
+                            key={m.value}
+                            value={m.value}
+                            color={m.value === 'live' ? 'warning' : 'primary'}
+                            sx={{ px: 2, fontWeight: 700, letterSpacing: 0.5 }}
+                          >
+                            {m.label}
+                          </ToggleButton>
+                        ))}
+                      </ToggleButtonGroup>
                     </span>
                   </Tooltip>
-                </Stack>
+                </Box>
               </Box>
             </Stack>
           )}
         </CardContent>
       </Card>
 
-      {/* LIVE confirmation dialog */}
-      <Dialog open={liveConfirmOpen} onClose={() => setLiveConfirmOpen(false)} maxWidth="sm" fullWidth>
+      {/* LIVE confirmation dialog — double confirm */}
+      <Dialog open={liveConfirmOpen} onClose={closeLiveDialog} maxWidth="sm" fullWidth>
         <DialogTitle sx={{ color: 'warning.main' }}>⚠ Activation du mode LIVE</DialogTitle>
         <DialogContent>
           <DialogContentText>
             Vous êtes sur le point de basculer en mode <strong>LIVE</strong>. Cette action activera
             les ordres réels sur <strong>Kraken</strong>. Des fonds réels seront engagés.
-            Confirmez-vous ce changement de mode ?
           </DialogContentText>
+          <FormControlLabel
+            sx={{ mt: 2 }}
+            control={
+              <Switch
+                checked={liveAcknowledged}
+                onChange={(_, checked) => setLiveAcknowledged(checked)}
+                color="warning"
+              />
+            }
+            label={
+              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                Je confirme engager des fonds réels
+              </Typography>
+            }
+          />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setLiveConfirmOpen(false)} color="inherit">
+          <Button onClick={closeLiveDialog} color="inherit">
             Annuler
           </Button>
           <Button
             onClick={handleLiveConfirm}
             color="warning"
             variant="contained"
-            disabled={setModeMutation.isPending}
+            disabled={!liveAcknowledged || setModeMutation.isPending}
           >
             {setModeMutation.isPending ? <CircularProgress size={18} /> : 'Confirmer — LIVE'}
           </Button>

@@ -166,7 +166,8 @@ export function TradesTable({ trades, isLoading }: Props) {
             onChange={(_, v) => v && setModeFilter(v as ModeFilter)}
           >
             <ToggleButton value="all" sx={{ px: 1.5, py: 0.25, fontSize: 11 }}>Tous</ToggleButton>
-            <ToggleButton value="paper" sx={{ px: 1.5, py: 0.25, fontSize: 11 }}>Paper</ToggleButton>
+            <ToggleButton value="dry_run" sx={{ px: 1.5, py: 0.25, fontSize: 11 }}>Dry Run</ToggleButton>
+            <ToggleButton value="demo" sx={{ px: 1.5, py: 0.25, fontSize: 11 }}>Demo</ToggleButton>
             <ToggleButton value="live" sx={{ px: 1.5, py: 0.25, fontSize: 11 }}>Live</ToggleButton>
           </ToggleButtonGroup>
         </Stack>

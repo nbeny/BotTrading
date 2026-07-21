@@ -16,6 +16,7 @@ export interface Portfolio {
 
 export interface Position {
   position_id: string;
+  event_id?: string;
   symbol: string;
   direction: 'long' | 'short';
   quantity: number;

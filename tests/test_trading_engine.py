@@ -35,6 +35,9 @@ class FakeCache:
             async def sadd(self, k, m):
                 outer.sadd.append((k, m))
 
+            async def srem(self, k, m):
+                outer.sadd = [(kk, mm) for (kk, mm) in outer.sadd if not (kk == k and mm == m)]
+
             async def hset(self, *a, **k):
                 return None
         return _C()

@@ -12,6 +12,7 @@ from cmi_common.kafka import Topic
 from . import symbols
 from .config import TradingConfig
 from .guards import check_guards
+from .runtime import RuntimeConfig
 from .sizing import compute_size
 
 logger = logging.getLogger(__name__)
@@ -142,6 +143,54 @@ class TradingEngine:
                          fill_price=event.entry_price,
                          kraken_order_id=_order_id(entry))
         logger.info("EXECUTED %s size=%s @ %s", event.symbol, size, event.entry_price)
+
+    async def approve_opportunity(self, event_id: str, *, issued_by: str | None = None) -> None:
+        payload = await self._cache.get_json(f"trading:pending:{event_id}")
+        if not payload:
+            logger.info("approve: %s not pending", event_id)
+            return
+        await self._cache.client.srem("trading:pending", event_id)
+        event = RiskApprovedEvent(
+            event_id=payload["event_id"], correlation_id=payload["correlation_id"],
+            symbol=payload["symbol"], direction=payload["direction"],
+            entry_price=payload["entry_price"], stop_loss=payload["stop_loss"],
+            take_profit=payload["take_profit"], confidence=payload["confidence"],
+            position_size_pct=payload["position_size_pct"],
+        )
+        config = await RuntimeConfig.load(self._cache, self._defaults)
+        # re-run guards + sizing at approval time
+        reason = await check_guards(self._cache, config)
+        if reason is not None:
+            await self._reject(event, reason)
+            return
+        size = compute_size(
+            equity_usd=await self._equity(), position_size_pct=event.position_size_pct,
+            entry_price=event.entry_price, max_order_usd=config.max_order_usd,
+            max_leverage=config.max_leverage, contract_step=CONTRACT_STEP,
+            min_contracts=MIN_CONTRACTS,
+        )
+        if size <= 0:
+            await self._reject(event, "below_min_size")
+            return
+        await self._execute(event, config, size)
+        logger.info("APPROVED %s by %s", event.symbol, issued_by)
+
+    async def reject_opportunity(
+        self, event_id: str, *, reason: str = "operator_reject", issued_by: str | None = None
+    ) -> None:
+        payload = await self._cache.get_json(f"trading:pending:{event_id}")
+        if not payload:
+            return
+        await self._cache.client.srem("trading:pending", event_id)
+        event = RiskApprovedEvent(
+            event_id=payload["event_id"], correlation_id=payload["correlation_id"],
+            symbol=payload["symbol"], direction=payload["direction"],
+            entry_price=payload["entry_price"], stop_loss=payload["stop_loss"],
+            take_profit=payload["take_profit"], confidence=payload["confidence"],
+            position_size_pct=payload["position_size_pct"],
+        )
+        await self._emit(event, ExecutionKind.REJECTED, reason=reason)
+        logger.info("operator rejected %s: %s", event.symbol, reason)
 
     async def close_position(self, event_id: str, *, issued_by: str | None = None) -> None:
         pos = await self._cache.get_json(f"trading:position:{event_id}")

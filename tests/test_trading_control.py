@@ -51,3 +51,36 @@ def test_set_caps_partial() -> None:
     asyncio.run(_handler(cache).handle(_cmd(ControlCommand.SET_CAPS, max_order_usd=250.0)))
     assert cache._values["trading:runtime"]["max_order_usd"] == 250.0
     assert cache._values["trading:runtime"]["max_leverage"] == 3.0
+
+
+class FakeEngine:
+    def __init__(self):
+        self.closed = []
+        self.adjusted = []
+
+    async def close_position(self, event_id, *, issued_by=None):
+        self.closed.append((event_id, issued_by))
+
+    async def adjust_sltp(self, event_id, *, stop_loss=None, take_profit=None, issued_by=None):
+        self.adjusted.append((event_id, stop_loss, take_profit, issued_by))
+
+
+def _handler_with_engine(cache, engine):
+    control = load_module("control")
+    config = load_module("config")
+    return control.ControlHandler(cache, engine=engine, kraken=None,
+                                  defaults=config.TradingConfig())
+
+
+def test_close_position_dispatches_to_engine() -> None:
+    engine = FakeEngine()
+    asyncio.run(_handler_with_engine(FakeCache(), engine).handle(
+        _cmd(ControlCommand.CLOSE_POSITION, event_id="e1")))
+    assert engine.closed == [("e1", "admin")]
+
+
+def test_adjust_sltp_dispatches_to_engine() -> None:
+    engine = FakeEngine()
+    asyncio.run(_handler_with_engine(FakeCache(), engine).handle(
+        _cmd(ControlCommand.ADJUST_SLTP, event_id="e1", stop_loss=140.0)))
+    assert engine.adjusted == [("e1", 140.0, None, "admin")]

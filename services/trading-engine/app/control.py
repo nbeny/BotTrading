@@ -46,5 +46,12 @@ class ControlHandler:
             fields = {k: p[k] for k in _CAPS_FIELDS if k in p}
             if fields:
                 await RuntimeConfig.set_fields(self._cache, fields)
+        elif cmd == ControlCommand.CLOSE_POSITION:
+            await self._engine.close_position(p["event_id"], issued_by=event.issued_by)
+        elif cmd == ControlCommand.ADJUST_SLTP:
+            await self._engine.adjust_sltp(
+                p["event_id"], stop_loss=p.get("stop_loss"),
+                take_profit=p.get("take_profit"), issued_by=event.issued_by,
+            )
         else:
             logger.info("command %s not handled in this phase", cmd)

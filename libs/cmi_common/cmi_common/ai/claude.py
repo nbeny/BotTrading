@@ -20,7 +20,11 @@ import tempfile
 from dataclasses import dataclass
 from typing import Any
 
-from ..observability.metrics import AI_CLI_CALLS, AI_TOKENS
+from ..observability.metrics import (
+    AI_CLI_CALLS,
+    AI_MODEL_TIER_MISMATCH,
+    AI_TOKENS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -284,6 +288,7 @@ class CliTransport(_Transport):
         AI_TOKENS.labels(service, self._model, "input").inc(in_tok)
         AI_TOKENS.labels(service, self._model, "output").inc(out_tok)
         actual = _actual_model(envelope)
+        self._check_tier(actual, service)
         AI_CLI_CALLS.labels(service, self._model, "success").inc()
         return ClaudeResponse(
             text=text,
@@ -291,6 +296,27 @@ class CliTransport(_Transport):
             output_tokens=out_tok,
             actual_model=actual,
         )
+
+    def _check_tier(self, actual: str | None, service: str) -> None:
+        """Warn + count when the CLI served a different model family."""
+        if actual is None:
+            return
+        want = _model_family(self._model)
+        got = _model_family(actual)
+        if want is None or got is None or want == got:
+            return
+        logger.warning(
+            "model_tier_mismatch",
+            extra={
+                "event": "model_tier_mismatch",
+                "service": service,
+                "requested": self._model,
+                "requested_tier": want,
+                "actual": actual,
+                "actual_tier": got,
+            },
+        )
+        AI_MODEL_TIER_MISMATCH.labels(service, want, got).inc()
 
 
 def _is_quota(err: bytes) -> bool:

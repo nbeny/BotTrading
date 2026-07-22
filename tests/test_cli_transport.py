@@ -324,3 +324,45 @@ def test_cli_env_scrubs_api_key(monkeypatch) -> None:
     assert "ANTHROPIC_API_KEY" not in env
     assert "ANTHROPIC_AUTH_TOKEN" not in env
     assert env.get("SOME_OTHER_VAR") == "keepme"
+
+
+def _mismatch_count(service: str, requested: str, actual: str) -> float:
+    from cmi_common.observability.metrics import AI_MODEL_TIER_MISMATCH
+
+    return AI_MODEL_TIER_MISMATCH.labels(service, requested, actual)._value.get()
+
+
+def test_cli_tier_mismatch_counted(monkeypatch) -> None:
+    from cmi_common.ai.claude import CliOptions, CliTransport
+
+    envelope = json.dumps({
+        "result": '{"opportunity_score": 1}',
+        "usage": {"output_tokens": 5},
+        "modelUsage": {"claude-opus-4-8": {"outputTokens": 5}},
+    })
+    proc = FakeProc(out=envelope.encode())
+    _patch_exec(monkeypatch, proc, {})
+
+    before = _mismatch_count("svc", "haiku", "opus")
+    t = CliTransport("claude-haiku-4-5-20251001", CliOptions())
+    resp = asyncio.run(t.complete(system="s", prompt="p", service="svc"))
+
+    assert resp.json() == {"opportunity_score": 1}
+    assert _mismatch_count("svc", "haiku", "opus") == before + 1
+
+
+def test_cli_tier_match_not_counted(monkeypatch) -> None:
+    from cmi_common.ai.claude import CliOptions, CliTransport
+
+    envelope = json.dumps({
+        "result": "{}",
+        "usage": {"output_tokens": 5},
+        "modelUsage": {"claude-haiku-4-5-20251001": {"outputTokens": 5}},
+    })
+    proc = FakeProc(out=envelope.encode())
+    _patch_exec(monkeypatch, proc, {})
+
+    before = _mismatch_count("svc", "haiku", "haiku")
+    t = CliTransport("claude-haiku-4-5-20251001", CliOptions())
+    asyncio.run(t.complete(system="s", prompt="p", service="svc"))
+    assert _mismatch_count("svc", "haiku", "haiku") == before

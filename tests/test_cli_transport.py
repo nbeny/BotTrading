@@ -273,6 +273,37 @@ def test_cli_system_prompt_append_mode(monkeypatch) -> None:
     assert "--exclude-dynamic-system-prompt-sections" not in argv
 
 
+def test_actual_model_surfaced(monkeypatch) -> None:
+    from cmi_common.ai.claude import CliOptions, CliTransport
+
+    envelope = json.dumps({
+        "result": '{"opportunity_score": 42}',
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+        "modelUsage": {
+            "claude-haiku-4-5-20251001": {"outputTokens": 3},
+            "claude-sonnet-4-6": {"outputTokens": 20},
+        },
+    })
+    proc = FakeProc(out=envelope.encode())
+    _patch_exec(monkeypatch, proc, {})
+
+    t = CliTransport("claude-sonnet-4-6", CliOptions())
+    resp = asyncio.run(t.complete(system="s", prompt="p", service="svc"))
+    assert resp.actual_model == "claude-sonnet-4-6"
+
+
+def test_actual_model_none_when_absent(monkeypatch) -> None:
+    from cmi_common.ai.claude import CliOptions, CliTransport
+
+    envelope = json.dumps({"result": "{}", "usage": {}})
+    proc = FakeProc(out=envelope.encode())
+    _patch_exec(monkeypatch, proc, {})
+
+    t = CliTransport("m", CliOptions())
+    resp = asyncio.run(t.complete(system="s", prompt="p", service="svc"))
+    assert resp.actual_model is None
+
+
 def test_cli_env_scrubs_api_key(monkeypatch) -> None:
     from cmi_common.ai.claude import CliOptions, CliTransport
 

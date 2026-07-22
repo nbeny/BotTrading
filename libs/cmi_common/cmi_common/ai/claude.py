@@ -52,11 +52,40 @@ def _cli_env() -> dict[str, str]:
     }
 
 
+def _output_tokens_of(usage: Any) -> int:
+    if not isinstance(usage, dict):
+        return 0
+    raw = usage.get("outputTokens", usage.get("output_tokens", 0))
+    try:
+        return int(raw or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _actual_model(envelope: dict[str, Any]) -> str | None:
+    """The model that produced the answer per the CLI JSON payload.
+
+    Prefer the modelUsage entry with the most output tokens (the real
+    responder, ignoring an incidental auxiliary call); fall back to a
+    top-level model field; else None.
+    """
+    usage_by_model = envelope.get("modelUsage")
+    if isinstance(usage_by_model, dict) and usage_by_model:
+        primary = max(
+            usage_by_model.items(),
+            key=lambda kv: _output_tokens_of(kv[1]),
+        )[0]
+        return primary if isinstance(primary, str) else None
+    model = envelope.get("model")
+    return model if isinstance(model, str) else None
+
+
 @dataclass(slots=True)
 class ClaudeResponse:
     text: str
     input_tokens: int = 0
     output_tokens: int = 0
+    actual_model: str | None = None
 
     def json(self) -> dict[str, Any]:
         """Best-effort parse of a JSON object out of the model's reply."""
@@ -254,8 +283,14 @@ class CliTransport(_Transport):
         out_tok = int(usage.get("output_tokens", 0) or 0)
         AI_TOKENS.labels(service, self._model, "input").inc(in_tok)
         AI_TOKENS.labels(service, self._model, "output").inc(out_tok)
+        actual = _actual_model(envelope)
         AI_CLI_CALLS.labels(service, self._model, "success").inc()
-        return ClaudeResponse(text=text, input_tokens=in_tok, output_tokens=out_tok)
+        return ClaudeResponse(
+            text=text,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+            actual_model=actual,
+        )
 
 
 def _is_quota(err: bytes) -> bool:

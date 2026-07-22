@@ -19,3 +19,6 @@ node_modules/
 .next/
 *.tsbuildinfo
 next-env.d.ts
+
+# git worktrees for isolated feature work
+.worktrees/

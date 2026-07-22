@@ -24,6 +24,23 @@ from ..observability.metrics import AI_CLI_CALLS, AI_TOKENS
 logger = logging.getLogger(__name__)
 
 
+_CLI_MODEL: dict[str, str] = {
+    "claude-haiku-4-5-20251001": "haiku",
+    "claude-sonnet-4-6": "sonnet",
+    "claude-opus-4-7": "opus",
+    "claude-opus-4-8": "opus",
+}
+
+
+def _model_family(model_id: str) -> str | None:
+    """Coarse Haiku/Sonnet/Opus bucket for a model id or alias."""
+    s = model_id.lower()
+    for family in ("haiku", "sonnet", "opus"):
+        if family in s:
+            return family
+    return None
+
+
 @dataclass(slots=True)
 class ClaudeResponse:
     text: str
@@ -156,7 +173,7 @@ class CliTransport(_Transport):
             self._opts.cli_path,
             "-p",
             "--model",
-            self._model,
+            _CLI_MODEL.get(self._model, self._model),
             "--output-format",
             "json",
             "--dangerously-skip-permissions",

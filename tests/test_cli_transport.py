@@ -223,3 +223,31 @@ def test_tier_mismatch_metric_exists() -> None:
 
     AI_MODEL_TIER_MISMATCH.labels("svc", "haiku", "opus").inc()
     assert AI_MODEL_TIER_MISMATCH.labels("svc", "haiku", "opus")._value.get() >= 1
+
+
+def test_cli_model_alias_passed(monkeypatch) -> None:
+    from cmi_common.ai.claude import CliOptions, CliTransport
+
+    envelope = json.dumps({"result": "{}", "usage": {}})
+    proc = FakeProc(out=envelope.encode())
+    captured: dict = {}
+    _patch_exec(monkeypatch, proc, captured)
+
+    t = CliTransport("claude-haiku-4-5-20251001", CliOptions())
+    asyncio.run(t.complete(system="s", prompt="p", service="svc"))
+    argv = captured["argv"]
+    assert argv[argv.index("--model") + 1] == "haiku"
+
+
+def test_cli_model_alias_unknown_passthrough(monkeypatch) -> None:
+    from cmi_common.ai.claude import CliOptions, CliTransport
+
+    envelope = json.dumps({"result": "{}", "usage": {}})
+    proc = FakeProc(out=envelope.encode())
+    captured: dict = {}
+    _patch_exec(monkeypatch, proc, captured)
+
+    t = CliTransport("some-custom-model", CliOptions())
+    asyncio.run(t.complete(system="s", prompt="p", service="svc"))
+    argv = captured["argv"]
+    assert argv[argv.index("--model") + 1] == "some-custom-model"

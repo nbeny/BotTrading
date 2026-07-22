@@ -212,19 +212,21 @@ services:
   # ----------------------------------------------------------- analytics
   sentiment-service:
     <<: *service-defaults
-    build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/sentiment-service } }
+    build: { context: ., dockerfile: docker/Dockerfile.ml, args: { SERVICE_PATH: services/sentiment-service } }
     environment:
       <<: *common-env
       SENTIMENT_MODEL: ${SENTIMENT_MODEL:-ElKulako/cryptobert}
+    volumes:
+      # Persist downloaded model weights (HF_HOME) across restarts.
+      - hf-cache:/home/appuser/.cache/huggingface
 
   ai-worker-haiku:
     <<: *service-defaults
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/Dockerfile.ai
       args:
         SERVICE_PATH: services/ai-worker-haiku
-        INSTALL_CLAUDE_CLI: "true"
     environment:
       <<: *common-env
       ANTHROPIC_HAIKU_MODEL: ${ANTHROPIC_HAIKU_MODEL:-claude-haiku-4-5-20251001}
@@ -243,10 +245,9 @@ services:
     <<: *service-defaults
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/Dockerfile.ai
       args:
         SERVICE_PATH: services/ai-worker-sonnet
-        INSTALL_CLAUDE_CLI: "true"
     environment:
       <<: *common-env
       ANTHROPIC_SONNET_MODEL: ${ANTHROPIC_SONNET_MODEL:-claude-sonnet-4-6}
@@ -435,3 +436,4 @@ volumes:
   prom-data:
   grafana-data:
   traefik-acme:
+  hf-cache:

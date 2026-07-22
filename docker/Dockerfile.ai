@@ -1,14 +1,11 @@
-# Base image for plain-Python CMI services (collectors, engines, gateways,
-# api/control/ws, migrations). Build context MUST be the repo root so the
-# shared library is available.
+# Image for CMI AI worker services (ai-worker-haiku, ai-worker-sonnet).
+# Same as the base Python image plus Node.js + the Claude Code CLI, which the
+# workers shell out to (ANTHROPIC_TRANSPORT=cli — subscription auth via the
+# mounted ~/.claude credentials). Build context MUST be the repo root.
 #
 #   build args:
-#     SERVICE_PATH  e.g. services/collector-coingecko
+#     SERVICE_PATH  e.g. services/ai-worker-haiku
 #     APP_MODULE    e.g. app.main:app  (FastAPI) — used by the default CMD
-#
-# Sibling images for the services that need more than plain Python:
-#   docker/Dockerfile.ai  — AI workers (Node.js + Claude Code CLI)
-#   docker/Dockerfile.ml  — sentiment service (transformers + torch)
 #
 # syntax=docker/dockerfile:1.7
 
@@ -20,8 +17,11 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl build-essential \
+    && apt-get install -y --no-install-recommends curl build-essential nodejs npm \
     && rm -rf /var/lib/apt/lists/*
+
+# Claude Code CLI — the workers invoke it as a subprocess.
+RUN npm install -g @anthropic-ai/claude-code
 
 WORKDIR /app
 

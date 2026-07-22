@@ -1,5 +1,8 @@
 /** @type {import('next').NextConfig} */
 const API_GATEWAY = process.env.API_GATEWAY_URL || 'http://localhost:8000';
+// control-api (control plane: auth + /trading/* writes). Separate service from
+// the read-only api-gateway. Defaults to its local-dev host port (8001).
+const CONTROL_API = process.env.CONTROL_API_URL || 'http://localhost:8001';
 
 const nextConfig = {
   reactStrictMode: true,
@@ -17,6 +20,11 @@ const nextConfig = {
       {
         source: '/api/gateway/:path*',
         destination: `${API_GATEWAY}/:path*`,
+      },
+      // Control plane -> control-api (auth + /trading/* command endpoints).
+      {
+        source: '/api/control/:path*',
+        destination: `${CONTROL_API}/:path*`,
       },
     ];
   },

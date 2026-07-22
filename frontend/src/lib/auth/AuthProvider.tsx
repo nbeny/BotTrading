@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { jwtDecode } from 'jwt-decode';
-import { api } from '@/lib/api/client';
+import { control } from '@/lib/api/client';
 import { ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY } from '@/lib/config';
 import { hasPermission } from './rbac';
 import type { AuthState, AuthTokens, JwtClaims, Permission, User } from './types';
@@ -66,7 +66,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [logout]);
 
   const login = useCallback(async (email: string, password: string) => {
-    const { data } = await api.post<AuthTokens>('/auth/login', { email, password });
+    // control-api expects `username`; the mock BFF reads `email`. Send both so
+    // the same call works against either backend.
+    const { data } = await control.post<AuthTokens>('/auth/login', {
+      username: email,
+      email,
+      password,
+    });
     const user = userFromToken(data.access_token);
     if (!user) throw new Error('Token invalide reçu du serveur');
     window.localStorage.setItem(ACCESS_TOKEN_KEY, data.access_token);

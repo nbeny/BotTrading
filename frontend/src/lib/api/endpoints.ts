@@ -1,4 +1,4 @@
-import { api } from './client';
+import { api, control } from './client';
 import type {
   EngineCaps,
   MarketToken,
@@ -64,39 +64,44 @@ export interface AdjustSlTpInput {
   take_profit?: number | null;
 }
 
+// All trading control routes are served by control-api (via the `control`
+// client), which publishes ControlCommandEvents to Kafka. Reads above stay on
+// the read-only api-gateway (`api`).
 export const tradingApi = {
-  status: () => api.get<TradingStatus>('/trading/status').then((r) => r.data),
+  status: () => control.get<TradingStatus>('/trading/status').then((r) => r.data),
   setAutoTrading: (enabled: boolean) =>
-    api.post<TradingStatus>('/trading/auto', { enabled }).then((r) => r.data),
+    control.post<TradingStatus>('/trading/auto', { enabled }).then((r) => r.data),
   setMode: (mode: TradingMode) =>
-    api.post<TradingStatus>('/trading/mode', { mode }).then((r) => r.data),
+    control.post<TradingStatus>('/trading/mode', { mode }).then((r) => r.data),
 
   opportunities: (status: 'pending' | 'all' = 'pending') =>
-    api.get<Opportunity[]>('/trading/opportunities', { params: { status } }).then((r) => r.data),
+    control
+      .get<Opportunity[]>('/trading/opportunities', { params: { status } })
+      .then((r) => r.data),
   approveOpportunity: (id: string) =>
-    api.post<Opportunity>(`/trading/opportunities/${id}/approve`).then((r) => r.data),
+    control.post<Opportunity>(`/trading/opportunities/${id}/approve`).then((r) => r.data),
   rejectOpportunity: (id: string, reason?: string) =>
-    api
+    control
       .post<Opportunity>(`/trading/opportunities/${id}/reject`, { reason })
       .then((r) => r.data),
 
   placeOrder: (input: ManualOrderInput) =>
-    api.post<Trade>('/trading/orders', input).then((r) => r.data),
+    control.post<Trade>('/trading/orders', input).then((r) => r.data),
   closePosition: (positionId: string) =>
-    api.post<Trade>(`/trading/positions/${positionId}/close`).then((r) => r.data),
+    control.post<Trade>(`/trading/positions/${positionId}/close`).then((r) => r.data),
   adjustSlTp: (positionId: string, input: AdjustSlTpInput) =>
-    api
+    control
       .patch<Position>(`/trading/positions/${positionId}/sltp`, input)
       .then((r) => r.data),
 };
 
 // ── Engine settings ─────────────────────────────────────────────────────────────
 export const settingsApi = {
-  status: () => api.get<TradingStatus>('/trading/status').then((r) => r.data),
-  setMode: (mode: TradingMode) => api.post('/trading/mode', { mode }).then((r) => r.data),
-  setKill: (enabled: boolean) => api.post('/trading/kill', { enabled }).then((r) => r.data),
-  setAuto: (enabled: boolean) => api.post('/trading/auto', { enabled }).then((r) => r.data),
-  setCaps: (caps: Partial<EngineCaps>) => api.post('/trading/caps', caps).then((r) => r.data),
+  status: () => control.get<TradingStatus>('/trading/status').then((r) => r.data),
+  setMode: (mode: TradingMode) => control.post('/trading/mode', { mode }).then((r) => r.data),
+  setKill: (enabled: boolean) => control.post('/trading/kill', { enabled }).then((r) => r.data),
+  setAuto: (enabled: boolean) => control.post('/trading/auto', { enabled }).then((r) => r.data),
+  setCaps: (caps: Partial<EngineCaps>) => control.post('/trading/caps', caps).then((r) => r.data),
 };
 
 // ── Risk ──────────────────────────────────────────────────────────────────────

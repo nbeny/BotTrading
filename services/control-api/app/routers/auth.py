@@ -28,7 +28,10 @@ async def issue_token(username: str, password: str) -> str:
     if not ok:
         raise AuthError("invalid credentials")
     secret = os.getenv("JWT_SECRET", "")
-    return encode_token({"sub": username, "role": "operator"}, secret=secret, ttl_seconds=3600)
+    # The sole hardcoded account is the platform admin: grant the admin role so
+    # the terminal's RBAC allows mode switching and settings edits (operator
+    # cannot). See frontend rbac.ts.
+    return encode_token({"sub": username, "role": "admin"}, secret=secret, ttl_seconds=3600)
 
 
 @router.post("/login")

@@ -70,9 +70,10 @@ class FakeProc:
 
 
 def _patch_exec(monkeypatch, proc: FakeProc, captured: dict) -> None:
-    async def _fake(*argv, stdin=None, stdout=None, stderr=None, cwd=None):
+    async def _fake(*argv, stdin=None, stdout=None, stderr=None, cwd=None, env=None):
         captured["argv"] = list(argv)
         captured["cwd"] = cwd
+        captured["env"] = env
         return proc
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake)
@@ -270,3 +271,25 @@ def test_cli_system_prompt_append_mode(monkeypatch) -> None:
     assert argv[argv.index("--append-system-prompt") + 1] == "SYS"
     assert "--system-prompt" not in argv
     assert "--exclude-dynamic-system-prompt-sections" not in argv
+
+
+def test_cli_env_scrubs_api_key(monkeypatch) -> None:
+    from cmi_common.ai.claude import CliOptions, CliTransport
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-not-leak")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "tok-should-not-leak")
+    monkeypatch.setenv("SOME_OTHER_VAR", "keepme")
+
+    envelope = json.dumps({"result": "{}", "usage": {}})
+    proc = FakeProc(out=envelope.encode())
+    captured: dict = {}
+    _patch_exec(monkeypatch, proc, captured)
+
+    t = CliTransport("m", CliOptions())
+    asyncio.run(t.complete(system="s", prompt="p", service="svc"))
+
+    env = captured["env"]
+    assert env is not None
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "ANTHROPIC_AUTH_TOKEN" not in env
+    assert env.get("SOME_OTHER_VAR") == "keepme"

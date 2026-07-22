@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -39,6 +40,16 @@ def _model_family(model_id: str) -> str | None:
         if family in s:
             return family
     return None
+
+
+def _cli_env() -> dict[str, str]:
+    """Subprocess env with API credentials removed so the CLI can never
+    bill per token -- it must draw on the mounted subscription session."""
+    return {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+    }
 
 
 @dataclass(slots=True)
@@ -194,6 +205,7 @@ class CliTransport(_Transport):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=scratch,
+                env=_cli_env(),
             )
         except FileNotFoundError:
             AI_CLI_CALLS.labels(service, self._model, "error").inc()

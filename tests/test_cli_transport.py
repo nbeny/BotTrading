@@ -98,8 +98,11 @@ def test_cli_argv_and_stdin(monkeypatch) -> None:
     # Independence: never continue or resume a session.
     assert "--continue" not in argv
     assert "--resume" not in argv
-    # System prompt passed via flag, user prompt via stdin.
-    assert argv[argv.index("--append-system-prompt") + 1] == "SYS"
+    # System prompt override: replace persona + drop dynamic sections.
+    assert argv[argv.index("--system-prompt") + 1] == "SYS"
+    assert "--exclude-dynamic-system-prompt-sections" in argv
+    assert "--append-system-prompt" not in argv
+    assert "--dangerously-skip-permissions" not in argv
     assert proc.sent_stdin == b"PROMPT"
     # Isolated scratch cwd per call, cleaned up afterwards.
     import os
@@ -251,3 +254,19 @@ def test_cli_model_alias_unknown_passthrough(monkeypatch) -> None:
     asyncio.run(t.complete(system="s", prompt="p", service="svc"))
     argv = captured["argv"]
     assert argv[argv.index("--model") + 1] == "some-custom-model"
+
+
+def test_cli_system_prompt_append_mode(monkeypatch) -> None:
+    from cmi_common.ai.claude import CliOptions, CliTransport
+
+    envelope = json.dumps({"result": "{}", "usage": {}})
+    proc = FakeProc(out=envelope.encode())
+    captured: dict = {}
+    _patch_exec(monkeypatch, proc, captured)
+
+    t = CliTransport("m", CliOptions(system_prompt_mode="append"))
+    asyncio.run(t.complete(system="SYS", prompt="p", service="svc"))
+    argv = captured["argv"]
+    assert argv[argv.index("--append-system-prompt") + 1] == "SYS"
+    assert "--system-prompt" not in argv
+    assert "--exclude-dynamic-system-prompt-sections" not in argv

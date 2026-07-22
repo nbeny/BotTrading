@@ -67,6 +67,7 @@ class CliOptions:
     cli_path: str = "claude"
     timeout_ms: int = 120000
     concurrency: int = 4
+    system_prompt_mode: str = "override"  # "override" | "append"
 
 
 class ClaudeClient:
@@ -169,6 +170,14 @@ class CliTransport(_Transport):
         self, *, system: str, prompt: str, service: str
     ) -> ClaudeResponse:
         scratch = tempfile.mkdtemp(prefix="cmi-claude-")
+        if self._opts.system_prompt_mode == "append":
+            system_args = ["--append-system-prompt", system]
+        else:
+            system_args = [
+                "--system-prompt",
+                system,
+                "--exclude-dynamic-system-prompt-sections",
+            ]
         argv = [
             self._opts.cli_path,
             "-p",
@@ -176,9 +185,7 @@ class CliTransport(_Transport):
             _CLI_MODEL.get(self._model, self._model),
             "--output-format",
             "json",
-            "--dangerously-skip-permissions",
-            "--append-system-prompt",
-            system,
+            *system_args,
         ]
         try:
             proc = await asyncio.create_subprocess_exec(

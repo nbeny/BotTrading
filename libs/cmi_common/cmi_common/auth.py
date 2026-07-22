@@ -19,6 +19,8 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from fastapi import Header, HTTPException
+
 logger = logging.getLogger(__name__)
 
 
@@ -101,7 +103,23 @@ def decode_token(token: str | None) -> Principal:
     return Principal(sub=sub, role=role, verified=False)
 
 
-def encode_token(claims: dict[str, Any], *, secret: str, ttl_seconds: int = 3600) -> str:
+async def require_principal(
+    authorization: str | None = Header(default=None),
+) -> Principal:
+    """FastAPI dependency: enforce a JWT bearer token (lenient in dev when no
+    JWT_SECRET is set, matching decode_token)."""
+    token = None
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization[7:]
+    try:
+        return decode_token(token)
+    except InvalidTokenError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+
+def encode_token(
+    claims: dict[str, Any], *, secret: str, ttl_seconds: int = 3600
+) -> str:
     """Mint an HS256 JWT. `exp` is added from ttl_seconds (informational; decode_token
     does not enforce expiry, matching the existing lenient decoder)."""
     header = {"alg": "HS256", "typ": "JWT"}

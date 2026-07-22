@@ -41,3 +41,8 @@ AI_CLI_CALLS = Counter(
     "Claude CLI subprocess invocations by outcome",
     ["service", "model", "outcome"],
 )
+AI_MODEL_TIER_MISMATCH = Counter(
+    "cmi_ai_model_tier_mismatch_total",
+    "CLI served a different model family than requested",
+    ["service", "requested_tier", "actual_tier"],
+)

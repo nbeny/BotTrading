@@ -216,3 +216,10 @@ def test_semaphore_caps_parallelism(monkeypatch) -> None:
 
     asyncio.run(scenario())
     assert state["peak"] == 2          # the cap was actually reached
+
+
+def test_tier_mismatch_metric_exists() -> None:
+    from cmi_common.observability.metrics import AI_MODEL_TIER_MISMATCH
+
+    AI_MODEL_TIER_MISMATCH.labels("svc", "haiku", "opus").inc()
+    assert AI_MODEL_TIER_MISMATCH.labels("svc", "haiku", "opus")._value.get() >= 1

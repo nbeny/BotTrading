@@ -16,13 +16,14 @@ const SNIPPETS = [
 ];
 
 function iso(offsetMs: number) { return new Date(Date.now() + offsetMs).toISOString(); }
-function catOf(i: number): RawContentItem['source_category'] { return i % 5 < 3 ? 'social' : i % 5 === 3 ? 'news' : 'market'; }
+// weighted category mix ≈ 3 social : 1 news : 1 market
+const CAT_MIX: RawContentItem['source_category'][] = ['social', 'social', 'social', 'news', 'market'];
 function platformFor(cat: RawContentItem['source_category']) {
   return cat === 'social' ? pick(SOCIAL) : cat === 'news' ? pick(NEWS) : pick(MARKET);
 }
 
-const _pool: RawContentItem[] = Array.from({ length: 400 }, (_, i) => {
-  const cat = catOf(i);
+function makeItem(publishedAgoMs: number, collectedAgoMs: number): RawContentItem {
+  const cat = pick(CAT_MIX);
   const tok = pick(UNIVERSE);
   const s = round(rand(-0.8, 0.9), 2);
   const hasDecision = s > 0.55 || s < -0.45;
@@ -34,8 +35,8 @@ const _pool: RawContentItem[] = Array.from({ length: 400 }, (_, i) => {
     title: `${tok.symbol} — ${pick(SNIPPETS)}`,
     snippet: pick(SNIPPETS),
     url: `https://example.com/${uid('u')}`,
-    published_at: iso(-rand(0, 24 * 3600_000)),
-    collected_at: iso(-rand(0, 3600_000)),
+    published_at: iso(-publishedAgoMs),
+    collected_at: iso(-collectedAgoMs),
     sentiment_score: s,
     sentiment_confidence: round(rand(0.55, 0.98), 2),
     model_name: cat === 'news' ? 'ProsusAI/finbert' : 'ElKulako/cryptobert',
@@ -44,9 +45,25 @@ const _pool: RawContentItem[] = Array.from({ length: 400 }, (_, i) => {
       ? { direction: (s > 0 ? 'long' : 'short') as 'long' | 'short', opportunity_score: Math.floor(rand(60, 92)), correlation_id: uid('corr') }
       : null,
   };
-}).sort((a, b) => +new Date(b.collected_at) - +new Date(a.collected_at));
+}
+
+let _pool: RawContentItem[] = Array.from({ length: 400 }, () => makeItem(rand(0, 24 * 3600_000), rand(0, 3600_000)))
+  .sort((a, b) => +new Date(b.collected_at) - +new Date(a.collected_at));
+
+// ── accumulation: the pool grows over wall-clock time (persistent, capped) ─────
+const MAX_POOL = 800;
+let _lastTick = Date.now();
+function tickContent() {
+  const now = Date.now();
+  const dt = Math.min(now - _lastTick, 60_000);
+  _lastTick = now;
+  const add = Math.min(20, Math.floor(dt / 4000)); // ~1 fresh item / 4s, burst-capped
+  for (let i = 0; i < add; i++) _pool.unshift(makeItem(rand(0, 3600_000), rand(0, 30_000)));
+  if (_pool.length > MAX_POOL) _pool = _pool.slice(0, MAX_POOL);
+}
 
 export function queryContent(q: ContentQuery): ContentPage {
+  tickContent();
   const limit = q.limit ?? 50;
   const offset = q.offset ?? 0;
   let items = _pool;
@@ -61,24 +78,39 @@ export function queryContent(q: ContentQuery): ContentPage {
 }
 
 export function contentStats(): DataStats {
+  tickContent();
   const social = _pool.filter((x) => x.source_category === 'social').length;
   const news = _pool.filter((x) => x.source_category === 'news').length;
   const market = _pool.filter((x) => x.source_category === 'market').length;
   const avg = round(_pool.reduce((s, x) => s + x.sentiment_score, 0) / _pool.length, 2);
-  const hours = Array.from({ length: 12 }, (_, h) => 11 - h);
-  const volume_series = hours.map((h) => ({
-    hour: `${String((new Date().getHours() - h + 24) % 24).padStart(2, '0')}h`,
-    social: Math.round(rand(40, 160)), news: Math.round(rand(10, 60)), market: Math.round(rand(20, 80)),
-  }));
-  const sentiment_series = hours.map((h) => ({
-    hour: `${String((new Date().getHours() - h + 24) % 24).padStart(2, '0')}h`, sentiment: round(rand(-0.3, 0.6), 2),
-  }));
+
+  // Series are DERIVED from the actual pool (bucketed by publish hour over the
+  // last 12h), so they are computed & stable — not re-randomized each poll.
+  const now = Date.now();
+  const buckets = Array.from({ length: 12 }, (_, i) => {
+    const hourStart = now - (11 - i) * 3600_000;
+    return { hour: `${String(new Date(hourStart).getHours()).padStart(2, '0')}h`, social: 0, news: 0, market: 0, sSum: 0, sCount: 0 };
+  });
+  for (const it of _pool) {
+    const age = now - +new Date(it.published_at);
+    if (age < 0 || age > 12 * 3600_000) continue;
+    const idx = 11 - Math.floor(age / 3600_000);
+    if (idx < 0 || idx > 11) continue;
+    const b = buckets[idx];
+    b[it.source_category] += 1;
+    b.sSum += it.sentiment_score;
+    b.sCount += 1;
+  }
+  const volume_series = buckets.map((b) => ({ hour: b.hour, social: b.social, news: b.news, market: b.market }));
+  const sentiment_series = buckets.map((b) => ({ hour: b.hour, sentiment: b.sCount ? round(b.sSum / b.sCount, 2) : 0 }));
+
   const srcCount: Record<string, number> = {};
   _pool.forEach((x) => { srcCount[x.platform] = (srcCount[x.platform] ?? 0) + 1; });
   const top_sources = Object.entries(srcCount).map(([source, count]) => ({ source, count })).sort((a, b) => b.count - a.count).slice(0, 6);
   const menCount: Record<string, number> = {};
   _pool.forEach((x) => x.symbols.forEach((s) => { menCount[s] = (menCount[s] ?? 0) + 1; }));
   const mentions = Object.entries(menCount).map(([symbol, count]) => ({ symbol, count })).sort((a, b) => b.count - a.count).slice(0, 8);
+
   return { total_24h: _pool.length, social_24h: social, news_24h: news, market_24h: market,
     avg_sentiment: avg, volume_series, sentiment_series, top_sources, mentions, updated_at: new Date().toISOString() };
 }

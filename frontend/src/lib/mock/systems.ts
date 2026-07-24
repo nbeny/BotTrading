@@ -276,17 +276,68 @@ function summary(svc: ServiceNode[], kf: KafkaTopic[], wk: AiWorker[]): SystemsS
   };
 }
 
+// ── stateful drift ────────────────────────────────────────────────────────────
+// Build the world once, then random-walk the numeric fields on each read so
+// values move *coherently* instead of teleporting to fresh randoms every poll.
+function walk(v: number, pct: number, min: number, max: number, int = false): number {
+  const n = Math.max(min, Math.min(max, v + v * rand(-pct, pct)));
+  return int ? Math.round(n) : round(n, 1);
+}
+
+let _snap: SystemsSnapshot | null = null;
+let _dataPoints = 0;
+
+function driftSnapshot(s: SystemsSnapshot): SystemsSnapshot {
+  for (const n of s.services) {
+    n.throughput_per_min = walk(n.throughput_per_min, 0.06, 1, 5000, true);
+    n.latency_ms = walk(n.latency_ms, 0.08, 5, 900, true);
+    n.cpu_pct = walk(n.cpu_pct, 0.08, 2, 99, true);
+    n.mem_mb = walk(n.mem_mb, 0.02, 40, 4096, true);
+    n.spark = [...n.spark.slice(1), walk(n.spark[n.spark.length - 1] ?? n.throughput_per_min, 0.15, 1, 6000)];
+  }
+  for (const t of s.kafka) {
+    if (t.orphaned) continue;
+    t.msg_per_min = walk(t.msg_per_min, 0.08, 0, 2000, true);
+    t.lag = Math.max(0, Math.round(t.lag + rand(-8, 8)));
+    t.bytes_per_min = Math.round(t.msg_per_min * rand(180, 640));
+  }
+  for (const w of s.workers) {
+    w.requests_last_hour = walk(w.requests_last_hour, 0.05, 10, 5000, true);
+    w.cost_usd_today = round(w.cost_usd_today + rand(0, 0.05), 2); // accumulates over the day
+    w.avg_latency_ms = walk(w.avg_latency_ms, 0.06, 200, 4000, true);
+    w.queue_depth = Math.max(0, Math.round(w.queue_depth + rand(-2, 2)));
+    w.tokens_in = w.requests_last_hour * (w.tier === 'triage' ? 820 : 2400);
+    w.tokens_out = w.requests_last_hour * (w.tier === 'triage' ? 190 : 640);
+  }
+  for (const c of s.collectors) {
+    if (!c.enabled) continue;
+    c.items_last_hour = walk(c.items_last_hour, 0.07, 0, 800, true);
+    c.rate_limit_pct = walk(c.rate_limit_pct, 0.05, 2, 99, true);
+    c.last_item_ago_s = Math.max(1, c.last_item_ago_s + Math.round(rand(-4, 6)));
+  }
+  for (const r of s.infra) for (const m of r.metrics) if (m.pct != null) m.pct = walk(m.pct, 0.05, 5, 99);
+  _dataPoints += Math.round(rand(200, 900)); // monotonic day counter
+  s.pipeline = pipeline(s.services);
+  s.summary = { ...summary(s.services, s.kafka, s.workers), data_points_today: _dataPoints };
+  return s;
+}
+
 export function getSystemsSnapshot(): SystemsSnapshot {
-  const svc = services();
-  const kf = kafka();
-  const wk = workers();
-  return {
-    summary: summary(svc, kf, wk),
-    services: svc,
-    pipeline: pipeline(svc),
-    kafka: kf,
-    collectors: collectors(),
-    workers: wk,
-    infra: infra(),
-  };
+  if (!_snap) {
+    const svc = services();
+    const kf = kafka();
+    const wk = workers();
+    _snap = {
+      summary: summary(svc, kf, wk),
+      services: svc,
+      pipeline: pipeline(svc),
+      kafka: kf,
+      collectors: collectors(),
+      workers: wk,
+      infra: infra(),
+    };
+    _dataPoints = _snap.summary.data_points_today;
+    return _snap;
+  }
+  return driftSnapshot(_snap);
 }

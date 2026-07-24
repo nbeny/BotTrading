@@ -20,6 +20,7 @@ import type {
 } from '@/lib/types/domain';
 import type { AnalysisEvent, DecisionEvent, PriceEvent, SentimentEvent } from '@/lib/types/events';
 import { BY_SYMBOL, RISK_MESSAGES, UNIVERSE, pick, rand, reason, round, uid } from './universe';
+import { currentPortfolioValue } from './sim';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -262,24 +263,32 @@ export function placeOrder(input: {
 
 // ── Portfolio ─────────────────────────────────────────────────────────────────
 
+// PnL-24h % lives here as an evolving baseline (a slow random walk) instead of
+// being re-rolled on every read, so the headline number stops teleporting.
+let _pnl24hPct = round(rand(-1.5, 3.5), 2);
+
 export function getPortfolio(): Portfolio {
-  const totalInvested = _positions.reduce((s, p) => s + p.value_usd, 0);
-  const totalPnl = _positions.reduce((s, p) => s + p.unrealized_pnl_usd, 0);
-  const cash = round(rand(8000, 12000), 2);
-  const total = round(totalInvested + cash, 2);
+  // Total value is driven by the server-side simulation's evolving value, so the
+  // ticker, the Capital page and the live PortfolioChangedEvent stream all agree
+  // and move together (random walk, not re-randomized each call).
+  const total = round(currentPortfolioValue(), 2);
+  const totalInvested = round(_positions.reduce((s, p) => s + p.value_usd, 0), 2);
+  const cash = round(Math.max(0, total - totalInvested), 2);
+  const totalPnl = round(_positions.reduce((s, p) => s + p.unrealized_pnl_usd, 0), 2);
   const pnlPct = total > 0 ? round((totalPnl / total) * 100, 2) : 0;
   const realized24h = _trades
     .filter((t) => new Date(t.executed_at) > new Date(Date.now() - 86400_000) && t.pnl_usd)
     .reduce((s, t) => s + (t.pnl_usd ?? 0), 0);
+  _pnl24hPct = round(Math.max(-8, Math.min(9, _pnl24hPct + rand(-0.15, 0.15))), 2);
   return {
     total_value_usd: total,
     cash_usd: cash,
     kraken_balance_usd: round(cash * 0.8, 2),
-    invested_usd: round(totalInvested, 2),
-    unrealized_pnl_usd: round(totalPnl, 2),
+    invested_usd: totalInvested,
+    unrealized_pnl_usd: totalPnl,
     unrealized_pnl_pct: pnlPct,
     realized_pnl_24h_usd: round(realized24h, 2),
-    pnl_24h_pct: round(rand(-1.5, 3.5), 2),
+    pnl_24h_pct: _pnl24hPct,
     updated_at: isoNow(),
   };
 }
@@ -306,16 +315,23 @@ function rangeToMs(range: string): number {
   }
 }
 
+// Cache the generated series per range so a refetch returns the SAME history
+// (instead of a brand-new random walk every 60s). Built backwards from the
+// current portfolio value so the chart's right edge meets the live total.
+const _historyCache = new Map<string, PricePoint[]>();
+
 export function getPortfolioHistory(range = '30d'): PricePoint[] {
+  const cached = _historyCache.get(range);
+  if (cached) return cached;
   const points = rangeToPoints(range);
   const stepMs = rangeToMs(range);
-  const startVal = round(rand(18000, 22000), 2);
   const result: PricePoint[] = [];
-  let v = startVal;
-  for (let i = points; i >= 0; i--) {
-    v = round(v * (1 + rand(-0.018, 0.025)), 2);
-    result.push({ t: isoNow(-i * stepMs), price: v });
+  let v = currentPortfolioValue();
+  for (let i = 0; i <= points; i++) {
+    result.unshift({ t: isoNow(-i * stepMs), price: round(v, 2) });
+    v = v / (1 + rand(-0.018, 0.025));
   }
+  _historyCache.set(range, result);
   return result;
 }
 

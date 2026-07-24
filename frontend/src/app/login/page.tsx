@@ -34,7 +34,7 @@ export default function LoginPage() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (status === 'authenticated') router.replace('/dashboard');
+    if (status === 'authenticated') router.replace('/command');
   }, [status, router]);
 
   const submit = async (e: React.FormEvent) => {
@@ -43,7 +43,7 @@ export default function LoginPage() {
     setBusy(true);
     try {
       await login(email, password);
-      router.replace('/dashboard');
+      router.replace('/command');
     } catch (err) {
       setError(apiErrorMessage(err, 'Identifiants invalides'));
     } finally {

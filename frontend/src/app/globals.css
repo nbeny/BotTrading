@@ -1,4 +1,31 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   CMI Terminal — futuristic design tokens
+   A calm, deep-space dark canvas with electric azure / cyan accents, glass
+   surfaces and subtle atmospheric depth. Green/red keep their PnL semantics.
+   ──────────────────────────────────────────────────────────────────────────── */
+:root {
+  --cmi-bg: #05070d;
+  --cmi-bg-2: #080b14;
+  --cmi-surface: #0d1220;
+  --cmi-surface-2: #111826;
+  --cmi-border: rgba(255, 255, 255, 0.07);
+  --cmi-border-strong: rgba(255, 255, 255, 0.12);
+
+  --cmi-azure: #4d9fff;
+  --cmi-cyan: #22d3ee;
+  --cmi-violet: #a78bfa;
+  --cmi-green: #26d07c;
+  --cmi-red: #ff5370;
+  --cmi-amber: #ffb547;
+
+  --cmi-text: #e8ecf5;
+  --cmi-text-dim: #8b97b0;
+
+  --cmi-glow-azure: 0 0 0 1px rgba(77, 159, 255, 0.35), 0 0 24px rgba(77, 159, 255, 0.25);
+  --cmi-glow-cyan: 0 0 0 1px rgba(34, 211, 238, 0.35), 0 0 24px rgba(34, 211, 238, 0.22);
+}
 
 * {
   box-sizing: border-box;
@@ -9,9 +36,11 @@ body {
   padding: 0;
   margin: 0;
   height: 100%;
-  background: #0b0e14;
-  color: #e6e9ef;
+  background: var(--cmi-bg);
+  color: var(--cmi-text);
+  font-family: 'Manrope', 'Segoe UI', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 a {
@@ -20,44 +49,161 @@ a {
 }
 
 .mono {
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
   font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
 }
 
-@keyframes cmi-flash-up {
+/* ── Atmospheric background layer ─────────────────────────────────────────────
+   Fixed, sits behind everything. Layered radial glows + a faint technical grid
+   + an animated aurora sweep. Pure CSS, GPU-friendly, no JS. */
+.cmi-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background:
+    radial-gradient(1200px 700px at 78% -10%, rgba(77, 159, 255, 0.14), transparent 60%),
+    radial-gradient(1000px 600px at 8% 8%, rgba(34, 211, 238, 0.09), transparent 55%),
+    radial-gradient(900px 900px at 50% 120%, rgba(167, 139, 250, 0.08), transparent 60%),
+    var(--cmi-bg);
+}
+
+.cmi-backdrop::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 46px 46px;
+  mask-image: radial-gradient(circle at 50% 40%, black 0%, transparent 78%);
+  -webkit-mask-image: radial-gradient(circle at 50% 40%, black 0%, transparent 78%);
+}
+
+.cmi-backdrop::after {
+  content: '';
+  position: absolute;
+  top: -30%;
+  left: -10%;
+  width: 120%;
+  height: 80%;
+  background: radial-gradient(ellipse at center, rgba(77, 159, 255, 0.1), transparent 70%);
+  filter: blur(30px);
+  animation: cmi-aurora 22s ease-in-out infinite alternate;
+}
+
+@keyframes cmi-aurora {
   0% {
-    background-color: rgba(38, 208, 124, 0.18);
+    transform: translate3d(-6%, 0, 0) scale(1);
+    opacity: 0.7;
   }
   100% {
-    background-color: transparent;
-  }
-}
-
-@keyframes cmi-flash-down {
-  0% {
-    background-color: rgba(255, 83, 112, 0.18);
-  }
-  100% {
-    background-color: transparent;
-  }
-}
-
-.flash-up {
-  animation: cmi-flash-up 0.6s ease-out;
-}
-.flash-down {
-  animation: cmi-flash-down 0.6s ease-out;
-}
-
-@keyframes cmi-pulse {
-  0%,
-  100% {
+    transform: translate3d(10%, 6%, 0) scale(1.15);
     opacity: 1;
   }
-  50% {
-    opacity: 0.4;
-  }
 }
-.pulse {
-  animation: cmi-pulse 1.6s ease-in-out infinite;
+
+/* Faint grain overlay for texture (kept extremely subtle). */
+.cmi-grain {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.025;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ── Glass card helper (used by bespoke Systems components) ───────────────────*/
+.cmi-glass {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.012));
+  border: 1px solid var(--cmi-border);
+  backdrop-filter: blur(10px);
+}
+
+/* ── Scrollbars ──────────────────────────────────────────────────────────────*/
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-thumb {
+  background: #232c3d;
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #33405a;
+  background-clip: content-box;
+}
+
+/* ── Motion primitives ───────────────────────────────────────────────────────*/
+@keyframes cmi-flash-up {
+  0% { background-color: rgba(38, 208, 124, 0.18); }
+  100% { background-color: transparent; }
+}
+@keyframes cmi-flash-down {
+  0% { background-color: rgba(255, 83, 112, 0.18); }
+  100% { background-color: transparent; }
+}
+.flash-up { animation: cmi-flash-up 0.6s ease-out; }
+.flash-down { animation: cmi-flash-down 0.6s ease-out; }
+
+@keyframes cmi-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.pulse { animation: cmi-pulse 1.6s ease-in-out infinite; }
+
+/* Soft glow "breathing" for live status dots. */
+@keyframes cmi-beacon {
+  0%, 100% { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
+  50% { box-shadow: 0 0 0 5px transparent; opacity: 0.55; }
+}
+.beacon { animation: cmi-beacon 2s ease-in-out infinite; }
+
+/* Staggered page-load reveal. Apply .reveal and set --d for delay. */
+@keyframes cmi-reveal {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.reveal {
+  opacity: 0;
+  animation: cmi-reveal 0.55s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: var(--d, 0ms);
+}
+
+/* Animated dash flow along the pipeline connectors (SVG stroke). */
+@keyframes cmi-dash {
+  to { stroke-dashoffset: -32; }
+}
+.flow-dash {
+  stroke-dasharray: 5 7;
+  animation: cmi-dash 1s linear infinite;
+}
+
+/* Shimmering sweep used on active/loading surfaces. */
+@keyframes cmi-shimmer {
+  100% { transform: translateX(100%); }
+}
+.shimmer {
+  position: relative;
+  overflow: hidden;
+}
+.shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent);
+  animation: cmi-shimmer 2.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal, .pulse, .beacon, .flow-dash, .shimmer::after, .cmi-backdrop::after {
+    animation: none !important;
+  }
+  .reveal { opacity: 1; transform: none; }
 }

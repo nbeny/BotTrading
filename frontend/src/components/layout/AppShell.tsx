@@ -89,12 +89,33 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <Box sx={{ px: 3, py: 2.5 }}>
-        <Typography variant="h6" sx={{ fontWeight: 800, letterSpacing: -0.5 }}>
-          CMI<span style={{ color: '#5b8def' }}>·</span>Terminal
-        </Typography>
-        <Typography variant="caption" color="text.secondary">
-          Crypto Market Intelligence
-        </Typography>
+        <Stack direction="row" spacing={1.25} alignItems="center">
+          <Box
+            sx={{
+              width: 34,
+              height: 34,
+              borderRadius: 2,
+              display: 'grid',
+              placeItems: 'center',
+              background: 'linear-gradient(135deg, #4d9fff, #22d3ee)',
+              boxShadow: '0 0 18px rgba(77,159,255,0.45)',
+              flexShrink: 0,
+            }}
+          >
+            <BoltIcon sx={{ fontSize: 20, color: '#05070d' }} />
+          </Box>
+          <Box>
+            <Typography variant="h6" sx={{ fontWeight: 800, letterSpacing: -0.5, lineHeight: 1.1 }}>
+              CMI<span style={{ color: '#22d3ee' }}>·</span>Terminal
+            </Typography>
+            <Typography
+              variant="caption"
+              sx={{ color: 'text.secondary', letterSpacing: 1, textTransform: 'uppercase', fontSize: 9.5 }}
+            >
+              Crypto Market Intelligence
+            </Typography>
+          </Box>
+        </Stack>
       </Box>
       <Divider />
       <List sx={{ px: 1.5, py: 1, flex: 1 }}>
@@ -149,15 +170,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
+      <Box className="cmi-backdrop" aria-hidden />
+      <Box className="cmi-grain" aria-hidden />
       <AppBar
         position="fixed"
         elevation={0}
         sx={{
           width: { md: `calc(100% - ${DRAWER_WIDTH}px)` },
           ml: { md: `${DRAWER_WIDTH}px` },
-          bgcolor: 'rgba(11,14,20,0.7)',
-          backdropFilter: 'blur(12px)',
-          borderBottom: '1px solid rgba(255,255,255,0.06)',
+          bgcolor: 'rgba(5,7,13,0.55)',
+          backdropFilter: 'blur(16px) saturate(140%)',
+          borderBottom: '1px solid rgba(255,255,255,0.07)',
+          zIndex: (t) => t.zIndex.drawer + 1,
         }}
       >
         <Toolbar sx={{ gap: 2 }}>
@@ -228,7 +252,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             '& .MuiDrawer-paper': {
               width: DRAWER_WIDTH,
               boxSizing: 'border-box',
-              borderRight: '1px solid rgba(255,255,255,0.06)',
+              borderRight: '1px solid rgba(255,255,255,0.07)',
+              bgcolor: 'rgba(8,11,20,0.6)',
+              backdropFilter: 'blur(16px) saturate(140%)',
             },
           }}
         >
@@ -239,7 +265,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <Box
         component="main"
         sx={{
+          position: 'relative',
+          zIndex: 1,
           flexGrow: 1,
+          minWidth: 0,
+          maxWidth: '100%',
+          overflowX: 'hidden',
           width: { md: `calc(100% - ${DRAWER_WIDTH}px)` },
           p: { xs: 2, md: 3 },
           mt: 8,

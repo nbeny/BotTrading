@@ -14,10 +14,8 @@ from cmi_common.events import (
     AnalysisEvent,
     BaseEvent,
     DexEvent,
-    NewsEvent,
     PriceEvent,
     SentimentEvent,
-    SocialEvent,
     VolumeEvent,
 )
 from cmi_common.events.base import Source
@@ -70,7 +68,7 @@ class HaikuWorker:
     def _ready(f: dict) -> bool:
         has_market = any(k in f for k in ("price_change_pct_24h", "liquidity_usd"))
         has_signal = any(
-            k in f for k in ("sentiment_score", "social_growth", "volume_spike_ratio")
+            k in f for k in ("sentiment_score", "has_social", "volume_spike_ratio")
         )
         return has_market and has_signal
 
@@ -93,18 +91,18 @@ class HaikuWorker:
                 "is_new_pool": event.is_new_pool,
             }, Topic.DEX.value
         if isinstance(event, SentimentEvent):
-            return event.symbol, {
+            fields = {
                 "sentiment_score": event.sentiment_score,
                 "sentiment_confidence": event.confidence,
-            }, Topic.SENTIMENT.value
-        if isinstance(event, SocialEvent):
-            return event.symbol, {
-                "social_growth": event.mentions_growth,
-                "mentions": event.mentions,
-            }, Topic.SOCIAL.value
-        if isinstance(event, NewsEvent):
-            sym = event.symbols[0] if event.symbols else None
-            return sym, {"has_news": True, "news_title": event.title}, Topic.NEWS.value
+            }
+            # Since Plan-1, social/news reach haiku only via sentiment; derive
+            # presence flags from input_kind (collectors no longer emit
+            # Social/NewsEvent on Kafka).
+            if event.input_kind == "news":
+                fields["has_news"] = True
+            elif event.input_kind == "social":
+                fields["has_social"] = True
+            return event.symbol, fields, Topic.SENTIMENT.value
         return None, {}, ""
 
     async def _analyze(

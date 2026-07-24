@@ -18,6 +18,8 @@ from cmi_common.sources import (
 )
 
 from .providers.bluesky import BlueskyProvider
+from .providers.fourchan import FourchanProvider
+from .providers.mastodon import MastodonProvider
 from .providers.reddit import RedditProvider
 
 POLL_INTERVAL = float(os.getenv("SOCIAL_POLL_INTERVAL", "300"))
@@ -37,6 +39,13 @@ def _build_providers() -> list[Provider]:
             client_secret=os.getenv("REDDIT_CLIENT_SECRET") or None,
         )
     )
+    providers.append(
+        MastodonProvider(
+            instance=os.getenv("MASTODON_INSTANCE", "mastodon.social"),
+            hashtag=os.getenv("MASTODON_HASHTAG", "crypto"),
+        )
+    )
+    providers.append(FourchanProvider())
     return providers
 
 

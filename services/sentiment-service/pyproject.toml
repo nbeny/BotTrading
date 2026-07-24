@@ -9,6 +9,8 @@ description = "Hybrid sentiment service (HuggingFace L1) — publishes market.se
 requires-python = ">=3.12"
 dependencies = [
     "cmi-common",
+    "sqlalchemy>=2.0",
+    "asyncpg>=0.29",
     # Heavy ML deps are optional at runtime; install with the 'ml' extra.
 ]
 

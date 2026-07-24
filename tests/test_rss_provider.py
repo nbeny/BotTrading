@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import sys
 from pathlib import Path
@@ -87,3 +88,53 @@ async def test_seen_guids_are_not_republished() -> None:
 
     assert len(first) == 2
     assert second == []  # already-seen guids skipped on the second poll
+
+
+_FEED_BAD_LINK = """<?xml version="1.0"?>
+<rss version="2.0"><channel>
+<title>CoinDesk</title>
+<item>
+  <title>Bad link item</title>
+  <link>/relative/path</link>
+  <guid>bad1</guid>
+  <description>malformed url</description>
+  <pubDate>Wed, 02 Oct 2024 12:00:00 GMT</pubDate>
+</item>
+<item>
+  <title>Ether news</title>
+  <link>https://coindesk.com/a2</link>
+  <guid>a2</guid>
+  <description>ETH update</description>
+  <pubDate>Wed, 02 Oct 2024 13:00:00 GMT</pubDate>
+</item>
+</channel></rss>"""
+
+
+@respx.mock
+async def test_malformed_link_item_is_skipped_not_fatal() -> None:
+    respx.get("https://coindesk.com/feed").mock(
+        return_value=httpx.Response(200, text=_FEED_BAD_LINK)
+    )
+    provider = rss.RSSProvider(
+        FakeCache(), feeds=["https://coindesk.com/feed"], source_name="CoinDesk"
+    )
+
+    events = await provider.fetch()  # must NOT raise on the bad item
+    await provider.close()
+
+    # the bad item is skipped; only the valid one is published
+    assert [e.article_id for e in events] == ["a2"]
+
+
+@respx.mock
+async def test_seen_key_is_stable_hash() -> None:
+    feed = "https://coindesk.com/feed"
+    respx.get(feed).mock(return_value=httpx.Response(200, text=_FEED))
+    cache = FakeCache()
+    provider = rss.RSSProvider(cache, feeds=[feed], source_name="CoinDesk")
+
+    await provider.fetch()
+    await provider.close()
+
+    expected = f"rss:seen:{hashlib.sha1(feed.encode()).hexdigest()[:16]}"
+    assert expected in cache.stored

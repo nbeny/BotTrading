@@ -11,7 +11,6 @@ import {
 } from 'react';
 import { WS_URL, USE_MOCK, ACCESS_TOKEN_KEY } from '@/lib/config';
 import type { CmiEvent, WsMessage } from '@/lib/types/events';
-import { MockEventSource } from './mockStream';
 
 export type ConnStatus = 'connecting' | 'open' | 'closed';
 type Listener = (msg: WsMessage) => void;
@@ -62,19 +61,36 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let disposed = false;
     let ws: WebSocket | null = null;
-    let mock: MockEventSource | null = null;
     let retry = 0;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
     if (USE_MOCK) {
+      // Consume the server-side simulation: an incremental poll of
+      // /api/mock/stream/recent. `since=0` on first load returns backfilled
+      // history, so the feed is populated instantly and survives refreshes.
       setStatus('open');
-      mock = new MockEventSource((event: CmiEvent, topic: string) => {
-        dispatch({ topic, event, ts: new Date().toISOString() });
-      });
-      mock.start();
+      let cursor = 0;
+      const poll = async () => {
+        if (disposed) return;
+        try {
+          const r = await fetch(`/api/mock/stream/recent?since=${cursor}&limit=150`);
+          const data = (await r.json()) as {
+            cursor: number;
+            events: { topic: string; event: CmiEvent; ts: string }[];
+          };
+          cursor = data.cursor ?? cursor;
+          // dispatch oldest→newest so the feed ends up newest-first
+          for (const m of data.events) dispatch({ topic: m.topic, event: m.event, ts: m.ts });
+          setStatus('open');
+        } catch {
+          setStatus('connecting');
+        }
+        if (!disposed) timer = setTimeout(poll, 1300);
+      };
+      poll();
       return () => {
         disposed = true;
-        mock?.stop();
+        if (timer) clearTimeout(timer);
       };
     }
 

@@ -28,6 +28,14 @@ const nextConfig = {
       },
     ];
   },
+  async redirects() {
+    return [
+      { source: '/', destination: '/command', permanent: false },
+      { source: '/dashboard', destination: '/command', permanent: false },
+      { source: '/portfolio', destination: '/capital', permanent: false },
+      { source: '/risk', destination: '/capital', permanent: false },
+    ];
+  },
 };
 
 export default nextConfig;

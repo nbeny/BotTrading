@@ -2,7 +2,7 @@
 
 Ports the legacy collector-reddit aggregation into a cascade Provider: it
 polls /new for each subreddit, aggregates ``$CASHTAG`` mentions/engagement, and
-raises ``RateLimited`` when the shared per-minute quota is spent (proactive
+raises ``RateLimitedError`` when the shared per-minute quota is spent (proactive
 guard) or Reddit returns 429 (reactive). Non-commercial free tier — kept as a
 fallback behind Bluesky.
 """
@@ -19,7 +19,7 @@ from cmi_common.cache import Cache
 from cmi_common.events.base import Source
 from cmi_common.events.social import SocialEvent
 from cmi_common.observability import UPSTREAM_REQUESTS
-from cmi_common.sources import RateLimited
+from cmi_common.sources import RateLimitedError
 
 SERVICE = "collector-social"
 _CASHTAG = re.compile(r"\$([A-Za-z]{2,6})\b")
@@ -72,7 +72,7 @@ class RedditProvider:
 
     async def _fetch_new(self, subreddit: str) -> list[dict[str, Any]]:
         if not await self._cache.allow("reddit", self._rate_limit, 60):
-            raise RateLimited(60.0)
+            raise RateLimitedError(60.0)
         if self._token:
             url = f"https://oauth.reddit.com/r/{subreddit}/new"
             headers = {"Authorization": f"bearer {self._token}"}
@@ -85,7 +85,7 @@ class RedditProvider:
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 429:
                 UPSTREAM_REQUESTS.labels(SERVICE, "reddit", "ratelimit").inc()
-                raise RateLimited() from exc
+                raise RateLimitedError() from exc
             raise
         UPSTREAM_REQUESTS.labels(SERVICE, "reddit", "ok").inc()
         return [c["data"] for c in resp.json().get("data", {}).get("children", [])]
@@ -103,7 +103,7 @@ class RedditProvider:
             }
         )
         for sub in self._subreddits:
-            posts = await self._fetch_new(sub)  # RateLimited propagates to cascade
+            posts = await self._fetch_new(sub)  # RateLimitedError propagates to cascade
             for post in posts:
                 title = post.get("title", "")
                 body = post.get("selftext", "")

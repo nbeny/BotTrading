@@ -4,7 +4,7 @@
 
 **Goal:** Feed `sentiment-service` continuously all month within free API tiers by polling an ordered cascade of providers per channel, automatically failing over to an unlimited floor source when a metered source hits its quota, and returning to the primary when the quota window resets.
 
-**Architecture:** A new `cmi_common/sources/` module provides a `Provider` protocol, a Redis-backed `CircuitBreaker` (TTL-based auto half-open), and a `SourceCascade` that polls providers in priority order, publishing events from the first healthy one and tripping breakers on `RateLimited`/errors. Two new orchestrator services — `collector-social` (Bluesky primary → Reddit fallback) and `collector-news` (CryptoCompare-news primary → RSS floor) — wire providers into a cascade behind the existing `run_periodic` poller. The paid `collector-twitter` service is retired. Downstream is unchanged: cascades still emit `SocialEvent`/`NewsEvent` on `Topic.SOCIAL`/`Topic.NEWS`.
+**Architecture:** A new `cmi_common/sources/` module provides a `Provider` protocol, a Redis-backed `CircuitBreaker` (TTL-based auto half-open), and a `SourceCascade` that polls providers in priority order, publishing events from the first healthy one and tripping breakers on `RateLimitedError`/errors. Two new orchestrator services — `collector-social` (Bluesky primary → Reddit fallback) and `collector-news` (CryptoCompare-news primary → RSS floor) — wire providers into a cascade behind the existing `run_periodic` poller. The paid `collector-twitter` service is retired. Downstream is unchanged: cascades still emit `SocialEvent`/`NewsEvent` on `Topic.SOCIAL`/`Topic.NEWS`.
 
 **Tech Stack:** Python 3.12, FastAPI, httpx, respx (tests), Redis (`Cache`), aiokafka (`EventProducer`), Pydantic v2 events, Docker Compose.
 
@@ -18,7 +18,7 @@
 ## File Structure
 
 **New shared code (`libs/cmi_common/cmi_common/`):**
-- `sources/__init__.py` — exports `Provider`, `RateLimited`, `CircuitBreaker`, `SourceCascade`
+- `sources/__init__.py` — exports `Provider`, `RateLimitedError`, `CircuitBreaker`, `SourceCascade`
 - `sources/cascade.py` — the cascade core (all four symbols above)
 - `events/base.py` — MODIFY: add `Source.BLUESKY`, `Source.RSS`
 
@@ -165,7 +165,7 @@ async def test_trip_without_retry_after_uses_default() -> None:
 Run: `pytest tests/test_circuit_breaker.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'cmi_common.sources'`
 
-- [ ] **Step 3: Create the module with `RateLimited`, `Provider`, `CircuitBreaker`**
+- [ ] **Step 3: Create the module with `RateLimitedError`, `Provider`, `CircuitBreaker`**
 
 Create `libs/cmi_common/cmi_common/sources/cascade.py`:
 
@@ -174,7 +174,7 @@ Create `libs/cmi_common/cmi_common/sources/cascade.py`:
 
 A ``SourceCascade`` polls an ordered list of ``Provider`` objects (primary
 first, unlimited floor last) and publishes events from the first healthy one.
-When a provider signals ``RateLimited`` (proactive quota guard) or raises, its
+When a provider signals ``RateLimitedError`` (proactive quota guard) or raises, its
 ``CircuitBreaker`` is tripped and the cascade falls through to the next
 provider, so the pipeline never goes dry. Breakers auto half-open when their
 Redis TTL expires, letting the primary resume once its quota window resets.
@@ -194,7 +194,7 @@ from ..observability import EVENTS_PRODUCED
 logger = logging.getLogger(__name__)
 
 
-class RateLimited(Exception):
+class RateLimitedError(Exception):
     """Raised by a provider that has exhausted its quota for now.
 
     ``retry_after`` (seconds) hints how long to keep the breaker open; ``None``
@@ -246,12 +246,12 @@ Create `libs/cmi_common/cmi_common/sources/__init__.py`:
 
 from __future__ import annotations
 
-from .cascade import CircuitBreaker, Provider, RateLimited, SourceCascade
+from .cascade import CircuitBreaker, Provider, RateLimitedError, SourceCascade
 
-__all__ = ["CircuitBreaker", "Provider", "RateLimited", "SourceCascade"]
+__all__ = ["CircuitBreaker", "Provider", "RateLimitedError", "SourceCascade"]
 ```
 
-> Note: `SourceCascade` is added in Task 3; importing it here now will fail until then. Add the `SourceCascade` import line but expect Task 2's test to pass because the test only imports `CircuitBreaker`. To keep Task 2 green in isolation, temporarily set `__all__ = ["CircuitBreaker", "Provider", "RateLimited"]` and import only those; Task 3 restores the full list.
+> Note: `SourceCascade` is added in Task 3; importing it here now will fail until then. Add the `SourceCascade` import line but expect Task 2's test to pass because the test only imports `CircuitBreaker`. To keep Task 2 green in isolation, temporarily set `__all__ = ["CircuitBreaker", "Provider", "RateLimitedError"]` and import only those; Task 3 restores the full list.
 
 Use this Task-2 version of `__init__.py`:
 
@@ -260,9 +260,9 @@ Use this Task-2 version of `__init__.py`:
 
 from __future__ import annotations
 
-from .cascade import CircuitBreaker, Provider, RateLimited
+from .cascade import CircuitBreaker, Provider, RateLimitedError
 
-__all__ = ["CircuitBreaker", "Provider", "RateLimited"]
+__all__ = ["CircuitBreaker", "Provider", "RateLimitedError"]
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -274,7 +274,7 @@ Expected: PASS (3 tests)
 
 ```bash
 git add libs/cmi_common/cmi_common/sources tests/test_circuit_breaker.py
-git commit -m "feat(cmi_common): add RateLimited + CircuitBreaker cascade primitives"
+git commit -m "feat(cmi_common): add RateLimitedError + CircuitBreaker cascade primitives"
 ```
 
 ---
@@ -291,14 +291,14 @@ git commit -m "feat(cmi_common): add RateLimited + CircuitBreaker cascade primit
 Create `tests/test_source_cascade.py`:
 
 ```python
-"""SourceCascade: primary drains first; failover on RateLimited/error."""
+"""SourceCascade: primary drains first; failover on RateLimitedError/error."""
 
 from __future__ import annotations
 
 from cmi_common.events.base import Source
 from cmi_common.events.social import SocialEvent
 from cmi_common.kafka import Topic
-from cmi_common.sources import CircuitBreaker, RateLimited, SourceCascade
+from cmi_common.sources import CircuitBreaker, RateLimitedError, SourceCascade
 
 
 class FakeRedis:
@@ -367,7 +367,7 @@ async def test_primary_serves_and_fallback_untouched() -> None:
 
 
 async def test_rate_limited_primary_trips_and_falls_through() -> None:
-    primary = StubProvider("bluesky", raises=RateLimited(30.0))
+    primary = StubProvider("bluesky", raises=RateLimitedError(30.0))
     fallback = StubProvider("reddit", events=[_event("ETH")])
     producer = FakeProducer()
     breaker = CircuitBreaker(FakeCache())
@@ -402,7 +402,7 @@ async def test_open_breaker_skips_provider_without_calling() -> None:
 
 
 async def test_all_exhausted_returns_zero() -> None:
-    primary = StubProvider("bluesky", raises=RateLimited())
+    primary = StubProvider("bluesky", raises=RateLimitedError())
     fallback = StubProvider("reddit", raises=RuntimeError("boom"))
     producer = FakeProducer()
     cascade = SourceCascade(
@@ -431,7 +431,7 @@ class SourceCascade:
 
     Primary first, unlimited floor last. Each tick skips providers whose
     breaker is open, tries the rest in order, and publishes the events from
-    the first provider that returns without raising. ``RateLimited`` trips the
+    the first provider that returns without raising. ``RateLimitedError`` trips the
     breaker for its ``retry_after``; any other exception trips it for
     ``error_cooldown``. Both fall through to the next provider.
     """
@@ -464,7 +464,7 @@ class SourceCascade:
                 continue
             try:
                 events = await provider.fetch()
-            except RateLimited as exc:
+            except RateLimitedError as exc:
                 await self._breaker.trip(provider.name, exc.retry_after)
                 logger.info("provider %s rate-limited; failing over", provider.name)
                 continue
@@ -494,9 +494,9 @@ Replace `libs/cmi_common/cmi_common/sources/__init__.py` contents with:
 
 from __future__ import annotations
 
-from .cascade import CircuitBreaker, Provider, RateLimited, SourceCascade
+from .cascade import CircuitBreaker, Provider, RateLimitedError, SourceCascade
 
-__all__ = ["CircuitBreaker", "Provider", "RateLimited", "SourceCascade"]
+__all__ = ["CircuitBreaker", "Provider", "RateLimitedError", "SourceCascade"]
 ```
 
 - [ ] **Step 5: Run test to verify it passes**
@@ -550,7 +550,7 @@ assert _spec.loader
 sys.modules[_spec.name] = bsky
 _spec.loader.exec_module(bsky)
 
-from cmi_common.sources import RateLimited  # noqa: E402
+from cmi_common.sources import RateLimitedError  # noqa: E402
 
 
 class FakeCache:
@@ -609,7 +609,7 @@ async def test_429_raises_rate_limited() -> None:
     respx.get(bsky.SEARCH_URL).mock(return_value=httpx.Response(429))
     provider = bsky.BlueskyProvider(FakeCache())
 
-    with pytest.raises(RateLimited):
+    with pytest.raises(RateLimitedError):
         await provider.fetch()
     await provider.close()
 ```
@@ -645,7 +645,7 @@ from cmi_common.cache import Cache
 from cmi_common.events.base import Source
 from cmi_common.events.social import SocialEvent
 from cmi_common.observability import UPSTREAM_REQUESTS
-from cmi_common.sources import RateLimited
+from cmi_common.sources import RateLimitedError
 
 SERVICE = "collector-social"
 SEARCH_URL = "https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts"
@@ -685,7 +685,7 @@ class BlueskyProvider:
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 429:
                 UPSTREAM_REQUESTS.labels(SERVICE, "bluesky", "ratelimit").inc()
-                raise RateLimited() from exc
+                raise RateLimitedError() from exc
             raise
         UPSTREAM_REQUESTS.labels(SERVICE, "bluesky", "ok").inc()
         posts = resp.json().get("posts", [])
@@ -755,7 +755,7 @@ git commit -m "feat(collector-social): add BlueskyProvider (unlimited social pri
 Create `tests/test_reddit_provider.py`:
 
 ```python
-"""RedditProvider: /new -> SocialEvent; quota exhaustion raises RateLimited."""
+"""RedditProvider: /new -> SocialEvent; quota exhaustion raises RateLimitedError."""
 
 from __future__ import annotations
 
@@ -777,7 +777,7 @@ assert _spec.loader
 sys.modules[_spec.name] = rd
 _spec.loader.exec_module(rd)
 
-from cmi_common.sources import RateLimited  # noqa: E402
+from cmi_common.sources import RateLimitedError  # noqa: E402
 
 
 class FakeCache:
@@ -835,7 +835,7 @@ async def test_aggregates_cashtags_from_new() -> None:
 async def test_quota_exhausted_raises_rate_limited() -> None:
     provider = rd.RedditProvider(FakeCache(allow=False), subreddits=["CryptoCurrency"])
 
-    with pytest.raises(RateLimited):
+    with pytest.raises(RateLimitedError):
         await provider.fetch()
     await provider.close()
 ```
@@ -854,7 +854,7 @@ Create `services/collector-social/app/providers/reddit.py`:
 
 Ports the legacy collector-reddit aggregation into a cascade Provider: it
 polls /new for each subreddit, aggregates ``$CASHTAG`` mentions/engagement, and
-raises ``RateLimited`` when the shared per-minute quota is spent (proactive
+raises ``RateLimitedError`` when the shared per-minute quota is spent (proactive
 guard) or Reddit returns 429 (reactive). Non-commercial free tier — kept as a
 fallback behind Bluesky.
 """
@@ -871,7 +871,7 @@ from cmi_common.cache import Cache
 from cmi_common.events.base import Source
 from cmi_common.events.social import SocialEvent
 from cmi_common.observability import UPSTREAM_REQUESTS
-from cmi_common.sources import RateLimited
+from cmi_common.sources import RateLimitedError
 
 SERVICE = "collector-social"
 _CASHTAG = re.compile(r"\$([A-Za-z]{2,6})\b")
@@ -924,7 +924,7 @@ class RedditProvider:
 
     async def _fetch_new(self, subreddit: str) -> list[dict[str, Any]]:
         if not await self._cache.allow("reddit", self._rate_limit, 60):
-            raise RateLimited(60.0)
+            raise RateLimitedError(60.0)
         if self._token:
             url = f"https://oauth.reddit.com/r/{subreddit}/new"
             headers = {"Authorization": f"bearer {self._token}"}
@@ -937,7 +937,7 @@ class RedditProvider:
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 429:
                 UPSTREAM_REQUESTS.labels(SERVICE, "reddit", "ratelimit").inc()
-                raise RateLimited() from exc
+                raise RateLimitedError() from exc
             raise
         UPSTREAM_REQUESTS.labels(SERVICE, "reddit", "ok").inc()
         return [c["data"] for c in resp.json().get("data", {}).get("children", [])]
@@ -955,7 +955,7 @@ class RedditProvider:
             }
         )
         for sub in self._subreddits:
-            posts = await self._fetch_new(sub)  # RateLimited propagates to cascade
+            posts = await self._fetch_new(sub)  # RateLimitedError propagates to cascade
             for post in posts:
                 title = post.get("title", "")
                 body = post.get("selftext", "")
@@ -1131,7 +1131,7 @@ git commit -m "feat(collector-social): wire Bluesky->Reddit cascade poller"
 Create `tests/test_cryptocompare_news_provider.py`:
 
 ```python
-"""CryptoCompareNewsProvider: /data/v2/news -> NewsEvent; quota -> RateLimited."""
+"""CryptoCompareNewsProvider: /data/v2/news -> NewsEvent; quota -> RateLimitedError."""
 
 from __future__ import annotations
 
@@ -1153,7 +1153,7 @@ assert _spec.loader
 sys.modules[_spec.name] = cc
 _spec.loader.exec_module(cc)
 
-from cmi_common.sources import RateLimited  # noqa: E402
+from cmi_common.sources import RateLimitedError  # noqa: E402
 
 
 class FakeCache:
@@ -1207,7 +1207,7 @@ async def test_quota_exhausted_raises_rate_limited() -> None:
         "https://min-api.cryptocompare.com", None, FakeCache(allow=False)
     )
 
-    with pytest.raises(RateLimited):
+    with pytest.raises(RateLimitedError):
         await provider.fetch()
     await provider.close()
 ```
@@ -1228,7 +1228,7 @@ Create `services/collector-news/app/providers/cryptocompare.py`:
 
 Ports the legacy collector into a cascade Provider: incremental polling via a
 Redis cursor, and a proactive per-minute quota guard (``cache.allow``) that
-raises ``RateLimited`` so the cascade fails over to RSS once the free monthly
+raises ``RateLimitedError`` so the cascade fails over to RSS once the free monthly
 budget's per-minute allotment is spent.
 """
 
@@ -1242,7 +1242,7 @@ from cmi_common.cache import Cache
 from cmi_common.events.base import Source
 from cmi_common.events.news import NewsEvent
 from cmi_common.observability import UPSTREAM_REQUESTS
-from cmi_common.sources import RateLimited
+from cmi_common.sources import RateLimitedError
 
 SERVICE = "collector-news"
 CURSOR_KEY = "cryptocompare:last_id"
@@ -1272,7 +1272,7 @@ class CryptoCompareNewsProvider:
     async def _fetch_raw(self) -> list[dict[str, Any]]:
         # ~2 calls/min => ~86k/month, under the 100k free-tier cap.
         if not await self._cache.allow("cryptocompare-news", self._rate_limit, 60):
-            raise RateLimited(60.0)
+            raise RateLimitedError(60.0)
         try:
             resp = await self._client.get(
                 "/data/v2/news/", params={"lang": "EN", "sortOrder": "latest"}
@@ -1281,7 +1281,7 @@ class CryptoCompareNewsProvider:
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 429:
                 UPSTREAM_REQUESTS.labels(SERVICE, "cryptocompare", "ratelimit").inc()
-                raise RateLimited() from exc
+                raise RateLimitedError() from exc
             raise
         UPSTREAM_REQUESTS.labels(SERVICE, "cryptocompare", "ok").inc()
         return resp.json().get("Data", [])
@@ -1803,7 +1803,7 @@ metadata:
 (twitter retired — X API is paid). Each wires an ordered `SourceCascade`
 (`libs/cmi_common/cmi_common/sources/cascade.py`) of `Provider`s: primary
 metered source first, unlimited floor last. A Redis `CircuitBreaker` trips a
-provider on `RateLimited`/error (TTL-based auto half-open) and the cascade
+provider on `RateLimitedError`/error (TTL-based auto half-open) and the cascade
 fails over to the next, so the sentiment feed never goes dry on free tiers.
 
 - Social: Bluesky (unlimited, keyless, no commercial restriction) → Reddit
@@ -1845,8 +1845,8 @@ git commit -m "docs: document resilient sentiment source cascade"
 - "Run continuously all month, always have data" → unlimited floor providers Bluesky (Task 4) and RSS (Task 8) guarantee no dry spell; metered primaries drained first.
 - "Replace paid APIs / find solutions" → X (paid) retired (Task 10); Bluesky + RSS added; Reddit kept as fallback; CryptoCompare kept via news.
 
-**Placeholder scan:** No TODO/TBD; every code + test step contains full content. HTTP error handling is explicit (429 → `RateLimited`, other status re-raised, feed parse errors skipped).
+**Placeholder scan:** No TODO/TBD; every code + test step contains full content. HTTP error handling is explicit (429 → `RateLimitedError`, other status re-raised, feed parse errors skipped).
 
-**Type consistency:** `Provider.name`/`fetch`/`close` used consistently across all four providers and `SourceCascade`. `RateLimited(retry_after)` raised by providers, consumed by cascade → `breaker.trip(name, retry_after)`. `SocialEvent`/`NewsEvent` constructor kwargs match the schemas in `events/social.py` and `events/news.py` (note `NewsEvent.url` is a required `HttpUrl` — RSS/CryptoCompare both pass a real link). `Cache.allow(key, limit, window_seconds)` and `Cache.client.set(key, val, ex=)`/`exists` match `cache/redis.py`.
+**Type consistency:** `Provider.name`/`fetch`/`close` used consistently across all four providers and `SourceCascade`. `RateLimitedError(retry_after)` raised by providers, consumed by cascade → `breaker.trip(name, retry_after)`. `SocialEvent`/`NewsEvent` constructor kwargs match the schemas in `events/social.py` and `events/news.py` (note `NewsEvent.url` is a required `HttpUrl` — RSS/CryptoCompare both pass a real link). `Cache.allow(key, limit, window_seconds)` and `Cache.client.set(key, val, ex=)`/`exists` match `cache/redis.py`.
 
 **Note for executor:** services aren't importable packages, so provider tests load modules via `importlib.util` (matching the existing `tests/test_twitter_collector.py` pattern). `cmi_common` IS importable, so cascade/breaker tests import it directly.

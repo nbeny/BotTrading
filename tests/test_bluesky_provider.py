@@ -20,7 +20,7 @@ assert _spec.loader
 sys.modules[_spec.name] = bsky
 _spec.loader.exec_module(bsky)
 
-from cmi_common.sources import RateLimited  # noqa: E402
+from cmi_common.sources import RateLimitedError  # noqa: E402
 
 
 class FakeCache:
@@ -79,6 +79,6 @@ async def test_429_raises_rate_limited() -> None:
     respx.get(bsky.SEARCH_URL).mock(return_value=httpx.Response(429))
     provider = bsky.BlueskyProvider(FakeCache())
 
-    with pytest.raises(RateLimited):
+    with pytest.raises(RateLimitedError):
         await provider.fetch()
     await provider.close()

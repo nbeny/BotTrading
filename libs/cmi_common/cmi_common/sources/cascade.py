@@ -2,7 +2,7 @@
 
 A ``SourceCascade`` polls an ordered list of ``Provider`` objects (primary
 first, unlimited floor last) and publishes events from the first healthy one.
-When a provider signals ``RateLimited`` (proactive quota guard) or raises, its
+When a provider signals ``RateLimitedError`` (proactive quota guard) or raises, its
 ``CircuitBreaker`` is tripped and the cascade falls through to the next
 provider, so the pipeline never goes dry. Breakers auto half-open when their
 Redis TTL expires, letting the primary resume once its quota window resets.
@@ -22,7 +22,7 @@ from ..observability import EVENTS_PRODUCED
 logger = logging.getLogger(__name__)
 
 
-class RateLimited(Exception):
+class RateLimitedError(Exception):
     """Raised by a provider that has exhausted its quota for now.
 
     ``retry_after`` (seconds) hints how long to keep the breaker open; ``None``
@@ -40,11 +40,9 @@ class Provider(Protocol):
 
     name: str
 
-    async def fetch(self) -> list[BaseEvent]:
-        ...
+    async def fetch(self) -> list[BaseEvent]: ...
 
-    async def close(self) -> None:
-        ...
+    async def close(self) -> None: ...
 
 
 class CircuitBreaker:
@@ -72,7 +70,7 @@ class SourceCascade:
 
     Primary first, unlimited floor last. Each tick skips providers whose
     breaker is open, tries the rest in order, and publishes the events from
-    the first provider that returns without raising. ``RateLimited`` trips the
+    the first provider that returns without raising. ``RateLimitedError`` trips the
     breaker for its ``retry_after``; any other exception trips it for
     ``error_cooldown``. Both fall through to the next provider.
     """
@@ -105,11 +103,11 @@ class SourceCascade:
                 continue
             try:
                 events = await provider.fetch()
-            except RateLimited as exc:
+            except RateLimitedError as exc:
                 await self._breaker.trip(provider.name, exc.retry_after)
                 logger.info("provider %s rate-limited; failing over", provider.name)
                 continue
-            except Exception:  # noqa: BLE001 - any provider failure fails over
+            except Exception:  # any provider failure fails over
                 await self._breaker.trip(provider.name, self._error_cooldown)
                 logger.warning(
                     "provider %s errored; failing over", provider.name, exc_info=True

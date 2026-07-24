@@ -1,4 +1,4 @@
-"""CryptoCompareNewsProvider: /data/v2/news -> NewsEvent; quota -> RateLimited."""
+"""CryptoCompareNewsProvider: /data/v2/news -> NewsEvent; quota -> RateLimitedError."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ assert _spec.loader
 sys.modules[_spec.name] = cc
 _spec.loader.exec_module(cc)
 
-from cmi_common.sources import RateLimited  # noqa: E402
+from cmi_common.sources import RateLimitedError  # noqa: E402
 
 
 class FakeCache:
@@ -74,6 +74,6 @@ async def test_quota_exhausted_raises_rate_limited() -> None:
         "https://min-api.cryptocompare.com", None, FakeCache(allow=False)
     )
 
-    with pytest.raises(RateLimited):
+    with pytest.raises(RateLimitedError):
         await provider.fetch()
     await provider.close()

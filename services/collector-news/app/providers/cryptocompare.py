@@ -2,7 +2,7 @@
 
 Ports the legacy collector into a cascade Provider: incremental polling via a
 Redis cursor, and a proactive per-minute quota guard (``cache.allow``) that
-raises ``RateLimited`` so the cascade fails over to RSS once the free monthly
+raises ``RateLimitedError`` so the cascade fails over to RSS once the free monthly
 budget's per-minute allotment is spent.
 """
 
@@ -16,7 +16,7 @@ from cmi_common.cache import Cache
 from cmi_common.events.base import Source
 from cmi_common.events.news import NewsEvent
 from cmi_common.observability import UPSTREAM_REQUESTS
-from cmi_common.sources import RateLimited
+from cmi_common.sources import RateLimitedError
 
 SERVICE = "collector-news"
 CURSOR_KEY = "cryptocompare:last_id"
@@ -46,7 +46,7 @@ class CryptoCompareNewsProvider:
     async def _fetch_raw(self) -> list[dict[str, Any]]:
         # ~2 calls/min => ~86k/month, under the 100k free-tier cap.
         if not await self._cache.allow("cryptocompare-news", self._rate_limit, 60):
-            raise RateLimited(60.0)
+            raise RateLimitedError(60.0)
         try:
             resp = await self._client.get(
                 "/data/v2/news/", params={"lang": "EN", "sortOrder": "latest"}
@@ -55,7 +55,7 @@ class CryptoCompareNewsProvider:
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 429:
                 UPSTREAM_REQUESTS.labels(SERVICE, "cryptocompare", "ratelimit").inc()
-                raise RateLimited() from exc
+                raise RateLimitedError() from exc
             raise
         UPSTREAM_REQUESTS.labels(SERVICE, "cryptocompare", "ok").inc()
         return resp.json().get("Data", [])

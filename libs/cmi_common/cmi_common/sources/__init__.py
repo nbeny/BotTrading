@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from .cascade import CircuitBreaker, Provider, RateLimited, SourceCascade
+from .cascade import CircuitBreaker, Provider, RateLimitedError, SourceCascade
 
-__all__ = ["CircuitBreaker", "Provider", "RateLimited", "SourceCascade"]
+__all__ = ["CircuitBreaker", "Provider", "RateLimitedError", "SourceCascade"]

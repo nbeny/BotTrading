@@ -1,11 +1,11 @@
-"""SourceCascade: primary drains first; failover on RateLimited/error."""
+"""SourceCascade: primary drains first; failover on RateLimitedError/error."""
 
 from __future__ import annotations
 
 from cmi_common.events.base import Source
 from cmi_common.events.social import SocialEvent
 from cmi_common.kafka import Topic
-from cmi_common.sources import CircuitBreaker, RateLimited, SourceCascade
+from cmi_common.sources import CircuitBreaker, RateLimitedError, SourceCascade
 
 
 class FakeRedis:
@@ -74,7 +74,7 @@ async def test_primary_serves_and_fallback_untouched() -> None:
 
 
 async def test_rate_limited_primary_trips_and_falls_through() -> None:
-    primary = StubProvider("bluesky", raises=RateLimited(30.0))
+    primary = StubProvider("bluesky", raises=RateLimitedError(30.0))
     fallback = StubProvider("reddit", events=[_event("ETH")])
     producer = FakeProducer()
     breaker = CircuitBreaker(FakeCache())
@@ -109,7 +109,7 @@ async def test_open_breaker_skips_provider_without_calling() -> None:
 
 
 async def test_all_exhausted_returns_zero() -> None:
-    primary = StubProvider("bluesky", raises=RateLimited())
+    primary = StubProvider("bluesky", raises=RateLimitedError())
     fallback = StubProvider("reddit", raises=RuntimeError("boom"))
     producer = FakeProducer()
     cascade = SourceCascade(

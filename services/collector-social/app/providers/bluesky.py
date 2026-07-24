@@ -17,7 +17,7 @@ from cmi_common.cache import Cache
 from cmi_common.events.base import Source
 from cmi_common.events.social import SocialEvent
 from cmi_common.observability import UPSTREAM_REQUESTS
-from cmi_common.sources import RateLimited
+from cmi_common.sources import RateLimitedError
 
 SERVICE = "collector-social"
 SEARCH_URL = "https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts"
@@ -57,7 +57,7 @@ class BlueskyProvider:
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 429:
                 UPSTREAM_REQUESTS.labels(SERVICE, "bluesky", "ratelimit").inc()
-                raise RateLimited() from exc
+                raise RateLimitedError() from exc
             raise
         UPSTREAM_REQUESTS.labels(SERVICE, "bluesky", "ok").inc()
         posts = resp.json().get("posts", [])

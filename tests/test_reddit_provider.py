@@ -1,4 +1,4 @@
-"""RedditProvider: /new -> SocialEvent; quota exhaustion raises RateLimited."""
+"""RedditProvider: /new -> SocialEvent; quota exhaustion raises RateLimitedError."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ assert _spec.loader
 sys.modules[_spec.name] = rd
 _spec.loader.exec_module(rd)
 
-from cmi_common.sources import RateLimited  # noqa: E402
+from cmi_common.sources import RateLimitedError  # noqa: E402
 
 
 class FakeCache:
@@ -78,6 +78,6 @@ async def test_aggregates_cashtags_from_new() -> None:
 async def test_quota_exhausted_raises_rate_limited() -> None:
     provider = rd.RedditProvider(FakeCache(allow=False), subreddits=["CryptoCurrency"])
 
-    with pytest.raises(RateLimited):
+    with pytest.raises(RateLimitedError):
         await provider.fetch()
     await provider.close()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from datetime import datetime
 from email.utils import parsedate_to_datetime
 from xml.etree import ElementTree
 
@@ -85,7 +86,7 @@ def _text(node: ElementTree.Element, tag: str) -> str | None:
     return el.text.strip() if el is not None and el.text else None
 
 
-def _dt(pubdate: str | None):
+def _dt(pubdate: str | None) -> datetime | None:
     if not pubdate:
         return None
     try:

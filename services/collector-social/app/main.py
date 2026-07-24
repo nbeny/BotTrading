@@ -10,7 +10,12 @@ from fastapi import FastAPI
 from cmi_common import Settings, create_app
 from cmi_common.cache import Cache
 from cmi_common.db.session import Database
-from cmi_common.sources import AdaptivePollLoop, SqlContentRepository
+from cmi_common.sources import (
+    AdaptivePollLoop,
+    Provider,
+    RawItem,
+    SqlContentRepository,
+)
 
 from .providers.bluesky import BlueskyProvider
 from .providers.reddit import RedditProvider
@@ -21,8 +26,10 @@ SUBREDDITS = os.getenv(
 ).split(",")
 
 
-def _build_providers() -> list:
-    providers = [BlueskyProvider(query=os.getenv("BLUESKY_QUERY", "crypto"))]
+def _build_providers() -> list[Provider]:
+    providers: list[Provider] = [
+        BlueskyProvider(query=os.getenv("BLUESKY_QUERY", "crypto"))
+    ]
     providers.append(
         RedditProvider(
             subreddits=SUBREDDITS,
@@ -34,12 +41,16 @@ def _build_providers() -> list:
 
 
 class _RepoFactory:
-    """Yields a fresh SqlContentRepository bound to a new session per insert."""
+    """Yields a fresh SqlContentRepository bound to a new session per insert.
+
+    The loop only ever calls ``insert_items``; a short-lived session per poll
+    keeps long-running loops from holding a pooled connection idle.
+    """
 
     def __init__(self, db: Database) -> None:
         self._db = db
 
-    async def insert_items(self, items) -> int:
+    async def insert_items(self, items: list[RawItem]) -> int:
         async with self._db.sessionmaker() as session:
             return await SqlContentRepository(session).insert_items(items)
 
@@ -50,8 +61,13 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     repo = _RepoFactory(db)
     providers = _build_providers()
     loops = [
+        # _RepoFactory implements the only method the loop uses (insert_items).
         AdaptivePollLoop(
-            p, repo, cache, poll_interval=POLL_INTERVAL, service="collector-social"
+            p,
+            repo,  # type: ignore[arg-type]
+            cache,
+            poll_interval=POLL_INTERVAL,
+            service="collector-social",
         )
         for p in providers
     ]

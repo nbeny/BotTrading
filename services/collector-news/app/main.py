@@ -10,7 +10,12 @@ from fastapi import FastAPI
 from cmi_common import Settings, create_app
 from cmi_common.cache import Cache
 from cmi_common.db.session import Database
-from cmi_common.sources import AdaptivePollLoop, SqlContentRepository
+from cmi_common.sources import (
+    AdaptivePollLoop,
+    Provider,
+    RawItem,
+    SqlContentRepository,
+)
 
 from .providers.cryptocompare import CryptoCompareNewsProvider
 from .providers.rss import RSSProvider
@@ -22,10 +27,12 @@ RSS_FEEDS = [f for f in os.getenv("RSS_FEEDS", "").split(",") if f]
 
 
 class _RepoFactory:
+    """Session-per-insert repository; the loop only calls ``insert_items``."""
+
     def __init__(self, db: Database) -> None:
         self._db = db
 
-    async def insert_items(self, items) -> int:
+    async def insert_items(self, items: list[RawItem]) -> int:
         async with self._db.sessionmaker() as session:
             return await SqlContentRepository(session).insert_items(items)
 
@@ -34,13 +41,18 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     cache = Cache(settings.redis)
     db = Database(settings.db)
     repo = _RepoFactory(db)
-    providers = [
+    providers: list[Provider] = [
         CryptoCompareNewsProvider(CC_BASE_URL, CC_API_KEY),
         RSSProvider(feeds=RSS_FEEDS or None),
     ]
     loops = [
+        # _RepoFactory implements the only method the loop uses (insert_items).
         AdaptivePollLoop(
-            p, repo, cache, poll_interval=POLL_INTERVAL, service="collector-news"
+            p,
+            repo,  # type: ignore[arg-type]
+            cache,
+            poll_interval=POLL_INTERVAL,
+            service="collector-news",
         )
         for p in providers
     ]

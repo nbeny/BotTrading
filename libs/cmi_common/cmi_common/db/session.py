@@ -33,6 +33,10 @@ class Database:
     def engine(self) -> AsyncEngine:
         return self._engine
 
+    @property
+    def sessionmaker(self) -> async_sessionmaker[AsyncSession]:
+        return self._sessionmaker
+
     async def session(self) -> AsyncIterator[AsyncSession]:
         """FastAPI dependency yielding a transactional session."""
         async with self._sessionmaker() as session:

@@ -1,4 +1,4 @@
-"""collector-social entrypoint: Bluesky -> Reddit cascade on market.social."""
+"""collector-social: fan-out AdaptivePollLoop per social provider -> raw_content."""
 
 from __future__ import annotations
 
@@ -9,59 +9,65 @@ from fastapi import FastAPI
 
 from cmi_common import Settings, create_app
 from cmi_common.cache import Cache
-from cmi_common.kafka import EventProducer, Topic
-from cmi_common.runner import run_periodic
-from cmi_common.sources import CircuitBreaker, SourceCascade
+from cmi_common.db.session import Database
+from cmi_common.sources import AdaptivePollLoop, SqlContentRepository
 
 from .providers.bluesky import BlueskyProvider
 from .providers.reddit import RedditProvider
 
 POLL_INTERVAL = float(os.getenv("SOCIAL_POLL_INTERVAL", "300"))
-BLUESKY_QUERY = os.getenv("BLUESKY_QUERY", "crypto")
 SUBREDDITS = os.getenv(
     "REDDIT_SUBREDDITS", "CryptoCurrency,CryptoMoonShots,solana"
 ).split(",")
-BREAKER_COOLDOWN = float(os.getenv("SOURCE_BREAKER_COOLDOWN", "300"))
+
+
+def _build_providers() -> list:
+    providers = [BlueskyProvider(query=os.getenv("BLUESKY_QUERY", "crypto"))]
+    providers.append(
+        RedditProvider(
+            subreddits=SUBREDDITS,
+            client_id=os.getenv("REDDIT_CLIENT_ID") or None,
+            client_secret=os.getenv("REDDIT_CLIENT_SECRET") or None,
+        )
+    )
+    return providers
+
+
+class _RepoFactory:
+    """Yields a fresh SqlContentRepository bound to a new session per insert."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def insert_items(self, items) -> int:
+        async with self._db.sessionmaker() as session:
+            return await SqlContentRepository(session).insert_items(items)
 
 
 async def _startup(app: FastAPI, settings: Settings) -> None:
     cache = Cache(settings.redis)
-    producer = EventProducer(settings.kafka)
-    await producer.start()
-    providers = [
-        BlueskyProvider(cache, query=BLUESKY_QUERY),
-        RedditProvider(
-            cache,
-            subreddits=SUBREDDITS,
-            client_id=os.getenv("REDDIT_CLIENT_ID") or None,
-            client_secret=os.getenv("REDDIT_CLIENT_SECRET") or None,
-        ),
+    db = Database(settings.db)
+    repo = _RepoFactory(db)
+    providers = _build_providers()
+    loops = [
+        AdaptivePollLoop(
+            p, repo, cache, poll_interval=POLL_INTERVAL, service="collector-social"
+        )
+        for p in providers
     ]
-    cascade = SourceCascade(
-        providers,
-        CircuitBreaker(cache, default_cooldown=BREAKER_COOLDOWN),
-        producer,
-        Topic.SOCIAL,
-        service="collector-social",
-    )
     app.state.cache = cache
-    app.state.producer = producer
-    app.state.cascade = cascade
-    # NOTE: assumes single-replica deployment. The cascade's is_open->fetch->trip
-    # is not atomic across replicas, so multiple replicas would double-poll;
-    # cross-replica dedup would need a cache.lock. This service runs single-replica
-    # (no replicas: in compose) and the shared cache.allow quota bucket bounds
-    # global API usage regardless.
-    app.state.poller = asyncio.create_task(
-        run_periodic(cascade.poll_once, POLL_INTERVAL, name="social-poll")
-    )
+    app.state.db = db
+    app.state.loops = loops
+    app.state.tasks = [asyncio.create_task(loop.run()) for loop in loops]
 
 
 async def _shutdown(app: FastAPI, settings: Settings) -> None:
-    app.state.poller.cancel()
-    await asyncio.gather(app.state.poller, return_exceptions=True)
-    await app.state.cascade.close()
-    await app.state.producer.stop()
+    for task in app.state.tasks:
+        task.cancel()
+    await asyncio.gather(*app.state.tasks, return_exceptions=True)
+    for loop in app.state.loops:
+        await loop.close()
+    await app.state.db.dispose()
     await app.state.cache.close()
 
 

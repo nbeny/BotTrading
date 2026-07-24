@@ -40,7 +40,7 @@ class GdeltProvider:
         await self._client.aclose()
 
     async def fetch(self) -> list[RawItem]:
-        params = {
+        params: dict[str, str | int] = {
             "query": self._query,
             "mode": "artlist",
             "format": "json",

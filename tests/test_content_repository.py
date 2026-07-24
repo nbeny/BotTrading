@@ -51,3 +51,25 @@ async def test_fake_upsert_aggregate_accumulates() -> None:
     )
     key = ("BTC", "social", ts, 3600)
     assert repo.aggregates[key]["mentions"] == 1
+
+
+async def test_fake_upsert_aggregate_conflict_matches_sql_semantics() -> None:
+    # Second upsert into the same window: mentions/engagement accumulate;
+    # unique_authors + sentiment values overwrite (mirrors ON CONFLICT DO UPDATE).
+    repo = FakeContentRepository()
+    ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    kw = dict(symbol="BTC", kind="social", window_start=ts, window_size=3600)
+    await repo.upsert_aggregate(
+        **kw, mentions=1, unique_authors=1, engagement_sum=2.0,
+        avg_sentiment=0.5, weighted_sentiment=0.4,
+    )
+    await repo.upsert_aggregate(
+        **kw, mentions=2, unique_authors=3, engagement_sum=5.0,
+        avg_sentiment=0.9, weighted_sentiment=0.8,
+    )
+    agg = repo.aggregates[("BTC", "social", ts, 3600)]
+    assert agg["mentions"] == 3            # accumulated
+    assert agg["engagement_sum"] == 7.0    # accumulated
+    assert agg["unique_authors"] == 3      # overwritten
+    assert agg["avg_sentiment"] == 0.9     # overwritten
+    assert agg["weighted_sentiment"] == 0.8  # overwritten

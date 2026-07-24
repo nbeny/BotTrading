@@ -144,7 +144,7 @@ class RawContent(Base):
 
     __tablename__ = "raw_content"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     source: Mapped[str] = mapped_column(String(32))
     kind: Mapped[str] = mapped_column(String(16))
     external_id: Mapped[str] = mapped_column(String(256))

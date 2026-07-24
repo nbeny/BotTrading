@@ -94,7 +94,8 @@ class SqlContentRepository:
         stmt = stmt.on_conflict_do_nothing(index_elements=["source", "external_id"])
         result = await self._session.execute(stmt)
         await self._session.commit()
-        return result.rowcount or 0
+        # ON CONFLICT DO NOTHING: rowcount reflects only rows actually inserted.
+        return int(getattr(result, "rowcount", 0) or 0)
 
     async def fetch_unscored(self, limit: int) -> list[UnscoredRow]:
         stmt = (
@@ -174,7 +175,9 @@ class FakeContentRepository:
     """In-memory double mirroring ContentRepository for unit tests."""
 
     rows: list[dict[str, Any]] = field(default_factory=list)
-    aggregates: dict[tuple, dict[str, Any]] = field(default_factory=dict)
+    aggregates: dict[tuple[str, str, datetime, int], dict[str, Any]] = field(
+        default_factory=dict
+    )
     _seq: int = 0
 
     async def insert_items(self, items: list[RawItem]) -> int:
@@ -210,6 +213,8 @@ class FakeContentRepository:
             if r["id"] == row_id:
                 r["scored_at"] = _utcnow()
                 r["sentiment_score"] = score
+                r["sentiment_confidence"] = confidence
+                r["sentiment_model"] = model
                 return
 
     async def upsert_aggregate(
@@ -226,7 +231,11 @@ class FakeContentRepository:
                 "weighted_sentiment": weighted_sentiment,
             }
         else:
+            # Mirror SqlContentRepository's ON CONFLICT DO UPDATE: mentions and
+            # engagement_sum accumulate; unique_authors + the sentiment values
+            # are overwritten from the incoming (latest-recompute) payload.
             cur["mentions"] += mentions
             cur["engagement_sum"] += engagement_sum
+            cur["unique_authors"] = unique_authors
             cur["avg_sentiment"] = avg_sentiment
             cur["weighted_sentiment"] = weighted_sentiment

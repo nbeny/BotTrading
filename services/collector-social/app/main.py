@@ -19,8 +19,11 @@ from cmi_common.sources import (
 
 from .providers.bluesky import BlueskyProvider
 from .providers.fourchan import FourchanProvider
+from .providers.lens import LensProvider
 from .providers.mastodon import MastodonProvider
+from .providers.neynar import NeynarProvider
 from .providers.reddit import RedditProvider
+from .providers.youtube import YouTubeProvider
 
 POLL_INTERVAL = float(os.getenv("SOCIAL_POLL_INTERVAL", "300"))
 SUBREDDITS = os.getenv(
@@ -46,6 +49,11 @@ def _build_providers() -> list[Provider]:
         )
     )
     providers.append(FourchanProvider())
+    if os.getenv("NEYNAR_API_KEY"):
+        providers.append(NeynarProvider(os.getenv("NEYNAR_API_KEY")))
+    if os.getenv("YOUTUBE_API_KEY"):
+        providers.append(YouTubeProvider(os.getenv("YOUTUBE_API_KEY")))
+    providers.append(LensProvider(query=os.getenv("LENS_QUERY", "crypto")))
     return providers
 
 

@@ -4,6 +4,13 @@ Polls ``raw_content`` for unscored rows, scores each with the HF scorer, writes
 the score back, upserts the per-symbol/window aggregate, and publishes one
 ``SentimentEvent`` per (item x detected symbol) so downstream keeps receiving
 per-symbol sentiment. Replaces the former Kafka news/social consumer.
+
+Delivery semantics: a row is marked scored *before* its ``SentimentEvent`` is
+published, so publishing is best-effort — if the process dies (or ``publish``
+raises) mid-row, the row is already ``scored_at != NULL`` and won't be retried,
+dropping the un-published event(s). This favours never double-scoring a row over
+never losing an event, which is acceptable for a sentiment feed. A failed
+``publish`` propagates to ``run_periodic`` (logged, not silently swallowed).
 """
 
 from __future__ import annotations

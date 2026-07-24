@@ -62,3 +62,13 @@ async def test_429_raises_rate_limited() -> None:
     with pytest.raises(RateLimitedError):
         await provider.fetch()
     await provider.close()
+
+
+@respx.mock
+async def test_non_list_body_degrades_to_empty() -> None:
+    # An instance returning an error object (not a list) must not crash the poll.
+    url = "https://mastodon.social/api/v1/timelines/tag/crypto"
+    respx.get(url).mock(return_value=httpx.Response(200, json={"error": "gone"}))
+    provider = ms.MastodonProvider(instance="mastodon.social", hashtag="crypto")
+    assert await provider.fetch() == []
+    await provider.close()

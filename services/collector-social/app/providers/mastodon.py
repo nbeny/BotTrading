@@ -6,6 +6,7 @@ is HTML, so tags are stripped before cashtag extraction.
 
 from __future__ import annotations
 
+import html
 import re
 
 import httpx
@@ -48,8 +49,14 @@ class MastodonProvider:
                     parse_retry_after(exc.response, default=60)
                 ) from exc
             raise
+        data = resp.json()
+        if not isinstance(data, list):  # e.g. an instance error object
+            return []
         items: list[RawItem] = []
-        for st in resp.json():
+        for st in data:
+            sid = st.get("id")
+            if sid is None:
+                continue
             text = _strip_html(st.get("content", ""))
             symbols = sorted({m.upper() for m in _CASHTAG.findall(text)})
             if not symbols:
@@ -63,7 +70,7 @@ class MastodonProvider:
                 RawItem(
                     source="mastodon",
                     kind="social",
-                    external_id=str(st.get("id")),
+                    external_id=str(sid),
                     text=text,
                     url=st.get("url"),
                     author=st.get("account", {}).get("acct"),
@@ -75,5 +82,6 @@ class MastodonProvider:
         return items
 
 
-def _strip_html(html: str) -> str:
-    return _TAG.sub(" ", html).replace("&amp;", "&").strip()
+def _strip_html(content: str) -> str:
+    # html.unescape covers all entities; strip tags first so entity text shows.
+    return html.unescape(_TAG.sub(" ", content)).strip()

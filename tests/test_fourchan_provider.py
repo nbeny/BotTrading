@@ -56,3 +56,12 @@ async def test_429_raises_rate_limited() -> None:
     with pytest.raises(RateLimitedError):
         await provider.fetch()
     await provider.close()
+
+
+@respx.mock
+async def test_non_list_body_degrades_to_empty() -> None:
+    # An unexpected non-list body must not crash the poll.
+    respx.get(fc.CATALOG_URL).mock(return_value=httpx.Response(200, json={"error": "x"}))
+    provider = fc.FourchanProvider()
+    assert await provider.fetch() == []
+    await provider.close()

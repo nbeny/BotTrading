@@ -6,6 +6,7 @@ HTML-ish, so tags are stripped before cashtag extraction.
 
 from __future__ import annotations
 
+import html
 import re
 
 import httpx
@@ -40,9 +41,15 @@ class FourchanProvider:
                     parse_retry_after(exc.response, default=60)
                 ) from exc
             raise
+        data = resp.json()
+        if not isinstance(data, list):  # unexpected shape -> degrade, don't crash
+            return []
         items: list[RawItem] = []
-        for page in resp.json():
+        for page in data:
             for thread in page.get("threads", []):
+                no = thread.get("no")
+                if no is None:
+                    continue
                 text = _strip_html(thread.get("com", ""))
                 symbols = sorted({m.upper() for m in _CASHTAG.findall(text)})
                 if not symbols:
@@ -51,7 +58,7 @@ class FourchanProvider:
                     RawItem(
                         source="fourchan",
                         kind="social",
-                        external_id=str(thread.get("no")),
+                        external_id=str(no),
                         text=text,
                         symbols=symbols,
                         engagement=float(thread.get("replies", 0)),
@@ -60,5 +67,6 @@ class FourchanProvider:
         return items
 
 
-def _strip_html(html: str) -> str:
-    return _TAG.sub(" ", html).replace("&#039;", "'").replace("&gt;", ">").strip()
+def _strip_html(content: str) -> str:
+    # html.unescape covers all entities; strip tags first so entity text shows.
+    return html.unescape(_TAG.sub(" ", content)).strip()

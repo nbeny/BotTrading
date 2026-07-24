@@ -34,6 +34,7 @@ export class MockEventSource {
     this.timers.push(setInterval(() => this.portfolio(), 5000));
     this.timers.push(setInterval(() => this.order(), 15_000));
     this.timers.push(setInterval(() => this.position(), 9000));
+    this.timers.push(setInterval(() => this.correlatedChain(), 13_000));
   }
 
   stop() {
@@ -175,6 +176,35 @@ export class MockEventSource {
       pnl_24h_pct: round(rand(-3, 5), 2),
     };
     this.emit(e, 'portfolio.events');
+  }
+
+  private correlatedChain() {
+    const t = pick(UNIVERSE);
+    const corr = uid('corr');
+    const withCorr = <T extends CmiEvent>(e: T): T => ({ ...e, correlation_id: corr });
+    const price = t.price;
+    this.emit(withCorr({ ...this.base('PriceEvent', 'coingecko', t.symbol), coin_id: t.coin_id,
+      price_usd: String(round(price, 4)), volume_24h_usd: String(Math.round(rand(2e7, 4e9))),
+      price_change_pct_24h: round(rand(2, 10), 2), is_trending: true } as PriceEvent), 'market.price.events');
+    setTimeout(() => this.emit(withCorr({ ...this.base('AnalysisEvent', 'ai-worker-haiku', t.symbol),
+      opportunity_score: Math.floor(rand(78, 94)), confidence: round(rand(0.7, 0.95), 2), reason: reason(),
+      price_change_pct_24h: round(rand(2, 12), 1), volume_spike_ratio: round(rand(1.8, 4), 1),
+      sentiment_score: round(rand(0.2, 0.8), 2), social_growth: round(rand(0.3, 1.6), 2), escalate: true } as AnalysisEvent),
+      'market.analysis.events'), 900);
+    setTimeout(() => this.emit(withCorr({ ...this.base('DecisionEvent', 'ai-worker-sonnet', t.symbol),
+      direction: 'long', opportunity_score: Math.floor(rand(80, 92)), confidence: round(rand(0.72, 0.93), 2),
+      rationale: 'Momentum soutenu, liquidité saine et sentiment corroborant. Entrée justifiée par le R/R.',
+      key_risks: ['volatilité macro', 'corrélation BTC élevée'], ai_validated: true } as DecisionEvent),
+      'decision.events'), 1800);
+    setTimeout(() => this.emit(withCorr({ ...this.base('RiskApprovedEvent', 'risk-engine', t.symbol),
+      direction: 'long', entry_price: round(price, 2), stop_loss: round(price * 0.95, 2),
+      take_profit: round(price * 1.11, 2), confidence: round(rand(0.72, 0.9), 2),
+      position_size_pct: round(rand(0.02, 0.06), 3), risk_reward_ratio: round(rand(1.8, 2.8), 2) } as RiskApprovedEvent),
+      'risk.approved.events'), 2700);
+    setTimeout(() => this.emit(withCorr({ ...this.base('OrderExecutedEvent', 'trading-engine', t.symbol),
+      order_id: uid('ord'), side: 'buy', order_type: 'market', price: round(price, 2), volume: round(rand(0.1, 3), 3),
+      cost: round(rand(500, 6000), 2), fee: round(rand(1, 12), 2), status: 'filled', mode: 'dry_run' } as OrderExecutedEvent),
+      'trading.orders.events'), 3600);
   }
 }
 

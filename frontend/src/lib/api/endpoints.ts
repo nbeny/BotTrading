@@ -1,4 +1,5 @@
 import { api, control } from './client';
+import type { ContentPage, DataStats, DecisionTrace, ContentQuery } from '@/lib/types/content';
 import type {
   EngineCaps,
   MarketToken,
@@ -16,6 +17,7 @@ import type {
   WorkerDecision,
 } from '@/lib/types/domain';
 import type { AnalysisEvent, DecisionEvent, PriceEvent, SentimentEvent } from '@/lib/types/events';
+import type { SystemsSnapshot } from '@/lib/types/systems';
 
 // ── Portfolio ───────────────────────────────────────────────────────────────
 export const portfolioApi = {
@@ -102,6 +104,26 @@ export const settingsApi = {
   setKill: (enabled: boolean) => control.post('/trading/kill', { enabled }).then((r) => r.data),
   setAuto: (enabled: boolean) => control.post('/trading/auto', { enabled }).then((r) => r.data),
   setCaps: (caps: Partial<EngineCaps>) => control.post('/trading/caps', caps).then((r) => r.data),
+};
+
+// ── Systems / infrastructure observability ─────────────────────────────────────
+// Read-only aggregate of every service's health/metrics. In live mode this maps
+// to the api-gateway (or a dedicated observability endpoint); on mock it hits the
+// built-in BFF snapshot generator.
+export const systemsApi = {
+  overview: () => api.get<SystemsSnapshot>('/systems/overview').then((r) => r.data),
+};
+
+// ── Decision trace ────────────────────────────────────────────────────────────
+export const traceApi = {
+  get: (cid: string) => api.get<DecisionTrace>(`/trace/${cid}`).then((r) => r.data),
+};
+
+// ── Data explorer ─────────────────────────────────────────────────────────────
+export const dataApi = {
+  content: (q: ContentQuery = {}) =>
+    api.get<ContentPage>('/data/content', { params: q }).then((r) => r.data),
+  stats: () => api.get<DataStats>('/data/stats').then((r) => r.data),
 };
 
 // ── Risk ──────────────────────────────────────────────────────────────────────

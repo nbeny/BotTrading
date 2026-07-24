@@ -1,8 +1,9 @@
 """Claude Haiku worker: fast triage / correlation / opportunity scoring.
 
-Consumes market/news/social/sentiment events, correlates them per symbol, and
-emits AnalysisEvent on market.analysis.events. Strong signals are flagged with
-``escalate=True`` for the senior Sonnet analyst.
+Consumes market and sentiment events, correlates them per symbol, and emits
+AnalysisEvent on market.analysis.events. Social/news presence is derived from
+``SentimentEvent.input_kind`` (collectors no longer emit Social/NewsEvent).
+Strong signals are flagged with ``escalate=True`` for the senior Sonnet analyst.
 """
 
 from __future__ import annotations

@@ -12,6 +12,7 @@ from decimal import Decimal
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    DateTime,
     Float,
     ForeignKey,
     Index,
@@ -20,7 +21,9 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    func,
 )
+from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -136,9 +139,63 @@ class Trade(Base, TimestampMixin):
     decision: Mapped[Decision | None] = relationship()
 
 
+class RawContent(Base):
+    """One ingested social post or news article; scored asynchronously."""
+
+    __tablename__ = "raw_content"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    source: Mapped[str] = mapped_column(String(32))
+    kind: Mapped[str] = mapped_column(String(16))
+    external_id: Mapped[str] = mapped_column(String(256))
+    url: Mapped[str | None] = mapped_column(Text)
+    author: Mapped[str | None] = mapped_column(String(256))
+    title: Mapped[str | None] = mapped_column(Text)
+    text: Mapped[str] = mapped_column(Text, default="")
+    symbols: Mapped[list] = mapped_column(JSONB, default=list)
+    engagement: Mapped[float | None] = mapped_column(Float)
+    lang: Mapped[str | None] = mapped_column(String(16))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), primary_key=True
+    )
+    sentiment_score: Mapped[float | None] = mapped_column(Float)
+    sentiment_confidence: Mapped[float | None] = mapped_column(Float)
+    sentiment_model: Mapped[str | None] = mapped_column(String(128))
+    scored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint("source", "external_id", name="uq_raw_content_source_external"),
+        Index("ix_raw_content_unscored", "fetched_at",
+              postgresql_where=sa_text("scored_at IS NULL")),
+    )
+
+
+class ContentSentimentAgg(Base):
+    """Per-symbol/window rollup derived from scored raw_content."""
+
+    __tablename__ = "content_sentiment_agg"
+
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), primary_key=True)
+    window_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
+    window_size: Mapped[int] = mapped_column(Integer, primary_key=True)
+    mentions: Mapped[int] = mapped_column(Integer, default=0)
+    unique_authors: Mapped[int] = mapped_column(Integer, default=0)
+    engagement_sum: Mapped[float] = mapped_column(Float, default=0.0)
+    avg_sentiment: Mapped[float] = mapped_column(Float, default=0.0)
+    weighted_sentiment: Mapped[float] = mapped_column(Float, default=0.0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 # Tables that become Timescale hypertables (time-partitioned).
 HYPERTABLES = {
     "prices": "time",
     "sentiments": "time",
     "signals": "time",
+    "raw_content": "fetched_at",
 }

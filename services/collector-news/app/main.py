@@ -19,6 +19,7 @@ from cmi_common.sources import (
 
 from .providers.cryptocompare import CryptoCompareNewsProvider
 from .providers.gdelt import GdeltProvider
+from .providers.newsdata import NewsDataProvider
 from .providers.rss import RSSProvider
 
 POLL_INTERVAL = float(os.getenv("NEWS_POLL_INTERVAL", "300"))
@@ -47,6 +48,8 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
         RSSProvider(feeds=RSS_FEEDS or None),
         GdeltProvider(query=os.getenv("GDELT_QUERY", "cryptocurrency")),
     ]
+    if os.getenv("NEWSDATA_API_KEY"):
+        providers.append(NewsDataProvider(os.getenv("NEWSDATA_API_KEY")))
     loops = [
         # _RepoFactory implements the only method the loop uses (insert_items).
         AdaptivePollLoop(

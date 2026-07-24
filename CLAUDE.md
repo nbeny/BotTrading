@@ -17,10 +17,13 @@ collectors ─► Kafka ─► sentiment-service ─┐
               └─────────────────────────────────► risk-engine ─► risk.approved.events
 ```
 Collectors (coingecko, dexscreener) are stateless producers. Social + news ingestion runs
-as two fan-out services — `collector-social` (Bluesky, Reddit, Mastodon, 4chan) and
-`collector-news` (CryptoCompare, RSS, GDELT) — where each platform runs its own adaptive poll loop that
+as two fan-out services — `collector-social` (Bluesky, Reddit, Mastodon, 4chan, Farcaster,
+YouTube, Lens) and `collector-news` (CryptoCompare, RSS, GDELT, NewsData) — where each platform
+runs its own adaptive poll loop that
 self-throttles on its rate limit (learned from the API's headers) and persists raw items to
-Postgres `raw_content`. `sentiment-service` scores unscored rows from the DB, upserts
+Postgres `raw_content`. Key-gated sources (Farcaster, YouTube, NewsData) activate when their
+env key is set; Telegram/StockTwits/Messari/CoinGecko-news deferred (paid or session-based).
+`sentiment-service` scores unscored rows from the DB, upserts
 `content_sentiment_agg`, and still publishes `SentimentEvent` on Kafka for decision-engine.
 `risk-engine` emits `risk.approved.events`, the input to the execution core.
 

@@ -54,6 +54,9 @@ class AdaptivePollLoop:
                 continue
             try:
                 items = await self._provider.fetch()
+                # Persist inside the try so a transient DB failure backs off
+                # like any other error instead of silently killing this loop.
+                inserted = await self._repo.insert_items(items)
             except RateLimitedError as exc:
                 wait = exc.retry_after if exc.retry_after is not None else window
                 UPSTREAM_REQUESTS.labels(self._service, name, "ratelimit").inc()
@@ -62,10 +65,9 @@ class AdaptivePollLoop:
                 continue
             except Exception:
                 UPSTREAM_REQUESTS.labels(self._service, name, "error").inc()
-                logger.warning("%s poll failed; backing off", name, exc_info=True)
+                logger.warning("%s cycle failed; backing off", name, exc_info=True)
                 await self._sleep(self._error_backoff)
                 continue
-            inserted = await self._repo.insert_items(items)
             UPSTREAM_REQUESTS.labels(self._service, name, "ok").inc()
             EVENTS_PRODUCED.labels(
                 self._service, "raw_content", self._provider.kind

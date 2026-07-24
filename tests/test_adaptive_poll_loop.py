@@ -89,3 +89,22 @@ async def test_quota_guard_blocks_poll_and_waits_window() -> None:
     await _run(loop)
     assert provider.calls == 0        # never fetched — proactive budget spent
     assert sleeps.calls == [60]       # waited the rate-limit window
+
+
+class RaisingRepo:
+    """A repository whose insert_items always fails (simulates a DB blip)."""
+
+    async def insert_items(self, items) -> int:
+        raise RuntimeError("db unavailable")
+
+
+async def test_persist_error_backs_off_and_does_not_kill_loop() -> None:
+    # A DB failure during persist must not silently kill the source's loop —
+    # it backs off like any other error and the loop lives to poll again.
+    provider = StubProvider(items=[RawItem(source="stub", kind="social", external_id="1")])
+    sleeps = Sleeps(stop_after=1)
+    loop = AdaptivePollLoop(provider, RaisingRepo(), FakeCache(), poll_interval=300,
+                            service="collector-social", error_backoff=120, sleep=sleeps)
+    await _run(loop)
+    assert provider.calls == 1        # it did poll
+    assert sleeps.calls == [120]      # backed off on the persist failure, loop survived

@@ -27,3 +27,13 @@ def test_no_headers_uses_default() -> None:
 def test_retry_after_takes_priority_over_reset() -> None:
     r = _resp({"Retry-After": "10", "x-ratelimit-reset": "999"})
     assert parse_retry_after(r, default=99) == 10.0
+
+
+def test_epoch_style_reset_is_capped_at_one_hour() -> None:
+    # A huge absolute timestamp must not pause a source for years.
+    r = _resp({"x-ratelimit-reset": "1735820000"})
+    assert parse_retry_after(r, default=99) == 3600.0
+
+
+def test_absurd_retry_after_is_capped() -> None:
+    assert parse_retry_after(_resp({"Retry-After": "100000"}), default=99) == 3600.0

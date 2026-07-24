@@ -1442,6 +1442,8 @@ Expected: FAIL — file does not exist
 
 Create `services/collector-news/app/providers/rss.py`:
 
+> Post-review fixes applied: stable `hashlib.sha1` dedupe key (was `abs(hash())`, unstable across restarts) + per-item `NewsEvent` try/except-skip so one malformed `<link>` can't trip the floor breaker.
+
 ```python
 """RSS news provider -> NewsEvent. Unlimited, keyless floor source.
 
@@ -1452,6 +1454,7 @@ cascade's floor never republishes the same article.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from email.utils import parsedate_to_datetime
 from xml.etree import ElementTree
@@ -1515,7 +1518,8 @@ class RSSProvider:
         except ElementTree.ParseError:
             logger.warning("failed to parse RSS feed %s", feed)
             return []
-        seen_key = SEEN_KEY.format(feed_hash=str(abs(hash(feed))))
+        feed_hash = hashlib.sha1(feed.encode()).hexdigest()[:16]
+        seen_key = SEEN_KEY.format(feed_hash=feed_hash)
         seen = set(await self._cache.get_json(seen_key) or [])
         events: list[NewsEvent] = []
         fresh: list[str] = []
@@ -1527,8 +1531,8 @@ class RSSProvider:
             if not link:
                 continue
             fresh.append(guid)
-            events.append(
-                NewsEvent(
+            try:
+                event = NewsEvent(
                     source=Source.RSS,
                     article_id=guid,
                     title=_text(item, "title") or "",
@@ -1540,7 +1544,13 @@ class RSSProvider:
                     categories=[],
                     provider_sentiment=None,
                 )
-            )
+            except Exception:
+                # A malformed item (e.g. relative/invalid <link> failing URL
+                # validation) must never take down the floor. It's already in
+                # `fresh` so it's marked seen and not retried every poll.
+                logger.warning("skipping malformed RSS item %s in %s", guid, feed)
+                continue
+            events.append(event)
         if fresh:
             merged = (fresh + list(seen))[: self._max_seen]
             await self._cache.set_json(seen_key, merged, ttl_seconds=7 * 86400)

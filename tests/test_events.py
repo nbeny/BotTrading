@@ -49,3 +49,10 @@ def test_risk_approved_long_level_validation() -> None:
 def test_score_bounds_enforced() -> None:
     with pytest.raises(ValueError):
         AnalysisEvent(symbol="X", opportunity_score=150, confidence=0.5, reason="r")
+
+
+def test_new_social_sources_exist() -> None:
+    from cmi_common.events.base import Source
+
+    assert Source.BLUESKY.value == "bluesky"
+    assert Source.RSS.value == "rss"

@@ -46,6 +46,8 @@ class Source(str, Enum):
     CRYPTOCOMPARE = "cryptocompare"
     REDDIT = "reddit"
     TWITTER = "twitter"
+    BLUESKY = "bluesky"
+    RSS = "rss"
     SENTIMENT_SERVICE = "sentiment-service"
     AI_HAIKU = "ai-worker-haiku"
     AI_SONNET = "ai-worker-sonnet"

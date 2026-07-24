@@ -20,7 +20,7 @@ import type {
 } from '@/lib/types/domain';
 import type { AnalysisEvent, DecisionEvent, PriceEvent, SentimentEvent } from '@/lib/types/events';
 import { BY_SYMBOL, RISK_MESSAGES, UNIVERSE, pick, rand, reason, round, uid } from './universe';
-import { currentPortfolioValue } from './sim';
+import { currentPortfolioValue, currentPrice } from './sim';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -118,14 +118,26 @@ let _positions: Position[] = [
   makePosition('AVAX', 'short', 15, 41.2, AVAX.price, 1, true, true),
 ];
 
+// Positions are re-priced against the simulation's live price on every read, so
+// current_price, value and unrealized PnL actually move (the "PnL & positions
+// live" panel ticks) instead of being frozen at build time.
+function reprice(p: Position): Position {
+  const cur = round(currentPrice(p.symbol), p.entry_price < 10 ? 4 : 2);
+  const value = round(p.quantity * cur, 2);
+  const cost = round(p.quantity * p.entry_price, 2);
+  const pnl = round(p.direction === 'long' ? value - cost : cost - value, 2);
+  const pnlPct = cost ? round((pnl / cost) * 100, 2) : 0;
+  return { ...p, current_price: cur, value_usd: value, unrealized_pnl_usd: pnl, unrealized_pnl_pct: pnlPct };
+}
+
 export function getPositions(): Position[] {
-  return _positions.map((p) => ({ ...p }));
+  return _positions.map(reprice);
 }
 
 export function closePosition(id: string): Trade | null {
   const idx = _positions.findIndex((p) => p.position_id === id);
   if (idx === -1) return null;
-  const pos = _positions[idx];
+  const pos = reprice(_positions[idx]);
   const trade: Trade = {
     trade_id: uid('trd'),
     symbol: pos.symbol,
@@ -353,7 +365,7 @@ let _tokens: MarketToken[] = UNIVERSE.map((tok) => ({
 }));
 
 export function getTokens(): MarketToken[] {
-  return _tokens.map((t) => ({ ...t }));
+  return _tokens.map((t) => ({ ...t, price_usd: round(currentPrice(t.symbol), t.price_usd < 10 ? 4 : 2) }));
 }
 
 export function getToken(symbol: string): MarketToken | undefined {
@@ -612,16 +624,17 @@ export function getSignals(limit = 30): Signal[] {
 // ── Risk exposure ─────────────────────────────────────────────────────────────
 
 export function getRiskExposure(): RiskExposure {
-  const byAsset: AssetExposure[] = _positions.map((p) => ({
+  const positions = getPositions();
+  const portfolioVal = getPortfolio().total_value_usd;
+  const byAsset: AssetExposure[] = positions.map((p) => ({
     symbol: p.symbol,
     exposure_usd: p.value_usd,
-    exposure_pct: round((p.value_usd / (getPortfolio().total_value_usd || 1)) * 100, 2),
+    exposure_pct: round((p.value_usd / (portfolioVal || 1)) * 100, 2),
     limit_pct: 30,
     protected: p.protected,
   }));
 
   const total = byAsset.reduce((s, a) => s + a.exposure_usd, 0);
-  const portfolioVal = getPortfolio().total_value_usd;
 
   return {
     total_exposure_usd: round(total, 2),

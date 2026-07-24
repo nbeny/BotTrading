@@ -151,14 +151,33 @@ class SqlContentRepository:
             "updated_at": _utcnow(),
         }
         stmt = pg_insert(ContentSentimentAgg).values(**values)
+        # On conflict, counts accumulate and the sentiment values become the
+        # mentions-weighted running mean: (old*old_n + inc*inc_n) / (old_n + inc_n).
+        # Table-qualified columns reference the pre-update row, excluded the
+        # incoming payload, so the denominator uses the OLD count. unique_authors
+        # accumulates as an approximate contribution count (an exact distinct
+        # count would require querying raw_content, which no consumer needs yet).
+        old_n = ContentSentimentAgg.mentions
+        inc_n = stmt.excluded.mentions
+        total_n = old_n + inc_n
         stmt = stmt.on_conflict_do_update(
             index_elements=["symbol", "kind", "window_start", "window_size"],
             set_={
-                "mentions": ContentSentimentAgg.mentions + mentions,
-                "unique_authors": stmt.excluded.unique_authors,
-                "engagement_sum": ContentSentimentAgg.engagement_sum + engagement_sum,
-                "avg_sentiment": stmt.excluded.avg_sentiment,
-                "weighted_sentiment": stmt.excluded.weighted_sentiment,
+                "mentions": total_n,
+                "unique_authors": (
+                    ContentSentimentAgg.unique_authors + stmt.excluded.unique_authors
+                ),
+                "engagement_sum": (
+                    ContentSentimentAgg.engagement_sum + stmt.excluded.engagement_sum
+                ),
+                "avg_sentiment": (
+                    ContentSentimentAgg.avg_sentiment * old_n
+                    + stmt.excluded.avg_sentiment * inc_n
+                ) / total_n,
+                "weighted_sentiment": (
+                    ContentSentimentAgg.weighted_sentiment * old_n
+                    + stmt.excluded.weighted_sentiment * inc_n
+                ) / total_n,
                 "updated_at": stmt.excluded.updated_at,
             },
         )
@@ -231,11 +250,17 @@ class FakeContentRepository:
                 "weighted_sentiment": weighted_sentiment,
             }
         else:
-            # Mirror SqlContentRepository's ON CONFLICT DO UPDATE: mentions and
-            # engagement_sum accumulate; unique_authors + the sentiment values
-            # are overwritten from the incoming (latest-recompute) payload.
-            cur["mentions"] += mentions
+            # Mirror SqlContentRepository's ON CONFLICT DO UPDATE: counts
+            # accumulate; sentiment values become the mentions-weighted running
+            # mean (computed with the OLD mentions before updating it).
+            total = cur["mentions"] + mentions
+            cur["avg_sentiment"] = (
+                cur["avg_sentiment"] * cur["mentions"] + avg_sentiment * mentions
+            ) / total
+            cur["weighted_sentiment"] = (
+                cur["weighted_sentiment"] * cur["mentions"]
+                + weighted_sentiment * mentions
+            ) / total
+            cur["mentions"] = total
+            cur["unique_authors"] += unique_authors
             cur["engagement_sum"] += engagement_sum
-            cur["unique_authors"] = unique_authors
-            cur["avg_sentiment"] = avg_sentiment
-            cur["weighted_sentiment"] = weighted_sentiment

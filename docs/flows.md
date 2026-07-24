@@ -6,8 +6,8 @@
                  poll HTTP
  CoinGecko  ─────────────────►  collector-coingecko ──► market.price.events
  DexScreener ────────────────►  collector-dexscreener ─► market.dex.events
- CryptoCompare ──────────────►  collector-cryptocompare ► market.news.events
- Reddit ─────────────────────►  collector-reddit ─────► market.social.events
+ Bluesky→Reddit ─────────────►  collector-social ─────► market.social.events
+ CryptoCompare→RSS ──────────►  collector-news ───────► market.news.events
 
  market.news.events ┐
  market.social.events ┴──────►  sentiment-service ────► market.sentiment.events

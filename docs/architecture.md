@@ -63,8 +63,8 @@ Mutualise ce qui doit rester cohérent entre services :
 | ------------------------ | ------------------------------------- | -------------------------- |
 | collector-coingecko      | — (poll HTTP)                         | price, volume              |
 | collector-dexscreener    | — (poll HTTP)                         | dex                        |
-| collector-cryptocompare  | — (poll HTTP)                         | news                       |
-| collector-reddit         | — (poll HTTP)                         | social                     |
+| collector-social         | — (poll HTTP; Bluesky→Reddit cascade) | social                     |
+| collector-news           | — (poll HTTP; CryptoCompare→RSS)       | news                       |
 | sentiment-service        | news, social                          | sentiment                  |
 | ai-worker-haiku          | price, volume, dex, news, social, sentiment | analysis             |
 | ai-worker-sonnet         | analysis (escalate=true)              | decision                   |

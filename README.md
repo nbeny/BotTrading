@@ -18,8 +18,8 @@ opportunités et risques associés.
  ─────────────────        │  (microservices indépendants, stateless)     │
   CoinGecko API   ───────►│  collector-coingecko  → market.price.events  │
   DexScreener API ───────►│  collector-dexscreener→ market.dex.events    │
-  CryptoCompare   ───────►│  collector-cryptocompare→ market.news.events │
-  Reddit API      ───────►│  collector-reddit     → market.social.events │
+  Bluesky+Reddit  ───────►│  collector-social     → market.social.events │
+  CryptoComp.+RSS ───────►│  collector-news       → market.news.events   │
                           └───────────────────────┬──────────────────────┘
                                                    │
                                           ┌────────▼────────┐
@@ -88,8 +88,8 @@ et l'architecture logicielle (clean architecture) dans [`docs/architecture.md`](
 | `market.price.events`     | collector-coingecko     | decision-engine, ai-worker-haiku        |
 | `market.volume.events`    | collector-coingecko/dex | decision-engine                         |
 | `market.dex.events`       | collector-dexscreener   | decision-engine, ai-worker-haiku        |
-| `market.news.events`      | collector-cryptocompare | sentiment-service, ai-worker-haiku      |
-| `market.social.events`    | collector-reddit        | sentiment-service, ai-worker-haiku      |
+| `market.news.events`      | collector-news          | sentiment-service, ai-worker-haiku      |
+| `market.social.events`    | collector-social        | sentiment-service, ai-worker-haiku      |
 | `market.sentiment.events` | sentiment-service       | decision-engine, ai-worker-haiku        |
 | `market.analysis.events`  | ai-worker-haiku         | ai-worker-sonnet, decision-engine       |
 | `decision.events`         | ai-worker-sonnet, decision-engine | risk-engine                   |
@@ -116,8 +116,8 @@ BotTrading/
 ├── services/
 │   ├── collector-coingecko/
 │   ├── collector-dexscreener/
-│   ├── collector-cryptocompare/
-│   ├── collector-reddit/
+│   ├── collector-social/
+│   ├── collector-news/
 │   ├── sentiment-service/
 │   ├── ai-worker-haiku/
 │   ├── ai-worker-sonnet/

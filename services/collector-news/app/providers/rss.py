@@ -1,9 +1,4 @@
-"""RSS news provider -> NewsEvent. Unlimited, keyless floor source.
-
-Parses standard RSS 2.0 feeds with the stdlib XML parser (no extra deps) and
-dedupes items across polls via a per-feed set of seen GUIDs in Redis, so the
-cascade's floor never republishes the same article.
-"""
+"""RSS news provider -> one RawItem per article (keyless floor)."""
 
 from __future__ import annotations
 
@@ -14,37 +9,28 @@ from xml.etree import ElementTree
 
 import httpx
 
-from cmi_common.cache import Cache
-from cmi_common.events.base import Source
-from cmi_common.events.news import NewsEvent
-from cmi_common.observability import UPSTREAM_REQUESTS
+from cmi_common.sources import RawItem
 
 logger = logging.getLogger(__name__)
-SERVICE = "collector-news"
 DEFAULT_FEEDS = [
     "https://www.coindesk.com/arc/outboundfeeds/rss/",
     "https://cointelegraph.com/rss",
     "https://decrypt.co/feed",
 ]
-SEEN_KEY = "rss:seen:{feed_hash}"
 
 
 class RSSProvider:
     name = "rss"
+    kind = "news"
+    rate_limit = (600, 60)  # effectively unlimited; loop cadence bounds it
 
     def __init__(
         self,
-        cache: Cache,
         *,
         feeds: list[str] | None = None,
-        source_name: str = "RSS",
-        max_seen: int = 500,
         user_agent: str = "cmi-collector/0.1",
     ) -> None:
-        self._cache = cache
         self._feeds = feeds or DEFAULT_FEEDS
-        self._source_name = source_name
-        self._max_seen = max_seen
         self._client = httpx.AsyncClient(
             headers={"User-Agent": user_agent}, timeout=15.0
         )
@@ -52,73 +38,57 @@ class RSSProvider:
     async def close(self) -> None:
         await self._client.aclose()
 
-    async def fetch(self) -> list[NewsEvent]:
-        events: list[NewsEvent] = []
+    async def fetch(self) -> list[RawItem]:
+        items: list[RawItem] = []
         for feed in self._feeds:
             try:
                 resp = await self._client.get(feed)
                 resp.raise_for_status()
             except httpx.HTTPError:
-                UPSTREAM_REQUESTS.labels(SERVICE, "rss", "error").inc()
+                logger.warning("RSS feed unreachable: %s", feed)
                 continue
-            UPSTREAM_REQUESTS.labels(SERVICE, "rss", "ok").inc()
-            events.extend(await self._parse_feed(feed, resp.text))
-        return events
+            items.extend(self._parse(feed, resp.text))
+        return items
 
-    async def _parse_feed(self, feed: str, body: str) -> list[NewsEvent]:
+    def _parse(self, feed: str, body: str) -> list[RawItem]:
         try:
             root = ElementTree.fromstring(body)
         except ElementTree.ParseError:
             logger.warning("failed to parse RSS feed %s", feed)
             return []
-        feed_hash = hashlib.sha1(feed.encode()).hexdigest()[:16]
-        seen_key = SEEN_KEY.format(feed_hash=feed_hash)
-        seen = set(await self._cache.get_json(seen_key) or [])
-        events: list[NewsEvent] = []
-        fresh: list[str] = []
-        for item in root.iterfind(".//item"):
-            guid = _text(item, "guid") or _text(item, "link") or ""
-            if not guid or guid in seen:
+        src = hashlib.sha1(feed.encode()).hexdigest()[:16]
+        out: list[RawItem] = []
+        for node in root.iterfind(".//item"):
+            guid = _text(node, "guid") or _text(node, "link")
+            link = _text(node, "link")
+            if not guid or not link:
                 continue
-            link = _text(item, "link")
-            if not link:
-                continue
-            fresh.append(guid)
             try:
-                event = NewsEvent(
-                    source=Source.RSS,
-                    article_id=guid,
-                    title=_text(item, "title") or "",
-                    body=(_text(item, "description") or "")[:4000],
-                    url=link,
-                    published_at=_epoch(_text(item, "pubDate")),
-                    source_name=self._source_name,
-                    symbols=[],
-                    categories=[],
-                    provider_sentiment=None,
+                out.append(
+                    RawItem(
+                        source="rss",
+                        kind="news",
+                        external_id=f"{src}:{guid}",
+                        title=_text(node, "title") or "",
+                        text=(_text(node, "description") or "")[:4000],
+                        url=link,
+                        published_at=_dt(_text(node, "pubDate")),
+                    )
                 )
             except Exception:
-                # A malformed item (e.g. relative/invalid <link> failing URL
-                # validation) must never take down the floor. It's already in
-                # `fresh` so it's marked seen and not retried every poll.
                 logger.warning("skipping malformed RSS item %s in %s", guid, feed)
-                continue
-            events.append(event)
-        if fresh:
-            merged = (fresh + list(seen))[: self._max_seen]
-            await self._cache.set_json(seen_key, merged, ttl_seconds=7 * 86400)
-        return events
+        return out
 
 
-def _text(item: ElementTree.Element, tag: str) -> str | None:
-    el = item.find(tag)
+def _text(node: ElementTree.Element, tag: str) -> str | None:
+    el = node.find(tag)
     return el.text.strip() if el is not None and el.text else None
 
 
-def _epoch(pubdate: str | None) -> int:
+def _dt(pubdate: str | None):
     if not pubdate:
-        return 0
+        return None
     try:
-        return int(parsedate_to_datetime(pubdate).timestamp())
+        return parsedate_to_datetime(pubdate)
     except (TypeError, ValueError):
-        return 0
+        return None

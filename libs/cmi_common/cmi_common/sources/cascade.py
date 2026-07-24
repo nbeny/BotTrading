@@ -1,8 +1,13 @@
 """Rate-limit primitives shared by the ingestion loops.
 
-``RateLimitedError`` signals a provider is throttled; ``CircuitBreaker`` is a
-Redis-backed pause gate (a source stays paused until its cooldown TTL expires,
-then the loop probes it again). Used by ``AdaptivePollLoop``.
+``RateLimitedError`` signals a provider is throttled and is handled by
+``AdaptivePollLoop`` (which pauses that source in-process until the reset).
+
+``CircuitBreaker`` is a Redis-backed pause gate reserved for cross-replica
+pause coordination — it is NOT yet wired into ``AdaptivePollLoop`` (which
+currently pauses in-process under the single-replica deployment assumption).
+Kept for a future multi-replica setup; do not assume cross-replica coordination
+exists today.
 """
 
 from __future__ import annotations
@@ -27,10 +32,11 @@ class RateLimitedError(Exception):
 
 
 class CircuitBreaker:
-    """Redis-backed pause gate shared across replicas.
+    """Redis-backed pause gate for future cross-replica coordination.
 
-    A tripped source stays paused until its cooldown key TTL expires, after
-    which the next poll probes it again.
+    A tripped source stays paused until its cooldown key TTL expires. NOT
+    wired into ``AdaptivePollLoop`` yet — reserved for a multi-replica setup
+    where replicas must share pause state. Today the loop pauses in-process.
     """
 
     def __init__(self, cache: Cache, *, default_cooldown: float = 300.0) -> None:

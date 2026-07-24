@@ -65,12 +65,17 @@ class YouTubeProvider:
                 # Daily quota -- back off an hour (reset is midnight Pacific).
                 raise RateLimitedError(3600) from exc
             raise
+        body = resp.json()
+        if not isinstance(body, dict):  # unexpected shape -> degrade, don't crash
+            return []
         items: list[RawItem] = []
-        for item in resp.json().get("items", []):
-            vid = item.get("id", {}).get("videoId")
+        for item in body.get("items") or []:
+            if not isinstance(item, dict):
+                continue
+            vid = (item.get("id") or {}).get("videoId")
             if not vid:
                 continue
-            sn = item.get("snippet", {})
+            sn = item.get("snippet") or {}
             title = sn.get("title", "")
             text = f"{title}. {sn.get('description', '')}".strip()
             items.append(

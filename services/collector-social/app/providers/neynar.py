@@ -55,9 +55,13 @@ class NeynarProvider:
                     parse_retry_after(exc.response, default=60)
                 ) from exc
             raise
-        casts = resp.json().get("result", {}).get("casts", [])
+        casts = (resp.json().get("result") or {}).get("casts") or []
+        if not isinstance(casts, list):  # unexpected shape -> degrade, don't crash
+            return []
         items: list[RawItem] = []
         for cast in casts:
+            if not isinstance(cast, dict):
+                continue
             text = cast.get("text", "")
             symbols = sorted({m.upper() for m in _CASHTAG.findall(text)})
             if not symbols:
@@ -65,11 +69,11 @@ class NeynarProvider:
             h = cast.get("hash")
             if not h:
                 continue
-            reactions = cast.get("reactions", {})
+            reactions = cast.get("reactions") or {}
             engagement = float(
                 reactions.get("likes_count", 0)
                 + reactions.get("recasts_count", 0)
-                + cast.get("replies", {}).get("count", 0)
+                + (cast.get("replies") or {}).get("count", 0)
             )
             items.append(
                 RawItem(
@@ -77,7 +81,7 @@ class NeynarProvider:
                     kind="social",
                     external_id=str(h),
                     text=text,
-                    author=cast.get("author", {}).get("username"),
+                    author=(cast.get("author") or {}).get("username"),
                     symbols=symbols,
                     engagement=engagement,
                     published_at=_ts(cast.get("timestamp")),

@@ -80,9 +80,13 @@ class LensProvider:
         payload = resp.json()
         if payload.get("errors"):
             return []
-        posts = payload.get("data", {}).get("posts", {}).get("items", []) or []
+        posts = ((payload.get("data") or {}).get("posts") or {}).get("items") or []
+        if not isinstance(posts, list):  # unexpected shape -> degrade, don't crash
+            return []
         items: list[RawItem] = []
         for post in posts:
+            if not isinstance(post, dict):
+                continue
             content = (post.get("metadata") or {}).get("content") or ""
             symbols = sorted({m.upper() for m in _CASHTAG.findall(content)})
             if not symbols:

@@ -80,3 +80,32 @@ async def test_429_raises_rate_limited() -> None:
     with pytest.raises(RateLimitedError):
         await provider.fetch()
     await provider.close()
+
+
+@respx.mock
+async def test_null_result_degrades_to_empty() -> None:
+    respx.get(ny.SEARCH_URL).mock(
+        return_value=httpx.Response(200, json={"result": None})
+    )
+    provider = ny.NeynarProvider("KEY")
+    assert await provider.fetch() == []
+    await provider.close()
+
+
+@respx.mock
+async def test_null_item_fields_do_not_crash() -> None:
+    cast = _cast("0xaa", "$BTC up", likes=2)
+    cast["reactions"] = None
+    cast["replies"] = None
+    cast["author"] = None
+    respx.get(ny.SEARCH_URL).mock(
+        return_value=httpx.Response(200, json={"result": {"casts": [cast, None]}})
+    )
+    provider = ny.NeynarProvider("KEY")
+    items = await provider.fetch()
+    await provider.close()
+
+    assert len(items) == 1
+    assert items[0].external_id == "0xaa"
+    assert items[0].engagement == 0.0
+    assert items[0].author is None

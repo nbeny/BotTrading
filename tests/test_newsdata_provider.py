@@ -79,3 +79,27 @@ async def test_429_raises_rate_limited() -> None:
     with pytest.raises(RateLimitedError):
         await provider.fetch()
     await provider.close()
+
+
+@respx.mock
+async def test_non_dict_body_degrades_to_empty() -> None:
+    respx.get("https://newsdata.io/api/1/crypto").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+    provider = nd.NewsDataProvider("KEY")
+    assert await provider.fetch() == []
+    await provider.close()
+
+
+@respx.mock
+async def test_null_article_in_results_is_skipped() -> None:
+    respx.get("https://newsdata.io/api/1/crypto").mock(
+        return_value=httpx.Response(
+            200, json={"results": [None, _article("a9", "Solana surges")]}
+        )
+    )
+    provider = nd.NewsDataProvider("KEY")
+    items = await provider.fetch()
+    await provider.close()
+
+    assert [i.external_id for i in items] == ["a9"]

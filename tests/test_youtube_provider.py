@@ -80,3 +80,25 @@ async def test_quota_exceeded_403_raises_rate_limited() -> None:
     with pytest.raises(RateLimitedError):
         await provider.fetch()
     await provider.close()
+
+
+@respx.mock
+async def test_non_dict_body_degrades_to_empty() -> None:
+    respx.get(yt.SEARCH_URL).mock(return_value=httpx.Response(200, json=[]))
+    provider = yt.YouTubeProvider("KEY")
+    assert await provider.fetch() == []
+    await provider.close()
+
+
+@respx.mock
+async def test_null_item_in_items_is_skipped() -> None:
+    respx.get(yt.SEARCH_URL).mock(
+        return_value=httpx.Response(
+            200, json={"items": [None, _item("v9", "Solana update")]}
+        )
+    )
+    provider = yt.YouTubeProvider("KEY")
+    items = await provider.fetch()
+    await provider.close()
+
+    assert [i.external_id for i in items] == ["v9"]

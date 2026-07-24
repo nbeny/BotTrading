@@ -54,8 +54,13 @@ class NewsDataProvider:
                     parse_retry_after(exc.response, default=900)
                 ) from exc
             raise
+        body = resp.json()
+        if not isinstance(body, dict):  # unexpected shape -> degrade, don't crash
+            return []
         items: list[RawItem] = []
-        for art in resp.json().get("results", []):
+        for art in body.get("results") or []:
+            if not isinstance(art, dict):
+                continue
             aid = art.get("article_id")
             link = art.get("link")
             if not aid or not link:

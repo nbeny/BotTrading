@@ -85,3 +85,31 @@ async def test_429_raises_rate_limited() -> None:
     with pytest.raises(RateLimitedError):
         await provider.fetch()
     await provider.close()
+
+
+@respx.mock
+async def test_null_data_degrades_to_empty() -> None:
+    respx.post(ln.GRAPHQL_URL).mock(
+        return_value=httpx.Response(200, json={"data": None})
+    )
+    provider = ln.LensProvider()
+    assert await provider.fetch() == []
+    await provider.close()
+
+
+@respx.mock
+async def test_null_post_in_items_is_skipped() -> None:
+    respx.post(ln.GRAPHQL_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {"posts": {"items": [None, _post("0x09", "$ETH", comments=1)]}}
+            },
+        )
+    )
+    provider = ln.LensProvider()
+    items = await provider.fetch()
+    await provider.close()
+
+    assert len(items) == 1
+    assert items[0].external_id == "0x09"

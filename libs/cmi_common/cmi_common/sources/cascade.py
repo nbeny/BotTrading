@@ -65,3 +65,62 @@ class CircuitBreaker:
     async def trip(self, name: str, cooldown: float | None = None) -> None:
         ttl = max(1, int(cooldown if cooldown is not None else self._default))
         await self._cache.client.set(f"cb:{name}", "1", ex=ttl)
+
+
+class SourceCascade:
+    """Polls providers in priority order, serving the first healthy one.
+
+    Primary first, unlimited floor last. Each tick skips providers whose
+    breaker is open, tries the rest in order, and publishes the events from
+    the first provider that returns without raising. ``RateLimited`` trips the
+    breaker for its ``retry_after``; any other exception trips it for
+    ``error_cooldown``. Both fall through to the next provider.
+    """
+
+    def __init__(
+        self,
+        providers: Sequence[Provider],
+        breaker: CircuitBreaker,
+        producer: EventProducer,
+        topic: Topic,
+        *,
+        service: str,
+        error_cooldown: float = 120.0,
+    ) -> None:
+        self._providers = list(providers)
+        self._breaker = breaker
+        self._producer = producer
+        self._topic = topic
+        self._service = service
+        self._error_cooldown = error_cooldown
+
+    async def close(self) -> None:
+        for provider in self._providers:
+            await provider.close()
+
+    async def poll_once(self) -> int:
+        for provider in self._providers:
+            if await self._breaker.is_open(provider.name):
+                logger.debug("provider %s breaker open; skipping", provider.name)
+                continue
+            try:
+                events = await provider.fetch()
+            except RateLimited as exc:
+                await self._breaker.trip(provider.name, exc.retry_after)
+                logger.info("provider %s rate-limited; failing over", provider.name)
+                continue
+            except Exception:  # noqa: BLE001 - any provider failure fails over
+                await self._breaker.trip(provider.name, self._error_cooldown)
+                logger.warning(
+                    "provider %s errored; failing over", provider.name, exc_info=True
+                )
+                continue
+            for event in events:
+                await self._producer.publish(self._topic, event)
+                EVENTS_PRODUCED.labels(
+                    self._service, self._topic.value, event.event_type
+                ).inc()
+            logger.info("cascade served %d events from %s", len(events), provider.name)
+            return len(events)
+        logger.warning("all providers exhausted this tick; no events served")
+        return 0

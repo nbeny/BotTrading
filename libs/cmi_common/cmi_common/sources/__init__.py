@@ -5,5 +5,16 @@ from __future__ import annotations
 from .cascade import CircuitBreaker, RateLimitedError
 from .provider import Provider, parse_retry_after
 from .raw import RawItem
+from .repository import ContentRepository, FakeContentRepository, SqlContentRepository, raw_item_to_row
 
-__all__ = ["CircuitBreaker", "Provider", "RateLimitedError", "RawItem", "parse_retry_after"]
+__all__ = [
+    "CircuitBreaker",
+    "ContentRepository",
+    "FakeContentRepository",
+    "Provider",
+    "RateLimitedError",
+    "RawItem",
+    "SqlContentRepository",
+    "parse_retry_after",
+    "raw_item_to_row",
+]

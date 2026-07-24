@@ -167,47 +167,39 @@ services:
       - traefik.http.routers.dexscreener.tls=true
       - traefik.http.services.dexscreener.loadbalancer.server.port=8000
 
-  collector-cryptocompare:
+  collector-social:
     <<: *service-defaults
-    build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/collector-cryptocompare } }
+    build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/collector-social } }
     environment:
       <<: *common-env
-      CRYPTOCOMPARE_API_KEY: ${CRYPTOCOMPARE_API_KEY:-}
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.cryptocompare.rule=Host(`cryptocompare.cmi.localhost`)
-      - traefik.http.routers.cryptocompare.entrypoints=websecure
-      - traefik.http.routers.cryptocompare.tls=true
-      - traefik.http.services.cryptocompare.loadbalancer.server.port=8000
-
-  collector-reddit:
-    <<: *service-defaults
-    build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/collector-reddit } }
-    environment:
-      <<: *common-env
+      SOCIAL_POLL_INTERVAL: ${SOCIAL_POLL_INTERVAL:-300}
+      BLUESKY_QUERY: ${BLUESKY_QUERY:-crypto}
+      REDDIT_SUBREDDITS: ${REDDIT_SUBREDDITS:-CryptoCurrency,CryptoMoonShots,solana}
       REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID:-}
       REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET:-}
+      SOURCE_BREAKER_COOLDOWN: ${SOURCE_BREAKER_COOLDOWN:-300}
     labels:
       - traefik.enable=true
-      - traefik.http.routers.reddit.rule=Host(`reddit.cmi.localhost`)
-      - traefik.http.routers.reddit.entrypoints=websecure
-      - traefik.http.routers.reddit.tls=true
-      - traefik.http.services.reddit.loadbalancer.server.port=8000
+      - traefik.http.routers.social.rule=Host(`social.cmi.localhost`)
+      - traefik.http.routers.social.entrypoints=websecure
+      - traefik.http.routers.social.tls=true
+      - traefik.http.services.social.loadbalancer.server.port=8000
 
-  collector-twitter:
+  collector-news:
     <<: *service-defaults
-    build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/collector-twitter } }
+    build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/collector-news } }
     environment:
       <<: *common-env
-      TWITTER_BEARER_TOKEN: ${TWITTER_BEARER_TOKEN:-}
-      TWITTER_POLL_INTERVAL: ${TWITTER_POLL_INTERVAL:-300}
-      TWITTER_QUERY: ${TWITTER_QUERY:-}
+      NEWS_POLL_INTERVAL: ${NEWS_POLL_INTERVAL:-300}
+      CRYPTOCOMPARE_API_KEY: ${CRYPTOCOMPARE_API_KEY:-}
+      RSS_FEEDS: ${RSS_FEEDS:-}
+      SOURCE_BREAKER_COOLDOWN: ${SOURCE_BREAKER_COOLDOWN:-300}
     labels:
       - traefik.enable=true
-      - traefik.http.routers.twitter.rule=Host(`twitter.cmi.localhost`)
-      - traefik.http.routers.twitter.entrypoints=websecure
-      - traefik.http.routers.twitter.tls=true
-      - traefik.http.services.twitter.loadbalancer.server.port=8000
+      - traefik.http.routers.news.rule=Host(`news.cmi.localhost`)
+      - traefik.http.routers.news.entrypoints=websecure
+      - traefik.http.routers.news.tls=true
+      - traefik.http.services.news.loadbalancer.server.port=8000
 
   # ----------------------------------------------------------- analytics
   sentiment-service:

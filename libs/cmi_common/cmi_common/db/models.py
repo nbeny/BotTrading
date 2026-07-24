@@ -165,7 +165,9 @@ class RawContent(Base):
     scored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
-        UniqueConstraint("source", "external_id", name="uq_raw_content_source_external"),
+        UniqueConstraint(
+            "source", "external_id", name="uq_raw_content_source_external"
+        ),
         Index("ix_raw_content_unscored", "fetched_at",
               postgresql_where=sa_text("scored_at IS NULL")),
     )

@@ -9,7 +9,7 @@ is the async SQLAlchemy implementation (integration-tested against Postgres).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from sqlalchemy import select, update
@@ -166,9 +166,7 @@ class SqlContentRepository:
 
 
 def _utcnow() -> datetime:
-    from datetime import timezone
-
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 @dataclass

@@ -60,16 +60,16 @@ class AdaptivePollLoop:
                 logger.info("%s rate-limited; pausing %ss", name, wait)
                 await self._sleep(wait)
                 continue
-            except Exception:  # noqa: BLE001 - one bad poll never kills the loop
+            except Exception:
                 UPSTREAM_REQUESTS.labels(self._service, name, "error").inc()
                 logger.warning("%s poll failed; backing off", name, exc_info=True)
                 await self._sleep(self._error_backoff)
                 continue
             inserted = await self._repo.insert_items(items)
             UPSTREAM_REQUESTS.labels(self._service, name, "ok").inc()
-            EVENTS_PRODUCED.labels(self._service, "raw_content", self._provider.kind).inc(
-                inserted
-            )
+            EVENTS_PRODUCED.labels(
+                self._service, "raw_content", self._provider.kind
+            ).inc(inserted)
             logger.info("%s ingested %d new items", name, inserted)
             await self._sleep(self._interval)
 

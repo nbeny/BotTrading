@@ -6,7 +6,12 @@ from .cascade import CircuitBreaker, RateLimitedError
 from .loop import AdaptivePollLoop
 from .provider import Provider, parse_retry_after
 from .raw import RawItem
-from .repository import ContentRepository, FakeContentRepository, SqlContentRepository, raw_item_to_row
+from .repository import (
+    ContentRepository,
+    FakeContentRepository,
+    SqlContentRepository,
+    raw_item_to_row,
+)
 
 __all__ = [
     "AdaptivePollLoop",

@@ -9,6 +9,11 @@ import { KpiTicker } from '@/components/command/KpiTicker';
 import { PipelineFlow } from '@/components/systems/PipelineFlow';
 import { LiveEventStream } from '@/components/command/LiveEventStream';
 import { DecisionTraceDrawer } from '@/components/command/DecisionTraceDrawer';
+import { AiDecisionFeed } from '@/components/command/AiDecisionFeed';
+import { LivePnlPanel } from '@/components/command/LivePnlPanel';
+import { MarketHeatPanel } from '@/components/command/MarketHeatPanel';
+import { GuardrailPanel } from '@/components/command/GuardrailPanel';
+import { HealthRail } from '@/components/command/HealthRail';
 
 function useEventsPerMin() {
   const timestamps = useRef<number[]>([]);
@@ -40,8 +45,16 @@ export default function CommandCenterPage() {
           </Box>
           <LiveEventStream onSelect={setTraceCid} />
         </Stack>
-        <Stack spacing={2}>{/* right-rail panels added in a later task */}</Stack>
+        <Stack spacing={2}>
+          <AiDecisionFeed />
+          <GuardrailPanel />
+        </Stack>
       </Box>
+      <Box sx={{ mt: 2, display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' } }}>
+        <LivePnlPanel />
+        <MarketHeatPanel />
+      </Box>
+      <Box sx={{ mt: 2 }}><HealthRail /></Box>
       <DecisionTraceDrawer correlationId={traceCid} onClose={() => setTraceCid(null)} />
     </Box>
   );

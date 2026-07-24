@@ -16,10 +16,12 @@ collectors ─► Kafka ─► sentiment-service ─┐
               │        decision-engine  ───┘
               └─────────────────────────────────► risk-engine ─► risk.approved.events
 ```
-Collectors (coingecko, dexscreener) are stateless producers. Social + news feeds run
-through two resilient cascades — `collector-social` (Bluesky primary → Reddit fallback) and
-`collector-news` (CryptoCompare primary → RSS floor) — each failing over on quota/error via a
-Redis circuit breaker so the sentiment pipeline never dries up on free tiers.
+Collectors (coingecko, dexscreener) are stateless producers. Social + news ingestion runs
+as two fan-out services — `collector-social` (Bluesky, Reddit, …) and `collector-news`
+(CryptoCompare, RSS, …) — where each platform runs its own adaptive poll loop that
+self-throttles on its rate limit (learned from the API's headers) and persists raw items to
+Postgres `raw_content`. `sentiment-service` scores unscored rows from the DB, upserts
+`content_sentiment_agg`, and still publishes `SentimentEvent` on Kafka for decision-engine.
 `risk-engine` emits `risk.approved.events`, the input to the execution core.
 
 ## Control / execution plane (this is the important part)

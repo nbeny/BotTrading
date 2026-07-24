@@ -170,6 +170,13 @@ services:
   collector-social:
     <<: *service-defaults
     build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/collector-social } }
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
       <<: *common-env
       SOCIAL_POLL_INTERVAL: ${SOCIAL_POLL_INTERVAL:-300}
@@ -188,6 +195,13 @@ services:
   collector-news:
     <<: *service-defaults
     build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/collector-news } }
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
       <<: *common-env
       NEWS_POLL_INTERVAL: ${NEWS_POLL_INTERVAL:-300}
@@ -205,9 +219,18 @@ services:
   sentiment-service:
     <<: *service-defaults
     build: { context: ., dockerfile: docker/Dockerfile.ml, args: { SERVICE_PATH: services/sentiment-service } }
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
       <<: *common-env
       SENTIMENT_MODEL: ${SENTIMENT_MODEL:-ElKulako/cryptobert}
+      SENTIMENT_WORKER_INTERVAL: ${SENTIMENT_WORKER_INTERVAL:-10}
+      SENTIMENT_BATCH: ${SENTIMENT_BATCH:-100}
     volumes:
       # Persist downloaded model weights (HF_HOME) across restarts.
       - hf-cache:/home/appuser/.cache/huggingface

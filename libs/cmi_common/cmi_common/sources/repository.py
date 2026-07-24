@@ -53,16 +53,13 @@ class UnscoredRow:
 
 
 class ContentRepository(Protocol):
-    async def insert_items(self, items: list[RawItem]) -> int:
-        ...
+    async def insert_items(self, items: list[RawItem]) -> int: ...
 
-    async def fetch_unscored(self, limit: int) -> list[UnscoredRow]:
-        ...
+    async def fetch_unscored(self, limit: int) -> list[UnscoredRow]: ...
 
     async def mark_scored(
         self, row_id: int, *, score: float, confidence: float, model: str
-    ) -> None:
-        ...
+    ) -> None: ...
 
     async def upsert_aggregate(
         self,
@@ -76,8 +73,7 @@ class ContentRepository(Protocol):
         engagement_sum: float,
         avg_sentiment: float,
         weighted_sentiment: float,
-    ) -> None:
-        ...
+    ) -> None: ...
 
 
 class SqlContentRepository:
@@ -107,9 +103,14 @@ class SqlContentRepository:
         rows = (await self._session.execute(stmt)).scalars().all()
         return [
             UnscoredRow(
-                id=r.id, source=r.source, kind=r.kind, title=r.title,
-                text=r.text, symbols=list(r.symbols or []),
-                engagement=r.engagement, published_at=r.published_at,
+                id=r.id,
+                source=r.source,
+                kind=r.kind,
+                title=r.title,
+                text=r.text,
+                symbols=list(r.symbols or []),
+                engagement=r.engagement,
+                published_at=r.published_at,
             )
             for r in rows
         ]
@@ -144,10 +145,15 @@ class SqlContentRepository:
         weighted_sentiment: float,
     ) -> None:
         values = {
-            "symbol": symbol, "kind": kind, "window_start": window_start,
-            "window_size": window_size, "mentions": mentions,
-            "unique_authors": unique_authors, "engagement_sum": engagement_sum,
-            "avg_sentiment": avg_sentiment, "weighted_sentiment": weighted_sentiment,
+            "symbol": symbol,
+            "kind": kind,
+            "window_start": window_start,
+            "window_size": window_size,
+            "mentions": mentions,
+            "unique_authors": unique_authors,
+            "engagement_sum": engagement_sum,
+            "avg_sentiment": avg_sentiment,
+            "weighted_sentiment": weighted_sentiment,
             "updated_at": _utcnow(),
         }
         stmt = pg_insert(ContentSentimentAgg).values(**values)
@@ -173,11 +179,13 @@ class SqlContentRepository:
                 "avg_sentiment": (
                     ContentSentimentAgg.avg_sentiment * old_n
                     + stmt.excluded.avg_sentiment * inc_n
-                ) / total_n,
+                )
+                / total_n,
                 "weighted_sentiment": (
                     ContentSentimentAgg.weighted_sentiment * old_n
                     + stmt.excluded.weighted_sentiment * inc_n
-                ) / total_n,
+                )
+                / total_n,
                 "updated_at": stmt.excluded.updated_at,
             },
         )
@@ -218,9 +226,14 @@ class FakeContentRepository:
         out = [r for r in self.rows if r["scored_at"] is None][:limit]
         return [
             UnscoredRow(
-                id=r["id"], source=r["source"], kind=r["kind"], title=r["title"],
-                text=r["text"], symbols=list(r["symbols"]),
-                engagement=r["engagement"], published_at=r["published_at"],
+                id=r["id"],
+                source=r["source"],
+                kind=r["kind"],
+                title=r["title"],
+                text=r["text"],
+                symbols=list(r["symbols"]),
+                engagement=r["engagement"],
+                published_at=r["published_at"],
             )
             for r in out
         ]
@@ -237,16 +250,26 @@ class FakeContentRepository:
                 return
 
     async def upsert_aggregate(
-        self, *, symbol: str, kind: str, window_start: datetime, window_size: int,
-        mentions: int, unique_authors: int, engagement_sum: float,
-        avg_sentiment: float, weighted_sentiment: float,
+        self,
+        *,
+        symbol: str,
+        kind: str,
+        window_start: datetime,
+        window_size: int,
+        mentions: int,
+        unique_authors: int,
+        engagement_sum: float,
+        avg_sentiment: float,
+        weighted_sentiment: float,
     ) -> None:
         key = (symbol, kind, window_start, window_size)
         cur = self.aggregates.get(key)
         if cur is None:
             self.aggregates[key] = {
-                "mentions": mentions, "unique_authors": unique_authors,
-                "engagement_sum": engagement_sum, "avg_sentiment": avg_sentiment,
+                "mentions": mentions,
+                "unique_authors": unique_authors,
+                "engagement_sum": engagement_sum,
+                "avg_sentiment": avg_sentiment,
                 "weighted_sentiment": weighted_sentiment,
             }
         else:

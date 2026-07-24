@@ -24,11 +24,9 @@ class Provider(Protocol):
     #: (max_calls, window_seconds) proactive budget for the Redis token bucket
     rate_limit: tuple[int, int]
 
-    async def fetch(self) -> list[RawItem]:
-        ...
+    async def fetch(self) -> list[RawItem]: ...
 
-    async def close(self) -> None:
-        ...
+    async def close(self) -> None: ...
 
 
 def parse_retry_after(response: httpx.Response, *, default: float) -> float:

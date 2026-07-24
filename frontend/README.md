@@ -20,23 +20,28 @@ risque — le tout en temps réel.
 
 ```
   Navigateur (Next.js Terminal)
-        │  REST  (/api/gateway/*  → rewrite → FastAPI api-gateway :8000)
-        │  WS    (NEXT_PUBLIC_WS_URL → websocket-gateway :8080/ws)
+        │  REST lecture  (/api/gateway/*  → rewrite → api-gateway :8000)
+        │  REST écriture (/api/control/*  → rewrite → control-api :8000, dev :8001)
+        │  WS            (NEXT_PUBLIC_WS_URL → websocket-gateway :8080/ws)
         ▼
-  API Gateway FastAPI ──► Intelligence / Portfolio / Trading / Risk
-  WebSocket Gateway   ◄── Kafka (market.* / decision.* / risk.approved.*)
+  api-gateway  (READ-ONLY : opportunities / decisions / trades)
+  control-api  (auth JWT + /trading/* → control.commands → trading-engine)
+  websocket-gateway ◄── Kafka (market.* / decision.* / risk.approved.* / execution.*)
 ```
 
 - **Mode démo (par défaut)** : `NEXT_PUBLIC_USE_MOCK=1`. Un **BFF intégré**
   (`src/app/api/mock/*`) sert toutes les données et un **flux synthétique**
   (`src/lib/ws/mockStream.ts`) alimente le temps réel — aucune dépendance backend.
-- **Mode live** : `NEXT_PUBLIC_USE_MOCK=0`. Le REST est proxifié vers le
-  `api-gateway` FastAPI, le WebSocket pointe vers le `websocket-gateway`.
+- **Mode live** : `NEXT_PUBLIC_USE_MOCK=0`. Les lectures sont proxifiées vers
+  `api-gateway`, **les écritures (`/trading/*`, auth) vers `control-api`**, le
+  WebSocket pointe vers `websocket-gateway`.
 
-> ℹ️ L'`api-gateway` actuel est **lecture seule** (3 endpoints `/api/v1`). Les
-> endpoints portefeuille / trading / risque / auth consommés par ce terminal
-> (voir `src/lib/api/endpoints.ts`) doivent être ajoutés côté backend pour le
-> mode live ; ils sont entièrement implémentés par le BFF de démo.
+> ℹ️ Le **plan de contrôle est câblé pour le live** (endpoints → control-api).
+> En revanche l'`api-gateway` est **lecture seule** et n'expose que
+> `/api/v1/{opportunities,decisions,trades}` : les endpoints portefeuille /
+> marché / risque consommés par ce terminal (voir `src/lib/api/endpoints.ts`)
+> restent à ajouter côté backend pour le live ; ils sont entièrement implémentés
+> par le BFF de démo.
 
 ## Démarrage
 

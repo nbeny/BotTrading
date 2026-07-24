@@ -4,18 +4,22 @@ Event-driven crypto **market-intelligence + autonomous trading** platform. Pytho
 microservices over a Kafka bus, PostgreSQL/TimescaleDB + Redis, Next.js control terminal,
 Traefik reverse proxy. Not HFT — it detects opportunities/risks and executes guarded trades.
 
-The README (`README.md`) covers the collection/analysis pipeline. This file focuses on the
-**runtime architecture** and the parts the README is out of date on (control-api,
-trading-engine, websocket-gateway, frontend wiring).
+The README (`README.md`) covers the collection/analysis pipeline. This file drills into the
+**runtime architecture** — control-api, trading-engine, websocket-gateway, frontend wiring.
 
 ## Pipeline (data → decision)
 
 ```
-collectors ─► Kafka ─► sentiment-service ─┐
-              │        ai-worker-haiku  ───┼─► ai-worker-sonnet ─► decision-engine
-              │        decision-engine  ───┘
-              └─────────────────────────────────► risk-engine ─► risk.approved.events
+coingecko/dexscreener  ─► Kafka (price/volume/dex) ────────────────────┐
+social/news collectors ─► Postgres raw_content ─► sentiment-service ────┤ (→ sentiment.events)
+                                                                        ▼
+                                          ai-worker-haiku ─► ai-worker-sonnet ─┐
+                                          decision-engine ───────────────────┼─► risk-engine
+                                                                              ┘   ─► risk.approved.events
+                                                                                      ─► trading-engine ─► execution.events
 ```
+`ai-worker-haiku` consumes `price/volume/dex/sentiment` (the social/news Kafka topics are now
+orphaned — social/news ingestion flows through `raw_content`, not Kafka).
 Collectors (coingecko, dexscreener) are stateless producers. Social + news ingestion runs
 as two fan-out services — `collector-social` (Bluesky, Reddit, Mastodon, 4chan, Farcaster,
 YouTube, Lens) and `collector-news` (CryptoCompare, RSS, GDELT, NewsData) — where each platform

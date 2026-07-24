@@ -3,34 +3,52 @@
 ## Flux principal (end-to-end)
 
 ```
-                 poll HTTP
- CoinGecko  ─────────────────►  collector-coingecko ──► market.price.events
+                 poll HTTP (Kafka)
+ CoinGecko  ─────────────────►  collector-coingecko ──► market.price/volume.events
  DexScreener ────────────────►  collector-dexscreener ─► market.dex.events
- Bluesky→Reddit ─────────────►  collector-social ─────► market.social.events
- CryptoCompare→RSS ──────────►  collector-news ───────► market.news.events
 
- market.news.events ┐
- market.social.events ┴──────►  sentiment-service ────► market.sentiment.events
+                 poll HTTP par plateforme (fan-out, pas de cascade)
+ Bluesky/Reddit/Mastodon/4chan/Farcaster/YouTube/Lens ─► collector-social ─┐
+ CryptoCompare/RSS/GDELT/NewsData ────────────────────► collector-news ────┤
+                                                                           ▼
+                                                         Postgres  raw_content
+                                                                           │  (scored_at IS NULL)
+                                                         sentiment-service ─┤
+                                                         (HF, score le DB,  │
+                                                          upsert agg)       ▼
+                                                              market.sentiment.events
 
- price/volume/dex/news/social/sentiment ─► ai-worker-haiku
-                                                │  (corrélation par symbole,
-                                                │   score rapide 0-100)
-                                                ▼
-                                       market.analysis.events
-                                         │                 │
-                          escalate=true  │                 │ (toujours)
-                                         ▼                 ▼
-                                 ai-worker-sonnet    decision-engine
-                                 (validation IA)     (scoring déterministe)
-                                         │                 │
-                                         └──────► decision.events ◄──┘
-                                                     │
-                                                     ▼
-                                                risk-engine
-                                          (SL/TP, exposition, blacklist)
-                                                     │
-                                                     ▼
-                                          risk.approved.events ──► moteur de trading
+ price/volume/dex/sentiment ─► ai-worker-haiku
+                                     │  (corrélation par symbole, score rapide 0-100)
+                                     ▼
+                            market.analysis.events
+                              │                 │
+               escalate=true  │                 │ (toujours)
+                              ▼                 ▼
+                      ai-worker-sonnet    decision-engine
+                      (validation IA)     (scoring déterministe)
+                              │                 │
+                              └──────► decision.events ◄──┘
+                                          │
+                                          ▼
+                                     risk-engine (SL/TP, exposition, blacklist)
+                                          │
+                                          ▼
+                                 risk.approved.events ──► trading-engine (Kraken Futures)
+                                                               │
+                                                               ▼
+                                                        execution.events
+```
+
+## Plan de contrôle (opérateur)
+
+```
+ web-terminal ─REST /trading/*─► control-api ─► control.commands ─► trading-engine
+   (JWT)                          (aucune écriture DB)      (applique + mute Redis trading:*)
+
+ trading-engine ─► execution.events ┐
+ market/decision/risk topics ───────┴► websocket-gateway ─WS /ws?token=─► web-terminal
+ api-gateway (Kafka→Postgres) ─REST GET /api/v1/*─► web-terminal (lecture)
 ```
 
 ## Séquence de corrélation (un token)
@@ -38,8 +56,9 @@
 ```
 t0  PriceEvent(SOL, +8%/24h)            ─► haiku feature store: {price_change_24h:+8}
 t1  VolumeEvent(SOL, spike x4)          ─► features: {volume_spike_ratio:4}
-t2  SocialEvent(SOL, mentions +120%)    ─► features: {social_growth:1.2}
+t2  DexEvent(SOL, liquidité +)          ─► features: {liquidity_usd:...}
 t3  SentimentEvent(SOL, +0.7)           ─► features: {sentiment_score:0.7}
+    (SentimentEvent agrège l'ingestion sociale/news scorée depuis raw_content)
        ↓ (haiku a market + signal → analyse)
     AnalysisEvent(SOL, score=82, escalate=true)
        ↓                                   ↓
@@ -103,5 +122,22 @@ t3  SentimentEvent(SOL, +0.7)           ─► features: {sentiment_score:0.7}
   "event_type": "RiskApprovedEvent","source": "risk-engine","symbol": "SOL",
   "direction": "long","entry_price": 150,"stop_loss": 142,"take_profit": 165,
   "confidence": 0.87,"position_size_pct": 0.043,"risk_reward_ratio": 1.87
+}
+```
+
+### `control.commands` — ControlCommandEvent (opérateur → trading-engine)
+```json
+{
+  "event_type": "ControlCommandEvent","source": "control-api",
+  "command": "set_mode","payload": { "mode": "demo" },"issued_by": "admin"
+}
+```
+
+### `execution.events` — ExecutionEvent (trading-engine → api-gateway / WS)
+```json
+{
+  "event_type": "ExecutionEvent","source": "trading-engine","kind": "filled",
+  "symbol": "SOL","direction": "long","risk_event_id": "c-9981",
+  "kraken_order_id": "OABC-123","fill_price": 150.2,"size": 1.5,"pnl": null
 }
 ```

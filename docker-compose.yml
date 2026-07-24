@@ -184,6 +184,8 @@ services:
       REDDIT_SUBREDDITS: ${REDDIT_SUBREDDITS:-CryptoCurrency,CryptoMoonShots,solana}
       REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID:-}
       REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET:-}
+      MASTODON_INSTANCE: ${MASTODON_INSTANCE:-mastodon.social}
+      MASTODON_HASHTAG: ${MASTODON_HASHTAG:-crypto}
       SOURCE_BREAKER_COOLDOWN: ${SOURCE_BREAKER_COOLDOWN:-300}
     labels:
       - traefik.enable=true
@@ -207,6 +209,7 @@ services:
       NEWS_POLL_INTERVAL: ${NEWS_POLL_INTERVAL:-300}
       CRYPTOCOMPARE_API_KEY: ${CRYPTOCOMPARE_API_KEY:-}
       RSS_FEEDS: ${RSS_FEEDS:-}
+      GDELT_QUERY: ${GDELT_QUERY:-cryptocurrency}
       SOURCE_BREAKER_COOLDOWN: ${SOURCE_BREAKER_COOLDOWN:-300}
     labels:
       - traefik.enable=true

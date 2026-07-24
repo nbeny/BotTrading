@@ -17,19 +17,12 @@ collectors ─► Kafka ─► sentiment-service ─┐
               └─────────────────────────────────► risk-engine ─► risk.approved.events
 ```
 Collectors (coingecko, dexscreener) are stateless producers. Social + news ingestion runs
-as two fan-out services — `collector-social` (Bluesky, Reddit, …) and `collector-news`
-(CryptoCompare, RSS, …) — where each platform runs its own adaptive poll loop that
+as two fan-out services — `collector-social` (Bluesky, Reddit, Mastodon, 4chan) and
+`collector-news` (CryptoCompare, RSS, GDELT) — where each platform runs its own adaptive poll loop that
 self-throttles on its rate limit (learned from the API's headers) and persists raw items to
 Postgres `raw_content`. `sentiment-service` scores unscored rows from the DB, upserts
 `content_sentiment_agg`, and still publishes `SentimentEvent` on Kafka for decision-engine.
 `risk-engine` emits `risk.approved.events`, the input to the execution core.
-
-⚠️ **Plan-2 follow-up (known gap):** collectors no longer produce `SocialEvent`/`NewsEvent`
-on Kafka, but `ai-worker-haiku` still subscribes to `market.{news,social}.events` and builds
-`social_growth`/`has_news`/`news_title` features from them — those features are now **dark**
-(sentiment still reaches haiku via `market.sentiment.events`). `websocket-gateway` also still
-broadcasts the two now-silent topics. Rewire haiku's social/news features off
-`content_sentiment_agg` / `SentimentEvent` in Plan 2.
 
 ## Control / execution plane (this is the important part)
 

@@ -111,7 +111,9 @@ class RedditProvider:
                     a = agg[symbol]
                     a["mentions"] += 1
                     a["authors"].add(post.get("author"))
-                    a["engagement"] += post.get("score", 0) + post.get("num_comments", 0)
+                    a["engagement"] += post.get("score", 0) + post.get(
+                        "num_comments", 0
+                    )
                     a["subreddit"] = sub
                     if len(a["titles"]) < 5:
                         a["titles"].append(title)

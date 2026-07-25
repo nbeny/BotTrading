@@ -760,7 +760,7 @@ def assemble_systems_snapshot(rows: Iterable[Any], *, now: datetime | None = Non
         "services_healthy": healthy,
         "services_degraded": degraded,
         "services_down": down,
-        "events_per_min": 0,
+        "events_per_min": int(sum(s["throughput_per_min"] for s in services)),
         "kafka_lag_total": 0,
         "ai_cost_today_usd": 0.0,
         "global_uptime_pct": round(sum(s["uptime_pct"] for s in services) / len(services), 2) if services else 0.0,

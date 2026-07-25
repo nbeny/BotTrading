@@ -50,21 +50,78 @@ def resolve_targets() -> dict[str, str]:
     return out or DEFAULT_TARGETS
 
 
+# ── Prometheus text parsing (pure, unit-tested) ───────────────────────────────
+def parse_prometheus(text: str) -> dict[str, list[tuple[dict[str, str], float]]]:
+    """Parse Prometheus exposition text into {metric: [(labels, value), ...]}."""
+    out: dict[str, list[tuple[dict[str, str], float]]] = {}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            if "{" in line and "}" in line:
+                name = line[: line.index("{")].strip()
+                labels_str = line[line.index("{") + 1 : line.rindex("}")]
+                rest = line[line.rindex("}") + 1 :].strip()
+                labels = {}
+                for part in labels_str.split(","):
+                    if "=" in part:
+                        k, v = part.split("=", 1)
+                        labels[k.strip()] = v.strip().strip('"')
+            else:
+                bits = line.rsplit(" ", 1)
+                if len(bits) != 2:
+                    continue
+                name, rest, labels = bits[0].strip(), bits[1].strip(), {}
+            value = float(rest.split()[0])
+        except (ValueError, IndexError):
+            continue
+        out.setdefault(name, []).append((labels, value))
+    return out
+
+
+def metric_sum(parsed: dict[str, list[tuple[dict[str, str], float]]], name: str) -> float:
+    return sum(v for _, v in parsed.get(name, []))
+
+
+def compute_detail(
+    parsed: dict[str, list[tuple[dict[str, str], float]]],
+    prev: dict[str, float] | None,
+    now_ts: float,
+) -> tuple[dict, dict[str, float]]:
+    """Derive {mem_mb, cpu_pct, throughput_per_min} + the next sample state.
+
+    cpu% and throughput are rates, so they need the previous cumulative sample.
+    """
+    mem = metric_sum(parsed, "process_resident_memory_bytes")
+    cpu_s = metric_sum(parsed, "process_cpu_seconds_total")
+    events = metric_sum(parsed, "events_consumed_total") + metric_sum(parsed, "events_produced_total")
+    detail: dict = {}
+    if mem:
+        detail["mem_mb"] = round(mem / 1e6)
+    if prev:
+        dt = max(1e-3, now_ts - prev["ts"])
+        detail["cpu_pct"] = round(max(0.0, (cpu_s - prev["cpu"]) / dt * 100), 1)
+        detail["throughput_per_min"] = round(max(0.0, (events - prev["events"]) / dt * 60))
+    return detail, {"ts": now_ts, "cpu": cpu_s, "events": events}
+
+
 class HealthCollector:
     def __init__(self, db: Database, interval: float = 15.0) -> None:
         self._db = db
         self._interval = interval
         self._stop = asyncio.Event()
+        self._samples: dict[str, dict[str, float]] = {}  # per-service last cumulative sample
 
-    async def _upsert(self, name: str, status: str, healthy: bool, latency_ms: float) -> None:
+    async def _upsert(self, name: str, status: str, healthy: bool, latency_ms: float, detail: dict) -> None:
         async with self._db._sessionmaker() as s:  # noqa: SLF001
             now = datetime.now(tz=timezone.utc)
             stmt = insert(ServiceHealth).values(
-                service=name, status=status, healthy=healthy, latency_ms=latency_ms, detail={}, checked_at=now
+                service=name, status=status, healthy=healthy, latency_ms=latency_ms, detail=detail, checked_at=now
             )
             stmt = stmt.on_conflict_do_update(
                 index_elements=["service"],
-                set_={"status": status, "healthy": healthy, "latency_ms": latency_ms, "checked_at": now},
+                set_={"status": status, "healthy": healthy, "latency_ms": latency_ms, "detail": detail, "checked_at": now},
             )
             await s.execute(stmt)
             await s.commit()
@@ -74,20 +131,33 @@ class HealthCollector:
 
         targets = resolve_targets()
         async with httpx.AsyncClient(timeout=3.0) as client:
-            async def probe(name: str, url: str) -> tuple[str, str, bool, float]:
+            async def probe(name: str, url: str) -> tuple[str, str, bool, float, dict]:
                 t0 = time.perf_counter()
                 try:
                     r = await client.get(url)
                     latency = (time.perf_counter() - t0) * 1000
                     healthy = r.status_code < 400
-                    return name, ("healthy" if healthy else "degraded"), healthy, latency
+                    status = "healthy" if healthy else "degraded"
                 except Exception:
-                    return name, "down", False, (time.perf_counter() - t0) * 1000
+                    return name, "down", False, (time.perf_counter() - t0) * 1000, {}
+                # best-effort /metrics scrape → real cpu/mem/throughput
+                detail: dict = {}
+                try:
+                    metrics_url = url.rsplit("/health", 1)[0] + "/metrics"
+                    mr = await client.get(metrics_url)
+                    if mr.status_code < 400:
+                        parsed = parse_prometheus(mr.text)
+                        detail, self._samples[name] = compute_detail(
+                            parsed, self._samples.get(name), time.time()
+                        )
+                except Exception:
+                    pass
+                return name, status, healthy, latency, detail
 
             results = await asyncio.gather(*(probe(n, u) for n, u in targets.items()))
-        for name, status, healthy, latency in results:
+        for name, status, healthy, latency, detail in results:
             try:
-                await self._upsert(name, status, healthy, round(latency, 1))
+                await self._upsert(name, status, healthy, round(latency, 1), detail)
             except Exception:
                 logger.exception("service_health upsert failed for %s", name)
 

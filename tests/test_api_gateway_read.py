@@ -39,6 +39,7 @@ from app.read_api import (  # noqa: E402
     map_signal_event,
     map_token,
 )
+from app.health_collector import compute_detail, metric_sum, parse_prometheus  # noqa: E402
 from app.routers import get_session_dep  # noqa: E402
 
 NOW = datetime(2026, 7, 25, 12, 0, tzinfo=timezone.utc)
@@ -369,6 +370,40 @@ def test_assemble_systems_snapshot() -> None:
     assert snap["kafka"] == [] and snap["workers"] == []
     assert snap["summary"]["services_total"] == len(SERVICE_CATALOG)
     assert snap["summary"]["services_degraded"] == 1
+
+
+_METRICS = """# HELP process_cpu_seconds_total Total user and system CPU time
+# TYPE process_cpu_seconds_total counter
+process_cpu_seconds_total 10.0
+# TYPE process_resident_memory_bytes gauge
+process_resident_memory_bytes 2.097152e+08
+# TYPE events_consumed_total counter
+events_consumed_total{service="api-gateway",topic="analysis.events"} 100.0
+events_consumed_total{service="api-gateway",topic="decision.events"} 50.0
+events_produced_total{service="api-gateway"} 20.0
+"""
+
+
+def test_parse_prometheus_and_sum() -> None:
+    p = parse_prometheus(_METRICS)
+    assert metric_sum(p, "process_resident_memory_bytes") == 2.097152e08
+    assert metric_sum(p, "events_consumed_total") == 150.0  # 100 + 50
+    assert p["events_consumed_total"][0][0]["topic"] == "analysis.events"
+
+
+def test_compute_detail_rates() -> None:
+    p = parse_prometheus(_METRICS)
+    # first sample: only mem (no prev → no rates)
+    detail1, sample1 = compute_detail(p, None, now_ts=1000.0)
+    assert detail1["mem_mb"] == 210  # 2.097152e8 / 1e6 ≈ 209.7 → 210
+    assert "cpu_pct" not in detail1
+    # second sample 10s later, cpu +5s, events +170 → cpu 50%, throughput 1020/min
+    text2 = _METRICS.replace("process_cpu_seconds_total 10.0", "process_cpu_seconds_total 15.0").replace(
+        'events_produced_total{service="api-gateway"} 20.0', 'events_produced_total{service="api-gateway"} 190.0'
+    )
+    detail2, _ = compute_detail(parse_prometheus(text2), sample1, now_ts=1010.0)
+    assert detail2["cpu_pct"] == 50.0  # 5s / 10s * 100
+    assert detail2["throughput_per_min"] == 1020  # (320-150... ) rate check
 
 
 def test_endpoint_systems_overview_wiring() -> None:

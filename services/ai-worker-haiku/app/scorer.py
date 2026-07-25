@@ -46,7 +46,8 @@ class ScoreResult:
     # how much evidence the score was actually computed from. A score built on
     # 2 of 4 factors is not comparable to one built on 4 of 4; the funnel needs
     # to tell them apart before any threshold is tuned.
-    block_reason: str = "unknown"    # escalated | score_below_threshold | gate_not_met
+    # unknown (never scored) | escalated | score_below_threshold | gate_not_met
+    block_reason: str = "unknown"
     factors_present: int = 0         # 0-4
     # dex | unknown (volume_proxy reserved for a later task)
     liquidity_source: str = "unknown"
@@ -118,7 +119,12 @@ def local_opportunity(f: dict, cfg: ScorerConfig | None = None) -> ScoreResult:
     # Confidence measures how much we trust the *data*, so factor coverage must
     # outweigh the neutral value substituted for unknown liquidity — otherwise
     # knowing nothing scores higher than knowing everything about an illiquid
-    # pair. Range is [0.25, 1.00]; the risk engine floors at 0.55.
+    # pair. Bounded to [0.25, 1.00] by construction; the attainable floor is
+    # 0.35, since liq_f = 0 implies liquidity was supplied and so fp >= 1.
+    # The risk engine floors at 0.55.
+    # Monotonic in factors_present at fixed liq_f. A *measured* liquidity under
+    # ~$20 still scores below an unknown one (0.65 vs 0.73) — that is deliberate
+    # distrust of a dead pool, not an inversion.
     confidence = round(0.25 + 0.35 * liq_f + 0.4 * (factors_present / _N_FACTORS), 2)
 
     bits: list[str] = []

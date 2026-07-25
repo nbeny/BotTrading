@@ -157,9 +157,9 @@ def test_compute_content_stats_counts_and_buckets() -> None:
     assert s["total_24h"] == 3
     assert s["social_24h"] == 2
     assert s["news_24h"] == 1
-    assert s["avg_sentiment"] == round((0.5 - 0.2 + 0.1) / 3, 2)
+    assert s["avg_sentiment"] == 0.0
     assert len(s["volume_series"]) == 12
-    assert len(s["sentiment_series"]) == 12
+    assert s["sentiment_series"] == []
     # BTC appears in all 3 rows → top mention
     assert s["mentions"][0] == {"symbol": "BTC", "count": 3}
     assert {"source": "Reddit", "count": 2} in s["top_sources"]
@@ -172,6 +172,7 @@ def test_compute_content_stats_empty() -> None:
     s = compute_content_stats([], now=NOW)
     assert s["total_24h"] == 0
     assert s["avg_sentiment"] == 0.0
+    assert s["sentiment_series"] == []
     assert s["mentions"] == []
 
 
@@ -211,7 +212,8 @@ def _client(results) -> TestClient:
 
 def test_endpoint_data_stats_wiring() -> None:
     rows = [_content(sentiment_score=0.5), _content(kind="news", sentiment_score=-0.3)]
-    client = _client([_Result(rows=rows)])
+    # 3 DB calls: raw_content scan, reader.series (_fetch_buckets), reader.window_stats (_fetch_buckets)
+    client = _client([_Result(rows=rows), _Result(rows=[]), _Result(rows=[])])
     r = client.get("/data/stats")
     assert r.status_code == 200
     body = r.json()

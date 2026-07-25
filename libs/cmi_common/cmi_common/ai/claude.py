@@ -319,18 +319,22 @@ class CliTransport(_Transport):
                 logger.warning("claude CLI timeout for %s", service)
                 return ClaudeResponse(text="")
             if proc.returncode != 0:
-                is_quota = _is_quota(err)
+                # The CLI reports the failure in the stdout JSON `result`
+                # (e.g. "usage limit reached|<epoch>", "Not logged in"), usually
+                # with an EMPTY stderr — so scan both streams for the signal.
+                blob = out + b"\n" + err
+                is_quota = _is_quota(blob)
                 outcome = "quota" if is_quota else "error"
                 AI_CLI_CALLS.labels(service, self._model, outcome).inc()
                 logger.warning(
                     "claude CLI exit %s (%s): %s",
                     proc.returncode,
                     outcome,
-                    err.decode(errors="replace")[:500],
+                    blob.decode(errors="replace")[:500],
                 )
                 if is_quota:
                     return ClaudeResponse(
-                        text="", quota_exceeded=True, reset_at=_parse_reset(err)
+                        text="", quota_exceeded=True, reset_at=_parse_reset(blob)
                     )
                 return ClaudeResponse(text="")
             return self._parse(out, service)

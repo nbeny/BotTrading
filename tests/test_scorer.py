@@ -1,25 +1,11 @@
-"""Deterministic opportunity scorer — the LLM-free triage layer.
-
-Loaded via importlib under a unique name so it doesn't shadow the `app` package
-of the other services when the whole suite runs in one pytest session.
-"""
+"""Deterministic opportunity scorer — the LLM-free triage layer."""
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
-
 import pytest
+from service_modules import load_service_module
 
-_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "services" / "ai-worker-haiku" / "app" / "scorer.py"
-)
-_spec = importlib.util.spec_from_file_location("haiku_scorer", _PATH)
-scorer = importlib.util.module_from_spec(_spec)
-sys.modules["haiku_scorer"] = scorer  # dataclasses resolve types via sys.modules
-_spec.loader.exec_module(scorer)
+scorer = load_service_module("ai-worker-haiku", "scorer")
 ScorerConfig = scorer.ScorerConfig
 local_opportunity = scorer.local_opportunity
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from service_modules import load_service_module
 
-sc = load_service_module("ai-worker-haiku", "scorer", "haiku_app")
+sc = load_service_module("ai-worker-haiku", "scorer")
 
 
 def test_typical_major_pair_is_blocked_by_score() -> None:

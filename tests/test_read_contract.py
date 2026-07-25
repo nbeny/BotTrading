@@ -7,29 +7,25 @@ drift: a renamed/removed response field breaks this test in CI, not the browser.
 
 from __future__ import annotations
 
-import sys
 from datetime import datetime, timezone
-from pathlib import Path
 from types import SimpleNamespace
 
-_SVC = Path(__file__).resolve().parents[1] / "services" / "api-gateway"
-if str(_SVC) not in sys.path:
-    sys.path.insert(0, str(_SVC))
+from service_modules import load_service_module
 
-from app import read_api  # noqa: E402
-from app.read_api import (  # noqa: E402
-    compute_exposure,
-    compute_portfolio,
-    compute_risk_alerts,
-    compute_risk_limits,
-    map_decision,
-    map_news,
-    map_portfolio_trade,
-    map_position,
-    map_price_point,
-    map_token,
-)
-from app.read_contract import CONTRACT  # noqa: E402
+read_api = load_service_module("api-gateway", "read_api")
+
+compute_exposure = read_api.compute_exposure
+compute_portfolio = read_api.compute_portfolio
+compute_risk_alerts = read_api.compute_risk_alerts
+compute_risk_limits = read_api.compute_risk_limits
+map_decision = read_api.map_decision
+map_news = read_api.map_news
+map_portfolio_trade = read_api.map_portfolio_trade
+map_position = read_api.map_position
+map_price_point = read_api.map_price_point
+map_token = read_api.map_token
+
+CONTRACT = load_service_module("api-gateway", "read_contract").CONTRACT
 
 NOW = datetime(2026, 7, 25, 12, 0, tzinfo=timezone.utc)
 

@@ -6,9 +6,10 @@ of them in one pytest session makes the second shadow the first in
 FeatureStore`` resolves against the wrong service and raises ModuleNotFoundError
 — which aborted collection of the whole suite.
 
-Registering each service under a distinct alias (``haiku_app``, ``gateway_app``,
-…) gives every module a parent package rooted at its own service directory, so
-relative imports resolve within that service and nowhere else.
+Registering each service under a distinct alias (``ai_worker_haiku_app``,
+``api_gateway_app``, …) gives every module a parent package rooted at its own
+service directory, so relative imports resolve within that service and nowhere
+else.
 """
 
 from __future__ import annotations
@@ -21,13 +22,15 @@ from types import ModuleType
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def load_service_module(service: str, module: str, alias: str) -> ModuleType:
+def load_service_module(service: str, module: str) -> ModuleType:
     """Import ``services/<service>/app/<module>.py`` as ``<alias>.<module>``.
 
-    ``alias`` must be unique per service across the whole test suite — that
-    uniqueness is the entire point. The parent package is created with its
-    search path pinned to the service's ``app/`` directory.
+    The alias is derived from ``service`` rather than passed in, so uniqueness
+    holds by construction. A caller-supplied alias could collide silently: the
+    module would load under another service's ``__path__``, or the cache would
+    hand back the wrong service's module — with no error either way.
     """
+    alias = service.replace("-", "_") + "_app"
     app_dir = _REPO_ROOT / "services" / service / "app"
 
     if alias not in sys.modules:
@@ -48,7 +51,7 @@ def load_service_module(service: str, module: str, alias: str) -> ModuleType:
     spec = importlib.util.spec_from_file_location(qualified, app_dir / f"{module}.py")
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
-    # Registered before exec so dataclasses and relative imports can resolve it.
+    # Registered before exec: dataclasses resolves ClassVar via sys.modules[__module__].
     sys.modules[qualified] = mod
     spec.loader.exec_module(mod)
     return mod

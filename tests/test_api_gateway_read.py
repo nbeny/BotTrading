@@ -7,44 +7,44 @@ verified with a fake session via FastAPI's dependency override.
 
 from __future__ import annotations
 
-import sys
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from service_modules import load_service_module
 
-# The service package is named `app`; add its dir to the path.
-_SVC = Path(__file__).resolve().parents[1] / "services" / "api-gateway"
-if str(_SVC) not in sys.path:
-    sys.path.insert(0, str(_SVC))
+# Every service ships a package named `app`; load this one under its own alias.
+read_api = load_service_module("api-gateway", "read_api")
+_health_collector = load_service_module("api-gateway", "health_collector")
+_routers = load_service_module("api-gateway", "routers")
 
-from app import read_api  # noqa: E402
-from app.read_api import (  # noqa: E402
-    SERVICE_CATALOG,
-    assemble_systems_snapshot,
-    assemble_trace,
-    build_collectors,
-    build_infra,
-    build_kafka,
-    build_workers,
-    compute_content_stats,
-    compute_exposure,
-    compute_portfolio,
-    compute_risk_alerts,
-    compute_risk_limits,
-    map_content,
-    map_decision,
-    map_news,
-    map_position,
-    map_portfolio_trade,
-    map_price_point,
-    map_signal_event,
-    map_token,
-)
-from app.health_collector import compute_detail, metric_sum, parse_prometheus  # noqa: E402
-from app.routers import get_session_dep  # noqa: E402
+SERVICE_CATALOG = read_api.SERVICE_CATALOG
+assemble_systems_snapshot = read_api.assemble_systems_snapshot
+assemble_trace = read_api.assemble_trace
+build_collectors = read_api.build_collectors
+build_infra = read_api.build_infra
+build_kafka = read_api.build_kafka
+build_workers = read_api.build_workers
+compute_content_stats = read_api.compute_content_stats
+compute_exposure = read_api.compute_exposure
+compute_portfolio = read_api.compute_portfolio
+compute_risk_alerts = read_api.compute_risk_alerts
+compute_risk_limits = read_api.compute_risk_limits
+map_content = read_api.map_content
+map_decision = read_api.map_decision
+map_news = read_api.map_news
+map_position = read_api.map_position
+map_portfolio_trade = read_api.map_portfolio_trade
+map_price_point = read_api.map_price_point
+map_signal_event = read_api.map_signal_event
+map_token = read_api.map_token
+
+compute_detail = _health_collector.compute_detail
+metric_sum = _health_collector.metric_sum
+parse_prometheus = _health_collector.parse_prometheus
+
+get_session_dep = _routers.get_session_dep
 
 NOW = datetime(2026, 7, 25, 12, 0, tzinfo=timezone.utc)
 

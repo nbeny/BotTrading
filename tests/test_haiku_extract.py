@@ -6,7 +6,7 @@ from service_modules import load_service_module
 
 from cmi_common.events.sentiment import SentimentEvent
 
-hw = load_service_module("ai-worker-haiku", "worker", "haiku_app")
+hw = load_service_module("ai-worker-haiku", "worker")
 
 
 def _extract(event):

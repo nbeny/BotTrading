@@ -2,14 +2,9 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
+from service_modules import load_service_module
 
-_SVC = Path(__file__).resolve().parents[1] / "services" / "api-gateway"
-if str(_SVC) not in sys.path:
-    sys.path.insert(0, str(_SVC))
-
-from app import read_api  # noqa: E402
+read_api = load_service_module("api-gateway", "read_api")
 
 
 class _StubReader:

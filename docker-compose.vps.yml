@@ -173,6 +173,9 @@ services:
       <<: *common-env
       SOCIAL_POLL_INTERVAL: ${SOCIAL_POLL_INTERVAL:-300}
       BLUESKY_QUERY: ${BLUESKY_QUERY:-crypto}
+      # Auth bypasses the datacenter-IP 403 on Bluesky's public AppView.
+      BLUESKY_IDENTIFIER: ${BLUESKY_IDENTIFIER:-}
+      BLUESKY_APP_PASSWORD: ${BLUESKY_APP_PASSWORD:-}
       REDDIT_SUBREDDITS: ${REDDIT_SUBREDDITS:-CryptoCurrency,CryptoMoonShots,solana}
       REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID:-}
       REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET:-}

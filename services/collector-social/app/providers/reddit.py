@@ -40,13 +40,39 @@ class RedditProvider:
     async def close(self) -> None:
         await self._client.aclose()
 
-    async def _fetch_sub(self, sub: str) -> list[dict[str, Any]]:
-        url = f"https://www.reddit.com/r/{sub}/new.json"
+    async def _ensure_token(self) -> str | None:
+        """Application-only (userless) OAuth token. Reddit blocks the public
+        .json endpoint from datacenter IPs (403); the OAuth API does not."""
+        if not (self._client_id and self._client_secret):
+            return None
+        if self._token:
+            return self._token
+        resp = await self._client.post(
+            "https://www.reddit.com/api/v1/access_token",
+            data={"grant_type": "client_credentials"},
+            auth=(self._client_id, self._client_secret),
+        )
+        resp.raise_for_status()
+        self._token = resp.json().get("access_token")
+        return self._token
+
+    async def _fetch_sub(self, sub: str, *, retried: bool = False) -> list[dict[str, Any]]:
+        token = await self._ensure_token()
+        if token:
+            url = f"https://oauth.reddit.com/r/{sub}/new"
+            headers = {"Authorization": f"Bearer {token}"}
+        else:
+            url = f"https://www.reddit.com/r/{sub}/new.json"
+            headers = {}
         try:
-            resp = await self._client.get(url, params={"limit": 100})
+            resp = await self._client.get(url, params={"limit": 100}, headers=headers)
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 429:
+            code = exc.response.status_code
+            if code == 401 and token and not retried:
+                self._token = None  # expired -> refresh once
+                return await self._fetch_sub(sub, retried=True)
+            if code == 429:
                 raise RateLimitedError(
                     parse_retry_after(exc.response, default=60)
                 ) from exc

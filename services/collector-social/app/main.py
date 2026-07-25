@@ -33,7 +33,11 @@ SUBREDDITS = os.getenv(
 
 def _build_providers() -> list[Provider]:
     providers: list[Provider] = [
-        BlueskyProvider(query=os.getenv("BLUESKY_QUERY", "crypto"))
+        BlueskyProvider(
+            query=os.getenv("BLUESKY_QUERY", "crypto"),
+            identifier=os.getenv("BLUESKY_IDENTIFIER") or None,
+            app_password=os.getenv("BLUESKY_APP_PASSWORD") or None,
+        )
     ]
     providers.append(
         RedditProvider(

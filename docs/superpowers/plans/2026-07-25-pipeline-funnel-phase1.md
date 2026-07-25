@@ -790,7 +790,9 @@ async def test_low_score_publishes_a_rejection() -> None:
     assert event.event_type == "RiskRejectedEvent"
     assert event.symbol == "BTC"
     assert "below decision threshold" in event.reason
-    assert event.source is Source.DECISION_ENGINE
+    # `==`, not `is`: BaseEvent sets use_enum_values=True, so the field holds the
+    # plain string "decision-engine" and identity against the enum never holds.
+    assert event.source == Source.DECISION_ENGINE
 
 
 @pytest.mark.asyncio

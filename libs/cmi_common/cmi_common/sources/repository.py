@@ -12,11 +12,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db.models import ContentSentimentAgg, RawContent
+from ..db.models import ContentSentimentAgg, ContentSentimentAggDaily, RawContent
 from .raw import RawItem
 
 
@@ -73,6 +73,8 @@ class ContentRepository(Protocol):
         weighted_score_sum: float,
         engagement_sum: float,
     ) -> None: ...
+
+    async def compact_hourly_to_daily(self, *, older_than: datetime) -> int: ...
 
 
 class SqlContentRepository:
@@ -178,6 +180,64 @@ class SqlContentRepository:
         await self._session.execute(stmt)
         await self._session.commit()
 
+    async def compact_hourly_to_daily(self, *, older_than: datetime) -> int:
+        """Roll hourly buckets older than ``older_than`` into daily buckets.
+
+        The daily upsert (additive) and the delete of the compacted hourly rows
+        run in one transaction, so a day is never represented in both tables and
+        re-running is a no-op. ``date_trunc(..., 'UTC')`` floors to UTC midnight
+        regardless of the session timezone. Returns the hourly row count removed.
+        """
+        h = ContentSentimentAgg
+        d = ContentSentimentAggDaily
+        day = func.date_trunc("day", h.bucket_start, "UTC")
+        src = (
+            select(
+                h.symbol,
+                h.kind,
+                day.label("bucket_start"),
+                func.sum(h.mentions).label("mentions"),
+                func.sum(h.score_sum).label("score_sum"),
+                func.sum(h.confidence_sum).label("confidence_sum"),
+                func.sum(h.weighted_score_sum).label("weighted_score_sum"),
+                func.sum(h.engagement_sum).label("engagement_sum"),
+            )
+            .where(h.bucket_start < older_than)
+            .group_by(h.symbol, h.kind, day)
+        )
+        ins = pg_insert(d).from_select(
+            [
+                "symbol",
+                "kind",
+                "bucket_start",
+                "mentions",
+                "score_sum",
+                "confidence_sum",
+                "weighted_score_sum",
+                "engagement_sum",
+            ],
+            src,
+        )
+        stmt = ins.on_conflict_do_update(
+            index_elements=["symbol", "kind", "bucket_start"],
+            set_={
+                "mentions": d.mentions + ins.excluded.mentions,
+                "score_sum": d.score_sum + ins.excluded.score_sum,
+                "confidence_sum": d.confidence_sum + ins.excluded.confidence_sum,
+                "weighted_score_sum": (
+                    d.weighted_score_sum + ins.excluded.weighted_score_sum
+                ),
+                "engagement_sum": d.engagement_sum + ins.excluded.engagement_sum,
+                "updated_at": func.now(),
+            },
+        )
+        await self._session.execute(stmt)
+        result = await self._session.execute(
+            delete(h).where(h.bucket_start < older_than)
+        )
+        await self._session.commit()
+        return int(getattr(result, "rowcount", 0) or 0)
+
 
 def _utcnow() -> datetime:
     return datetime.now(tz=UTC)
@@ -189,6 +249,9 @@ class FakeContentRepository:
 
     rows: list[dict[str, Any]] = field(default_factory=list)
     aggregates: dict[tuple[str, str, datetime], dict[str, Any]] = field(
+        default_factory=dict
+    )
+    daily: dict[tuple[str, str, datetime], dict[str, Any]] = field(
         default_factory=dict
     )
     _seq: int = 0
@@ -261,3 +324,21 @@ class FakeContentRepository:
         else:
             for k, v in inc.items():
                 cur[k] += v
+
+    async def compact_hourly_to_daily(self, *, older_than: datetime) -> int:
+        compacted = 0
+        for key in list(self.aggregates):
+            symbol, kind, bucket_start = key
+            if bucket_start >= older_than:
+                continue
+            day = bucket_start.replace(hour=0, minute=0, second=0, microsecond=0)
+            dkey = (symbol, kind, day)
+            src = self.aggregates.pop(key)
+            dst = self.daily.get(dkey)
+            if dst is None:
+                self.daily[dkey] = dict(src)
+            else:
+                for k in src:
+                    dst[k] += src[k]
+            compacted += 1
+        return compacted

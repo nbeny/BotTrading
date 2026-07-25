@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+from datetime import UTC, datetime, timedelta
 
 from fastapi import FastAPI
 
@@ -19,6 +21,8 @@ from .worker import SentimentDbWorker
 MODEL_NAME = os.getenv("SENTIMENT_MODEL", "ElKulako/cryptobert")
 WORKER_INTERVAL = float(os.getenv("SENTIMENT_WORKER_INTERVAL", "10"))
 BATCH = int(os.getenv("SENTIMENT_BATCH", "100"))
+COMPACT_INTERVAL = float(os.getenv("SENTIMENT_COMPACT_INTERVAL", "21600"))  # 6h
+HOURLY_RETENTION_DAYS = int(os.getenv("SENTIMENT_HOURLY_RETENTION_DAYS", "35"))
 
 
 async def _startup(app: FastAPI, settings: Settings) -> None:
@@ -34,16 +38,35 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
             )
             await worker.run_once()
 
+    async def _compact() -> None:
+        async with db.sessionmaker() as session:
+            cutoff = datetime.now(tz=UTC).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            ) - timedelta(days=HOURLY_RETENTION_DAYS)
+            n = await SqlContentRepository(session).compact_hourly_to_daily(
+                older_than=cutoff
+            )
+            if n:
+                logging.getLogger("sentiment-service").info(
+                    "compacted %d hourly buckets into daily", n
+                )
+
     app.state.producer = producer
     app.state.db = db
     app.state.worker_task = asyncio.create_task(
         run_periodic(_tick, WORKER_INTERVAL, name="sentiment-worker")
     )
+    app.state.compact_task = asyncio.create_task(
+        run_periodic(_compact, COMPACT_INTERVAL, name="sentiment-compaction")
+    )
 
 
 async def _shutdown(app: FastAPI, settings: Settings) -> None:
     app.state.worker_task.cancel()
-    await asyncio.gather(app.state.worker_task, return_exceptions=True)
+    app.state.compact_task.cancel()
+    await asyncio.gather(
+        app.state.worker_task, app.state.compact_task, return_exceptions=True
+    )
     await app.state.db.dispose()
     await app.state.producer.stop()
 

@@ -93,3 +93,29 @@ async def test_series_returns_exactly_points_gap_filled() -> None:
     assert out[-1]["hour"] == current_hour.isoformat()       # oldest→newest
     assert out[9]["mentions"] == 2 and out[9]["sentiment"] == pytest.approx(0.5)
     assert out[0]["mentions"] == 0 and out[0]["sentiment"] == 0.0  # zero-filled
+
+
+class _QueueSession:
+    """AsyncSession double returning a different result per execute() call."""
+
+    def __init__(self, *result_rows):
+        self._q = list(result_rows)
+
+    async def execute(self, _stmt):
+        return _FakeResult(self._q.pop(0))
+
+
+async def test_window_stats_unions_hourly_and_daily() -> None:
+    from cmi_common.sources import SqlSentimentAggReader
+
+    now = datetime(2024, 6, 1, tzinfo=timezone.utc)
+    hourly = [(now - timedelta(hours=1), 1, 1.0, 1.0, 1.0, 0.0)]     # recent
+    daily = [(now - timedelta(days=200), 1, -1.0, 1.0, -1.0, 0.0)]   # aged-out
+    # window_stats fetches hourly first, then daily.
+    reader = SqlSentimentAggReader(_QueueSession(hourly, daily))
+
+    out = await reader.window_stats(symbol="BTC", kind="all", window="5y", now=now)
+
+    assert out["mentions"] == 2                       # both tables unioned
+    assert out["avg"] == pytest.approx(0.0)           # (1.0 + -1.0) / 2
+    assert out["window"] == "5y"

@@ -21,6 +21,7 @@ from .repository import (
 )
 
 __all__ = [
+    "WINDOWS",
     "AdaptivePollLoop",
     "BucketRow",
     "CircuitBreaker",
@@ -31,7 +32,6 @@ __all__ = [
     "RawItem",
     "SqlContentRepository",
     "SqlSentimentAggReader",
-    "WINDOWS",
     "aggregate_buckets",
     "parse_retry_after",
     "raw_item_to_row",

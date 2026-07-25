@@ -15,6 +15,7 @@ can be unit-tested without a database.
 
 from __future__ import annotations
 
+import os
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
@@ -409,7 +410,7 @@ def assemble_trace(cid: str, signal: Any | None, decision: Any | None, trade: An
         },
         {
             "kind": "order",
-            "at": _iso(getattr(trade, "updated_at", None)),
+            "at": _iso(getattr(trade, "created_at", None)),
             "reached": filled,
             "summary": "Ordre exécuté" if filled else "Ordre en attente",
             "detail": {
@@ -453,3 +454,230 @@ async def data_stats(session: AsyncSession = Depends(get_session_dep)) -> dict:
     )
     rows = (await session.execute(stmt)).scalars().all()
     return compute_content_stats(rows)
+
+
+# ── portfolio / risk (derived from the persisted trades ledger + prices) ──────
+# The trades table is the durable source; positions are re-priced against the
+# latest persisted price. Absolute sizing uses a configured base capital (the
+# risk-approved events only carry a size *fraction*). Documented assumption.
+BASE_CAPITAL = float(os.getenv("CMI_BASE_CAPITAL_USD", "100000"))
+OPEN_STATUSES = ("submitted", "filled")
+DAILY_LOSS_LIMIT = 2000.0
+MAX_EXPOSURE_PCT = 80.0
+MAX_ASSET_PCT = 30.0
+
+
+def map_position(trade: Any, price: Any | None, base_capital: float = BASE_CAPITAL) -> dict:
+    entry = _num(trade.entry_price)
+    qty = round((base_capital * _num(trade.position_size_pct)) / entry, 6) if entry else 0.0
+    cur = _num(getattr(price, "price_usd", None)) or entry
+    value = round(qty * cur, 2)
+    cost = qty * entry
+    pnl = round((value - cost) if trade.direction == "long" else (cost - value), 2)
+    return {
+        "position_id": trade.event_id,
+        "symbol": trade.symbol,
+        "direction": trade.direction,
+        "quantity": qty,
+        "entry_price": entry,
+        "current_price": round(cur, 6),
+        "value_usd": value,
+        "unrealized_pnl_usd": pnl,
+        "unrealized_pnl_pct": round((pnl / cost) * 100, 2) if cost else 0.0,
+        "stop_loss": _num(trade.stop_loss) or None,
+        "take_profit": _num(trade.take_profit) or None,
+        "protected": bool(trade.stop_loss and trade.take_profit),
+        "opened_at": _iso(trade.created_at),
+        "mode": "live",
+    }
+
+
+def map_portfolio_trade(trade: Any, base_capital: float = BASE_CAPITAL) -> dict:
+    entry = _num(trade.entry_price)
+    price = _num(trade.fill_price) or entry
+    qty = round((base_capital * _num(trade.position_size_pct)) / entry, 6) if entry else 0.0
+    status = "filled" if str(trade.status).lower() in {"filled", "closed"} else str(trade.status)
+    return {
+        "trade_id": trade.event_id,
+        "symbol": trade.symbol,
+        "side": "buy" if trade.direction == "long" else "sell",
+        "order_type": "market",
+        "price": round(price, 6),
+        "quantity": qty,
+        "cost_usd": round(price * qty, 2),
+        "fee_usd": round(price * qty * 0.0016, 4),
+        "pnl_usd": _num(trade.pnl) if trade.pnl is not None else None,
+        "status": status,
+        "mode": "live",
+        "executed_at": _iso(trade.created_at),
+    }
+
+
+def compute_portfolio(positions: list[dict], realized_24h: float, base_capital: float = BASE_CAPITAL, *, now: datetime | None = None) -> dict:
+    now = now or datetime.now(tz=timezone.utc)
+    invested = round(sum(p["value_usd"] for p in positions), 2)
+    cost_basis = sum(p["quantity"] * p["entry_price"] for p in positions)
+    unrealized = round(sum(p["unrealized_pnl_usd"] for p in positions), 2)
+    cash = round(base_capital - cost_basis, 2)
+    total = round(cash + invested, 2)
+    return {
+        "total_value_usd": total,
+        "cash_usd": cash,
+        "kraken_balance_usd": round(cash * 0.8, 2),
+        "invested_usd": invested,
+        "unrealized_pnl_usd": unrealized,
+        "unrealized_pnl_pct": round(unrealized / total * 100, 2) if total else 0.0,
+        "realized_pnl_24h_usd": round(realized_24h, 2),
+        "pnl_24h_pct": round(realized_24h / base_capital * 100, 2) if base_capital else 0.0,
+        "updated_at": now.isoformat(),
+    }
+
+
+def compute_exposure(positions: list[dict], total: float, daily_loss: float = 0.0, *, now: datetime | None = None) -> dict:
+    now = now or datetime.now(tz=timezone.utc)
+    by_asset = [
+        {
+            "symbol": p["symbol"],
+            "exposure_usd": p["value_usd"],
+            "exposure_pct": round(p["value_usd"] / total * 100, 2) if total else 0.0,
+            "limit_pct": MAX_ASSET_PCT,
+            "protected": p["protected"],
+        }
+        for p in positions
+    ]
+    texp = round(sum(a["exposure_usd"] for a in by_asset), 2)
+    return {
+        "total_exposure_usd": texp,
+        "total_exposure_pct": round(texp / total * 100, 2) if total else 0.0,
+        "max_exposure_pct": MAX_EXPOSURE_PCT,
+        "by_asset": by_asset,
+        "protected_positions": sum(1 for p in positions if p["protected"]),
+        "open_positions": len(positions),
+        "daily_loss_usd": round(daily_loss, 2),
+        "daily_loss_limit_usd": DAILY_LOSS_LIMIT,
+        "updated_at": now.isoformat(),
+    }
+
+
+def compute_risk_limits(exposure: dict, cash_pct: float) -> list[dict]:
+    max_asset = max((a["exposure_pct"] for a in exposure["by_asset"]), default=0.0)
+    return [
+        {"key": "max_portfolio_exposure", "label": "Exposition maximale portefeuille",
+         "value": exposure["total_exposure_pct"], "max": MAX_EXPOSURE_PCT, "unit": "%",
+         "breached": exposure["total_exposure_pct"] > MAX_EXPOSURE_PCT},
+        {"key": "max_single_asset", "label": "Exposition maximale par actif",
+         "value": round(max_asset, 1), "max": MAX_ASSET_PCT, "unit": "%", "breached": max_asset > MAX_ASSET_PCT},
+        {"key": "daily_loss_limit", "label": "Perte journalière maximale",
+         "value": exposure["daily_loss_usd"], "max": DAILY_LOSS_LIMIT, "unit": "USD",
+         "breached": exposure["daily_loss_usd"] > DAILY_LOSS_LIMIT},
+        {"key": "max_open_positions", "label": "Positions ouvertes maximum",
+         "value": exposure["open_positions"], "max": 10, "unit": "positions",
+         "breached": exposure["open_positions"] > 10},
+        {"key": "min_cash_reserve", "label": "Réserve de liquidité minimum",
+         "value": round(cash_pct, 1), "max": 20, "unit": "%", "breached": cash_pct < 20},
+    ]
+
+
+def compute_risk_alerts(exposure: dict, *, now: datetime | None = None) -> list[dict]:
+    now = now or datetime.now(tz=timezone.utc)
+    alerts: list[dict] = []
+    for a in exposure["by_asset"]:
+        if a["exposure_pct"] > MAX_ASSET_PCT:
+            alerts.append({"id": f"exp-{a['symbol']}", "level": "warning", "symbol": a["symbol"],
+                           "message": f"Exposition {a['symbol']} à {a['exposure_pct']}% (> {MAX_ASSET_PCT}%)",
+                           "created_at": now.isoformat()})
+        if not a["protected"]:
+            alerts.append({"id": f"unp-{a['symbol']}", "level": "info", "symbol": a["symbol"],
+                           "message": f"Position {a['symbol']} sans SL/TP complet", "created_at": now.isoformat()})
+    if exposure["daily_loss_usd"] > DAILY_LOSS_LIMIT:
+        alerts.append({"id": "daily-loss", "level": "critical",
+                       "message": f"Perte journalière {exposure['daily_loss_usd']}$ dépasse la limite",
+                       "created_at": now.isoformat()})
+    return alerts
+
+
+async def _open_positions(session: AsyncSession) -> list[dict]:
+    trades = (await session.execute(select(Trade).where(Trade.status.in_(OPEN_STATUSES)))).scalars().all()
+    prices = (await session.execute(_latest_per_symbol(Price, Price.price_usd, Price.time))).scalars().all()
+    pmap = {p.symbol: p for p in prices}
+    return [map_position(t, pmap.get(t.symbol)) for t in trades]
+
+
+async def _realized_24h(session: AsyncSession) -> tuple[float, float]:
+    since = datetime.now(tz=timezone.utc) - timedelta(hours=24)
+    closed = (
+        await session.execute(select(Trade).where(and_(Trade.status == "closed", Trade.created_at >= since)))
+    ).scalars().all()
+    realized = sum(_num(t.pnl) for t in closed)
+    daily_loss = -sum(_num(t.pnl) for t in closed if (t.pnl or 0) < 0)
+    return realized, daily_loss
+
+
+@router.get("/portfolio")
+async def portfolio(session: AsyncSession = Depends(get_session_dep)) -> dict:
+    positions = await _open_positions(session)
+    realized, _ = await _realized_24h(session)
+    return compute_portfolio(positions, realized)
+
+
+@router.get("/portfolio/positions")
+async def portfolio_positions(session: AsyncSession = Depends(get_session_dep)) -> list[dict]:
+    return await _open_positions(session)
+
+
+@router.get("/portfolio/trades")
+async def portfolio_trades(
+    limit: int = Query(50, ge=1, le=500), session: AsyncSession = Depends(get_session_dep)
+) -> list[dict]:
+    rows = (await session.execute(select(Trade).order_by(Trade.created_at.desc()).limit(limit))).scalars().all()
+    return [map_portfolio_trade(t) for t in rows]
+
+
+@router.get("/portfolio/history")
+async def portfolio_history(
+    range: str = Query("30d"), session: AsyncSession = Depends(get_session_dep)
+) -> list[dict]:
+    since = datetime.now(tz=timezone.utc) - _RANGE_TO_DELTA.get(range, timedelta(days=30))
+    closed = (
+        await session.execute(
+            select(Trade)
+            .where(and_(Trade.status == "closed", Trade.created_at >= since))
+            .order_by(Trade.created_at.asc())
+        )
+    ).scalars().all()
+    # Reconstruct equity curve: base capital + cumulative realized PnL at each close.
+    equity = BASE_CAPITAL
+    points = [{"t": since.isoformat(), "price": round(equity, 2)}]
+    for t in closed:
+        equity += _num(t.pnl)
+        points.append({"t": _iso(t.created_at), "price": round(equity, 2)})
+    return points
+
+
+@router.get("/risk/exposure")
+async def risk_exposure(session: AsyncSession = Depends(get_session_dep)) -> dict:
+    positions = await _open_positions(session)
+    realized, daily_loss = await _realized_24h(session)
+    total = compute_portfolio(positions, realized)["total_value_usd"]
+    return compute_exposure(positions, total, daily_loss)
+
+
+@router.get("/risk/limits")
+async def risk_limits(session: AsyncSession = Depends(get_session_dep)) -> list[dict]:
+    positions = await _open_positions(session)
+    realized, daily_loss = await _realized_24h(session)
+    pf = compute_portfolio(positions, realized)
+    exposure = compute_exposure(positions, pf["total_value_usd"], daily_loss)
+    cash_pct = (pf["cash_usd"] / pf["total_value_usd"] * 100) if pf["total_value_usd"] else 0.0
+    return compute_risk_limits(exposure, cash_pct)
+
+
+@router.get("/risk/alerts")
+async def risk_alerts(
+    limit: int = Query(30, ge=1, le=100), session: AsyncSession = Depends(get_session_dep)
+) -> list[dict]:
+    positions = await _open_positions(session)
+    realized, daily_loss = await _realized_24h(session)
+    total = compute_portfolio(positions, realized)["total_value_usd"]
+    exposure = compute_exposure(positions, total, daily_loss)
+    return compute_risk_alerts(exposure)[:limit]

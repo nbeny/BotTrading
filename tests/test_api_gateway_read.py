@@ -24,9 +24,15 @@ from app import read_api  # noqa: E402
 from app.read_api import (  # noqa: E402
     assemble_trace,
     compute_content_stats,
+    compute_exposure,
+    compute_portfolio,
+    compute_risk_alerts,
+    compute_risk_limits,
     map_content,
     map_decision,
     map_news,
+    map_position,
+    map_portfolio_trade,
     map_price_point,
     map_signal_event,
     map_token,
@@ -261,6 +267,86 @@ def test_endpoint_trace_wiring() -> None:
     body = r.json()
     assert body["correlation_id"] == "corr-1"
     assert len(body["stages"]) == 6
+
+
+def _trade(**kw):
+    base = dict(
+        event_id="t1", symbol="BTC", direction="long", entry_price=66800.0, stop_loss=63000.0,
+        take_profit=74000.0, confidence=0.9, position_size_pct=0.04, risk_reward_ratio=2.4,
+        status="filled", fill_price=66800.0, pnl=None, created_at=NOW, updated_at=NOW,
+    )
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_map_position_reprices_and_pnl() -> None:
+    trade = _trade(entry_price=100.0, position_size_pct=0.10, direction="long")
+    price = SimpleNamespace(price_usd=110.0)
+    p = map_position(trade, price, base_capital=100000.0)
+    assert p["quantity"] == 100.0  # 100000*0.10/100
+    assert p["current_price"] == 110.0
+    assert p["value_usd"] == 11000.0
+    assert p["unrealized_pnl_usd"] == 1000.0  # (110-100)*100
+    assert p["protected"] is True
+
+
+def test_map_position_short_and_unprotected() -> None:
+    trade = _trade(entry_price=100.0, position_size_pct=0.10, direction="short", stop_loss=0, take_profit=0)
+    p = map_position(trade, SimpleNamespace(price_usd=90.0), base_capital=100000.0)
+    assert p["unrealized_pnl_usd"] == 1000.0  # short gains when price drops
+    assert p["protected"] is False
+    assert p["stop_loss"] is None
+
+
+def test_map_portfolio_trade_shape() -> None:
+    d = map_portfolio_trade(_trade(direction="long", fill_price=66800.0), base_capital=100000.0)
+    assert d["side"] == "buy"
+    assert d["status"] == "filled"
+    assert d["order_type"] == "market"
+
+
+def test_compute_portfolio_aggregates() -> None:
+    positions = [
+        {"value_usd": 11000.0, "quantity": 100.0, "entry_price": 100.0, "unrealized_pnl_usd": 1000.0},
+        {"value_usd": 5000.0, "quantity": 50.0, "entry_price": 100.0, "unrealized_pnl_usd": 0.0},
+    ]
+    pf = compute_portfolio(positions, realized_24h=250.0, base_capital=100000.0, now=NOW)
+    assert pf["invested_usd"] == 16000.0
+    # cash = base - cost_basis(100*100 + 50*100 = 15000) = 85000
+    assert pf["cash_usd"] == 85000.0
+    assert pf["total_value_usd"] == 101000.0
+    assert pf["unrealized_pnl_usd"] == 1000.0
+    assert pf["realized_pnl_24h_usd"] == 250.0
+
+
+def test_compute_exposure_and_limits_and_alerts() -> None:
+    positions = [
+        {"symbol": "BTC", "value_usd": 40000.0, "protected": False},
+        {"symbol": "ETH", "value_usd": 5000.0, "protected": True},
+    ]
+    exp = compute_exposure(positions, total=100000.0, daily_loss=0.0, now=NOW)
+    assert exp["open_positions"] == 2
+    assert exp["protected_positions"] == 1
+    btc = next(a for a in exp["by_asset"] if a["symbol"] == "BTC")
+    assert btc["exposure_pct"] == 40.0
+    limits = compute_risk_limits(exp, cash_pct=55.0)
+    single = next(x for x in limits if x["key"] == "max_single_asset")
+    assert single["breached"] is True  # 40% > 30%
+    alerts = compute_risk_alerts(exp, now=NOW)
+    # BTC over-exposed (warning) + BTC unprotected (info) = 2 alerts min
+    assert any(a["level"] == "warning" and a["symbol"] == "BTC" for a in alerts)
+
+
+def test_endpoint_portfolio_wiring() -> None:
+    trade = _trade(entry_price=100.0, position_size_pct=0.10)
+    price = SimpleNamespace(symbol="BTC", price_usd=110.0)
+    # /portfolio: open trades, latest prices, closed(24h)
+    client = _client([_Result(rows=[trade]), _Result(rows=[price]), _Result(rows=[])])
+    r = client.get("/portfolio")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["invested_usd"] == 11000.0
+    assert body["total_value_usd"] == 100000.0 + 1000.0  # base + unrealized (cash+invested)
 
 
 def test_endpoint_market_news_wiring() -> None:

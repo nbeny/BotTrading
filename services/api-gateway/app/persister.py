@@ -8,8 +8,14 @@ from datetime import datetime, timezone
 from sqlalchemy import update
 from sqlalchemy.dialects.postgresql import insert
 
-from cmi_common.db import Database, Decision, Signal, Trade
-from cmi_common.events import AnalysisEvent, BaseEvent, DecisionEvent, RiskApprovedEvent
+from cmi_common.db import Database, Decision, Price, Signal, Trade
+from cmi_common.events import (
+    AnalysisEvent,
+    BaseEvent,
+    DecisionEvent,
+    PriceEvent,
+    RiskApprovedEvent,
+)
 from cmi_common.events.execution import ExecutionEvent
 from cmi_common.kafka import Topic
 from cmi_common.observability import EVENTS_CONSUMED
@@ -18,12 +24,23 @@ logger = logging.getLogger(__name__)
 SERVICE = "api-gateway"
 
 
+def _naive_utc(dt: datetime) -> datetime:
+    """Naive UTC for the tz-naive TIMESTAMP columns — asyncpg rejects inserting a
+    tz-aware value into `TIMESTAMP WITHOUT TIME ZONE` ("can't subtract offset-naive
+    and offset-aware datetimes"). Mirrors the read-side naive-UTC handling."""
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
 class Persister:
     def __init__(self, db: Database) -> None:
         self._db = db
 
     async def handle(self, event: BaseEvent) -> None:
-        if isinstance(event, AnalysisEvent):
+        if isinstance(event, PriceEvent):
+            await self._save_price(event)
+        elif isinstance(event, AnalysisEvent):
             await self._save_signal(event)
         elif isinstance(event, DecisionEvent):
             await self._save_decision(event)
@@ -32,11 +49,26 @@ class Persister:
         elif isinstance(event, ExecutionEvent):
             await self._update_trade(event)
 
+    async def _save_price(self, e: PriceEvent) -> None:
+        EVENTS_CONSUMED.labels(SERVICE, Topic.PRICE.value, e.event_type).inc()
+        async with self._db._sessionmaker() as s:  # noqa: SLF001
+            stmt = insert(Price).values(
+                time=_naive_utc(e.occurred_at),
+                symbol=e.symbol,
+                price_usd=e.price_usd,
+                market_cap_usd=e.market_cap_usd,
+                volume_24h_usd=e.volume_24h_usd,
+                price_change_pct_24h=e.price_change_pct_24h,
+                source="coingecko",
+            ).on_conflict_do_nothing()
+            await s.execute(stmt)
+            await s.commit()
+
     async def _save_signal(self, e: AnalysisEvent) -> None:
         EVENTS_CONSUMED.labels(SERVICE, Topic.ANALYSIS.value, e.event_type).inc()
         async with self._db._sessionmaker() as s:  # noqa: SLF001
             stmt = insert(Signal).values(
-                time=e.occurred_at,
+                time=_naive_utc(e.occurred_at),
                 symbol=e.symbol,
                 event_id=e.event_id,
                 opportunity_score=e.opportunity_score,

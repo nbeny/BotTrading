@@ -175,6 +175,21 @@ class RawContent(Base):
     )
 
 
+class ServiceHealth(Base):
+    """Latest health probe per service (written by the health collector)."""
+
+    __tablename__ = "service_health"
+
+    service: Mapped[str] = mapped_column(String(64), primary_key=True)
+    status: Mapped[str] = mapped_column(String(16), default="healthy")
+    healthy: Mapped[bool] = mapped_column(Boolean, default=True)
+    latency_ms: Mapped[float] = mapped_column(Float, default=0.0)
+    detail: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
+    checked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class ContentSentimentAgg(Base):
     """Per-symbol/window rollup derived from scored raw_content."""
 

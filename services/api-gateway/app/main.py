@@ -11,6 +11,7 @@ from cmi_common.db import Database
 from cmi_common.kafka import EventConsumer, Topic
 
 from . import read_api, routers
+from .health_collector import HealthCollector
 from .persister import Persister
 
 
@@ -28,13 +29,21 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     app.state.consumer = consumer
     app.state.consumer_task = asyncio.create_task(consumer.run())
 
+    # Periodic service-health prober → service_health table (feeds /systems).
+    collector = HealthCollector(db)
+    app.state.health_collector = collector
+    app.state.health_task = asyncio.create_task(collector.run())
+
     # Bind the DB session dependency now that the engine exists.
     app.dependency_overrides[routers.get_session_dep] = db.session
 
 
 async def _shutdown(app: FastAPI, settings: Settings) -> None:
     await app.state.consumer.stop()
-    await asyncio.gather(app.state.consumer_task, return_exceptions=True)
+    app.state.health_collector.stop()
+    await asyncio.gather(
+        app.state.consumer_task, app.state.health_task, return_exceptions=True
+    )
     await app.state.db.dispose()
 
 

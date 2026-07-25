@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cmi_common.db import Decision, News, Price, Sentiment, Signal, Token, Trade
+from cmi_common.db import Decision, News, Price, Sentiment, ServiceHealth, Signal, Token, Trade
 from cmi_common.db.models import RawContent
 
 from .routers import get_session_dep
@@ -681,3 +681,104 @@ async def risk_alerts(
     total = compute_portfolio(positions, realized)["total_value_usd"]
     exposure = compute_exposure(positions, total, daily_loss)
     return compute_risk_alerts(exposure)[:limit]
+
+
+# ── systems / infrastructure health (from the persisted service_health table) ──
+# (service, name, group, role) — the map the terminal draws. Health rows written
+# by the collector supply live status/latency; kafka/collector/worker/infra
+# detail arrays need a Prometheus scrape (documented follow-up) and are empty.
+SERVICE_CATALOG: list[tuple[str, str, str, str]] = [
+    ("traefik", "Traefik", "edge", "Reverse proxy / TLS"),
+    ("api-gateway", "api-gateway", "edge", "REST lecture seule"),
+    ("websocket-gateway", "websocket-gateway", "edge", "Diffusion temps réel"),
+    ("control-api", "control-api", "execute", "Plan de contrôle"),
+    ("collector-coingecko", "collector-coingecko", "collect", "Prix & volumes"),
+    ("collector-dexscreener", "collector-dexscreener", "collect", "Liquidité DEX"),
+    ("collector-social", "collector-social", "collect", "Social multi-plateformes"),
+    ("collector-news", "collector-news", "collect", "News multi-sources"),
+    ("sentiment-service", "sentiment-service", "analyze", "Scoring L1"),
+    ("ai-worker-haiku", "ai-worker-haiku", "analyze", "Triage — Haiku"),
+    ("ai-worker-sonnet", "ai-worker-sonnet", "analyze", "Analyste — Sonnet"),
+    ("decision-engine", "decision-engine", "decide", "Fusion signaux"),
+    ("risk-engine", "risk-engine", "decide", "Garde-fous"),
+    ("trading-engine", "trading-engine", "execute", "Exécution — Kraken"),
+]
+_PIPELINE = [
+    ("collect", "Collecte", "Marché · Social · News", "collector-coingecko"),
+    ("sentiment", "Sentiment", "Scoring L1", "sentiment-service"),
+    ("triage", "Triage", "Haiku", "ai-worker-haiku"),
+    ("senior", "Analyse", "Sonnet", "ai-worker-sonnet"),
+    ("decision", "Décision", "Fusion signaux", "decision-engine"),
+    ("risk", "Risque", "Garde-fous", "risk-engine"),
+    ("execute", "Exécution", "Kraken Futures", "trading-engine"),
+]
+
+
+def assemble_systems_snapshot(rows: Iterable[Any], *, now: datetime | None = None) -> dict:
+    """Build the SystemsSnapshot from persisted health rows. Pure."""
+    now = now or datetime.now(tz=timezone.utc)
+    by_svc = {r.service: r for r in rows}
+
+    services = []
+    for sid, name, group, role in SERVICE_CATALOG:
+        r = by_svc.get(sid)
+        status = (r.status if r else None) or ("healthy" if (r and r.healthy) else "idle")
+        detail = getattr(r, "detail", None) or {}
+        services.append(
+            {
+                "id": sid, "name": name, "group": group, "role": role,
+                "status": status,
+                "version": str(detail.get("version", "—")),
+                "replicas": int(detail.get("replicas", 1)),
+                "uptime_pct": float(detail.get("uptime_pct", 99.9 if status == "healthy" else 0.0)),
+                "latency_ms": round(_num(getattr(r, "latency_ms", 0.0)), 0) if r else 0,
+                "cpu_pct": int(detail.get("cpu_pct", 0)),
+                "mem_mb": int(detail.get("mem_mb", 0)),
+                "throughput_per_min": int(detail.get("throughput_per_min", 0)),
+                "kafka_in": list(detail.get("kafka_in", [])),
+                "kafka_out": list(detail.get("kafka_out", [])),
+                "host": detail.get("host"),
+                "spark": list(detail.get("spark", [])),
+            }
+        )
+
+    smap = {s["id"]: s for s in services}
+    pipeline = [
+        {
+            "id": pid, "label": label, "sublabel": sub,
+            "status": smap.get(svc, {}).get("status", "idle"),
+            "throughput_per_min": smap.get(svc, {}).get("throughput_per_min", 0),
+        }
+        for pid, label, sub, svc in _PIPELINE
+    ]
+
+    healthy = sum(1 for s in services if s["status"] == "healthy")
+    degraded = sum(1 for s in services if s["status"] == "degraded")
+    down = sum(1 for s in services if s["status"] in {"down", "idle"})
+    summary = {
+        "services_total": len(services),
+        "services_healthy": healthy,
+        "services_degraded": degraded,
+        "services_down": down,
+        "events_per_min": 0,
+        "kafka_lag_total": 0,
+        "ai_cost_today_usd": 0.0,
+        "global_uptime_pct": round(sum(s["uptime_pct"] for s in services) / len(services), 2) if services else 0.0,
+        "data_points_today": 0,
+        "updated_at": now.isoformat(),
+    }
+    return {
+        "summary": summary,
+        "services": services,
+        "pipeline": pipeline,
+        "kafka": [],       # needs a Prometheus scrape of the broker (follow-up)
+        "collectors": [],  # needs per-collector metrics (follow-up)
+        "workers": [],     # needs AI worker metrics (follow-up)
+        "infra": [],       # needs Postgres/Redis/Kafka/Traefik metrics (follow-up)
+    }
+
+
+@router.get("/systems/overview")
+async def systems_overview(session: AsyncSession = Depends(get_session_dep)) -> dict:
+    rows = (await session.execute(select(ServiceHealth))).scalars().all()
+    return assemble_systems_snapshot(rows)

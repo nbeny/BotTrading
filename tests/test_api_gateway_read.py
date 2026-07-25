@@ -22,6 +22,8 @@ if str(_SVC) not in sys.path:
 
 from app import read_api  # noqa: E402
 from app.read_api import (  # noqa: E402
+    SERVICE_CATALOG,
+    assemble_systems_snapshot,
     assemble_trace,
     compute_content_stats,
     compute_exposure,
@@ -347,6 +349,36 @@ def test_endpoint_portfolio_wiring() -> None:
     body = r.json()
     assert body["invested_usd"] == 11000.0
     assert body["total_value_usd"] == 100000.0 + 1000.0  # base + unrealized (cash+invested)
+
+
+def test_assemble_systems_snapshot() -> None:
+    rows = [
+        SimpleNamespace(service="api-gateway", status="healthy", healthy=True, latency_ms=12.0, detail={}),
+        SimpleNamespace(service="trading-engine", status="degraded", healthy=False, latency_ms=310.0,
+                        detail={"cpu_pct": 70, "mem_mb": 200}),
+    ]
+    snap = assemble_systems_snapshot(rows, now=NOW)
+    assert len(snap["services"]) == len(SERVICE_CATALOG)
+    svc = {s["id"]: s for s in snap["services"]}
+    assert svc["api-gateway"]["status"] == "healthy"
+    assert svc["trading-engine"]["status"] == "degraded"
+    assert svc["trading-engine"]["cpu_pct"] == 70
+    # a service with no health row is idle
+    assert svc["risk-engine"]["status"] == "idle"
+    assert len(snap["pipeline"]) == 7
+    assert snap["kafka"] == [] and snap["workers"] == []
+    assert snap["summary"]["services_total"] == len(SERVICE_CATALOG)
+    assert snap["summary"]["services_degraded"] == 1
+
+
+def test_endpoint_systems_overview_wiring() -> None:
+    rows = [SimpleNamespace(service="api-gateway", status="healthy", healthy=True, latency_ms=10.0, detail={})]
+    client = _client([_Result(rows=rows)])
+    r = client.get("/systems/overview")
+    assert r.status_code == 200
+    body = r.json()
+    assert "services" in body and "pipeline" in body and "summary" in body
+    assert len(body["pipeline"]) == 7
 
 
 def test_endpoint_market_news_wiring() -> None:

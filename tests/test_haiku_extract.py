@@ -2,26 +2,11 @@
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
+from service_modules import load_service_module
 
 from cmi_common.events.sentiment import SentimentEvent
 
-# worker.py uses ``from .features import FeatureStore``; add the service dir to
-# sys.path and load worker.py as ``app.worker`` so the relative import resolves.
-_APP_ROOT = Path(__file__).resolve().parents[1] / "services" / "ai-worker-haiku"
-if str(_APP_ROOT) not in sys.path:
-    sys.path.insert(0, str(_APP_ROOT))
-
-_spec = importlib.util.spec_from_file_location(
-    "app.worker",
-    _APP_ROOT / "app" / "worker.py",
-)
-hw = importlib.util.module_from_spec(_spec)
-assert _spec.loader
-sys.modules[_spec.name] = hw
-_spec.loader.exec_module(hw)
+hw = load_service_module("ai-worker-haiku", "worker", "haiku_app")
 
 
 def _extract(event):

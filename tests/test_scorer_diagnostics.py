@@ -7,21 +7,9 @@ pipeline reported none of them. Each case below pins one reason.
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
+from service_modules import load_service_module
 
-_APP_ROOT = Path(__file__).resolve().parents[1] / "services" / "ai-worker-haiku"
-if str(_APP_ROOT) not in sys.path:
-    sys.path.insert(0, str(_APP_ROOT))
-
-_spec = importlib.util.spec_from_file_location(
-    "app.scorer", _APP_ROOT / "app" / "scorer.py"
-)
-sc = importlib.util.module_from_spec(_spec)
-assert _spec.loader
-sys.modules[_spec.name] = sc
-_spec.loader.exec_module(sc)
+sc = load_service_module("ai-worker-haiku", "scorer", "haiku_app")
 
 
 def test_typical_major_pair_is_blocked_by_score() -> None:

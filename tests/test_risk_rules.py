@@ -71,3 +71,40 @@ def test_short_levels_inverted() -> None:
     )
     assert d.approved
     assert d.levels.take_profit < d.levels.entry_price < d.levels.stop_loss
+
+
+def test_watch_is_never_approved() -> None:
+    """`watch` means "keep an eye on this", not "take a position". The trading
+    engine maps any non-LONG direction to a SELL, so an approved watch would open
+    a real short. It must not get past the risk gate."""
+    d = rules.evaluate(
+        entry_price=100.0, direction=Direction.WATCH, confidence=0.99,
+        opportunity_score=100, is_blacklisted=False, current_exposure_pct=0.0,
+        config=_cfg(),
+    )
+    assert d.approved is False
+    assert d.levels is None
+    assert "watch" in d.reason.lower()
+
+
+def test_watch_is_rejected_even_with_perfect_metrics() -> None:
+    """Guards against a future threshold change turning a watch into a trade:
+    the rejection must be categorical, not a side effect of failing a floor."""
+    d = rules.evaluate(
+        entry_price=100.0, direction=Direction.WATCH, confidence=1.0,
+        opportunity_score=100, is_blacklisted=False, current_exposure_pct=0.0,
+        config=_cfg(min_confidence=0.0, min_score=0, min_risk_reward=0.0),
+    )
+    assert d.approved is False
+
+
+def test_long_and_short_are_still_approved() -> None:
+    """The fix must not narrow anything else."""
+    for direction in (Direction.LONG, Direction.SHORT):
+        d = rules.evaluate(
+            entry_price=100.0, direction=direction, confidence=0.9,
+            opportunity_score=90, is_blacklisted=False, current_exposure_pct=0.0,
+            config=_cfg(),
+        )
+        assert d.approved is True, direction
+        assert d.levels is not None

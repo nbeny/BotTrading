@@ -48,6 +48,12 @@ def evaluate(
         return RiskDecision(False, "token blacklisted")
     if entry_price <= 0:
         return RiskDecision(False, "no valid entry price")
+    # WATCH means "keep an eye on this", not "take a position". It is rejected
+    # categorically — before the numeric floors — so no tuning of those floors
+    # can ever let one through. Downstream, the trading engine maps every
+    # non-LONG direction to a SELL, so an approved watch would open a real short.
+    if direction == Direction.WATCH:
+        return RiskDecision(False, "watch is not an actionable direction")
     if confidence < config.min_confidence:
         return RiskDecision(False, f"confidence {confidence:.2f} below floor")
     if opportunity_score < config.min_score:
@@ -71,7 +77,7 @@ def _compute_levels(
         target = entry * (1 - cfg.take_profit_pct)
         risk = stop - entry
         reward = entry - target
-    else:  # LONG / WATCH treated as long-side sizing
+    else:  # LONG only — evaluate() rejects WATCH before any sizing happens
         stop = entry * (1 - cfg.stop_loss_pct)
         target = entry * (1 + cfg.take_profit_pct)
         risk = entry - stop

@@ -32,9 +32,20 @@ SYSTEM = (
 
 
 class SonnetWorker:
-    def __init__(self, claude: ClaudeClient, producer: EventProducer) -> None:
+    def __init__(
+        self,
+        claude: ClaudeClient,
+        producer: EventProducer,
+        cache,
+        *,
+        max_calls_per_hour: int = 12,
+        symbol_cooldown_s: int = 900,
+    ) -> None:
         self._claude = claude
         self._producer = producer
+        self._cache = cache
+        self._max_per_hour = max_calls_per_hour
+        self._cooldown_s = symbol_cooldown_s
 
     async def handle(self, event: BaseEvent) -> None:
         if not isinstance(event, AnalysisEvent):
@@ -43,11 +54,26 @@ class SonnetWorker:
         # Senior analyst only intervenes on important signals.
         if not event.escalate:
             return
+        # Budget/cooldown gate — the only place we spend the subscription. A
+        # symbol blocked here is simply re-evaluated on its next escalation.
+        if not await self._may_call(event.symbol):
+            logger.info("sonnet skip %s (cooldown/budget)", event.symbol)
+            return
         decision = await self._validate(event)
         if decision is None:
             return
         await self._producer.publish(Topic.DECISION, decision)
         EVENTS_PRODUCED.labels(SERVICE, Topic.DECISION.value, decision.event_type).inc()
+
+    async def _may_call(self, symbol: str) -> bool:
+        """True if we're allowed to spend an LLM call on this symbol now."""
+        if await self._cache.get_json(f"ai:cooldown:{symbol}"):
+            return False
+        # Fixed-window token bucket shared across AI workers.
+        if not await self._cache.allow("ai:budget:calls", self._max_per_hour, 3600):
+            return False
+        await self._cache.set_json(f"ai:cooldown:{symbol}", 1, ttl_seconds=self._cooldown_s)
+        return True
 
     async def _validate(self, event: AnalysisEvent) -> DecisionEvent | None:
         prompt = (

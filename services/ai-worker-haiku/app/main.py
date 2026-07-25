@@ -7,7 +7,6 @@ import asyncio
 from fastapi import FastAPI
 
 from cmi_common import Settings, create_app
-from cmi_common.ai import ClaudeClient, CliOptions
 from cmi_common.cache import Cache
 from cmi_common.kafka import EventConsumer, EventProducer, Topic
 
@@ -19,26 +18,8 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     cache = Cache(settings.redis)
     producer = EventProducer(settings.kafka)
     await producer.start()
-    claude = ClaudeClient(
-        settings.ai.api_key,
-        settings.ai.haiku_model,
-        max_tokens=settings.ai.max_tokens,
-        transport=settings.ai.transport,
-        cli=CliOptions(
-            cli_path=settings.ai.cli_path,
-            timeout_ms=settings.ai.cli_timeout_ms,
-            concurrency=settings.ai.cli_concurrency,
-        ),
-        cache=cache,
-        quota_cooldown_s=settings.ai.quota_cooldown_ms // 1000,
-        max_quota_wait_s=settings.ai.max_quota_wait_ms // 1000,
-    )
-    worker = HaikuWorker(
-        claude,
-        FeatureStore(cache),
-        producer,
-        escalation_threshold=settings.ai.escalation_threshold,
-    )
+    # Haiku triage is now a deterministic local scorer — no Claude, no quota.
+    worker = HaikuWorker(FeatureStore(cache), producer)
     consumer = EventConsumer(
         settings.kafka,
         [Topic.PRICE, Topic.VOLUME, Topic.DEX, Topic.SENTIMENT],

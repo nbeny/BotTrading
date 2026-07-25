@@ -92,6 +92,12 @@ class AISettings(BaseSettings):
     quota_cooldown_ms: int = 1800000  # 30 min
     # Hard cap on a single pause so a bogus reset stamp can't sleep forever.
     max_quota_wait_ms: int = 21600000  # 6 h
+    # --- LLM call budget (shared across workers; protects the subscription) ---
+    # Hard ceiling on Claude calls per rolling hour. Haiku triage is LLM-free, so
+    # this bounds the senior (Sonnet) escalations. Tune to your subscription tier.
+    max_calls_per_hour: int = 12
+    # A symbol won't be re-escalated to the LLM more than once per this window.
+    symbol_cooldown_s: int = 900  # 15 min
 
 
 class ObservabilitySettings(BaseSettings):

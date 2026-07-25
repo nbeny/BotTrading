@@ -32,7 +32,13 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
         quota_cooldown_s=settings.ai.quota_cooldown_ms // 1000,
         max_quota_wait_s=settings.ai.max_quota_wait_ms // 1000,
     )
-    worker = SonnetWorker(claude, producer)
+    worker = SonnetWorker(
+        claude,
+        producer,
+        cache,
+        max_calls_per_hour=settings.ai.max_calls_per_hour,
+        symbol_cooldown_s=settings.ai.symbol_cooldown_s,
+    )
     consumer = EventConsumer(
         settings.kafka,
         [Topic.ANALYSIS],

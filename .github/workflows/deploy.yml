@@ -36,7 +36,9 @@ jobs:
             tests/test_api_gateway_read.py \
             tests/test_api_gateway_sentiment.py \
             tests/test_ai_config.py \
-            tests/test_ai_quota.py -q
+            tests/test_ai_quota.py \
+            tests/test_scorer.py \
+            tests/test_sonnet_budget.py -q
 
   # -------------------------------------------------------------- images
   images:

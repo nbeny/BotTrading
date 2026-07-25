@@ -45,10 +45,10 @@ def upgrade() -> None:
         "ix_raw_content_unscored", "raw_content", ["fetched_at"],
         postgresql_where=sa.text("scored_at IS NULL"),
     )
-    op.execute(
-        "SELECT create_hypertable('raw_content', 'fetched_at', "
-        "if_not_exists => TRUE, migrate_data => TRUE)"
-    )
+    # NOTE: raw_content is intentionally NOT a Timescale hypertable — its dedup
+    # relies on a UNIQUE(source, external_id) index, and Timescale requires every
+    # unique index to include the partitioning column (fetched_at), which would
+    # break dedup. Plain table + unique constraint is the correct choice here.
 
     op.create_table(
         "content_sentiment_agg",

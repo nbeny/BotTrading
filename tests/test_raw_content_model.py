@@ -18,5 +18,7 @@ def test_agg_primary_key() -> None:
     assert pk == {"symbol", "kind", "window_start", "window_size"}
 
 
-def test_raw_content_is_hypertable() -> None:
-    assert HYPERTABLES.get("raw_content") == "fetched_at"
+def test_raw_content_is_not_hypertable() -> None:
+    # Not a hypertable: dedup needs UNIQUE(source, external_id), which Timescale
+    # forbids on a hypertable (partition column must be in every unique index).
+    assert "raw_content" not in HYPERTABLES

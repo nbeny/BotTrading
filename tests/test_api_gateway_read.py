@@ -25,6 +25,10 @@ from app.read_api import (  # noqa: E402
     SERVICE_CATALOG,
     assemble_systems_snapshot,
     assemble_trace,
+    build_collectors,
+    build_infra,
+    build_kafka,
+    build_workers,
     compute_content_stats,
     compute_exposure,
     compute_portfolio,
@@ -406,14 +410,61 @@ def test_compute_detail_rates() -> None:
     assert detail2["throughput_per_min"] == 1020  # (320-150... ) rate check
 
 
+def test_build_collectors_from_rawcontent() -> None:
+    rows = [("Reddit", "social", 120), ("CoinDesk", "news", 30), ("Dead", "social", 0)]
+    cols = build_collectors(rows)
+    assert cols[0]["platform"] == "Reddit"  # sorted by items desc
+    assert cols[0]["items_last_hour"] == 120
+    assert cols[0]["category"] == "social"
+    assert cols[-1]["status"] == "idle"  # zero items
+
+
+def test_build_workers_scales_tokens_and_cost() -> None:
+    w = build_workers(haiku_reqs=1000, sonnet_reqs=100)
+    haiku = next(x for x in w if x["tier"] == "triage")
+    assert haiku["requests_last_hour"] == 1000
+    assert haiku["tokens_in"] == 820000
+    assert haiku["status"] == "healthy"
+    sonnet = next(x for x in w if x["tier"] == "senior")
+    assert sonnet["cost_usd_today"] == round(100 * 0.012, 2)
+
+
+def test_build_kafka_rates_and_orphans() -> None:
+    k = build_kafka({"price.events": 600, "analysis.events": 0})
+    price = next(t for t in k if t["name"] == "price.events")
+    assert price["msg_per_min"] == 10.0  # 600/60
+    analysis = next(t for t in k if t["name"] == "analysis.events")
+    assert analysis["orphaned"] is True  # zero count
+
+
+def test_build_infra_postgres() -> None:
+    infra = build_infra(pg_connections=12, pg_size_bytes=42_000_000_000)
+    assert infra[0]["id"] == "postgres"
+    vals = {m["label"]: m["value"] for m in infra[0]["metrics"]}
+    assert vals["Connexions"] == "12"
+    assert vals["Taille"] == "42.00 GB"
+
+
 def test_endpoint_systems_overview_wiring() -> None:
-    rows = [SimpleNamespace(service="api-gateway", status="healthy", healthy=True, latency_ms=10.0, detail={})]
-    client = _client([_Result(rows=rows)])
+    health = [SimpleNamespace(service="api-gateway", status="healthy", healthy=True, latency_ms=10.0, detail={})]
+    # execute order: health, coll_rows, workers(Signal,Decision), kafka(Price,Sentiment,
+    # Signal,Decision,Trade), pg_stat_activity, pg_database_size
+    results = [
+        _Result(rows=health),
+        _Result(rows=[("Reddit", "social", 50)]),
+        _Result(scalar=100), _Result(scalar=20),
+        _Result(scalar=600), _Result(scalar=60), _Result(scalar=100), _Result(scalar=20), _Result(scalar=5),
+        _Result(scalar=12), _Result(scalar=42_000_000_000),
+    ]
+    client = _client(results)
     r = client.get("/systems/overview")
     assert r.status_code == 200
     body = r.json()
-    assert "services" in body and "pipeline" in body and "summary" in body
     assert len(body["pipeline"]) == 7
+    assert body["collectors"][0]["platform"] == "Reddit"
+    assert len(body["workers"]) == 2
+    assert body["infra"][0]["id"] == "postgres"
+    assert body["summary"]["ai_cost_today_usd"] > 0
 
 
 def test_endpoint_market_news_wiring() -> None:

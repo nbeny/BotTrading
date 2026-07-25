@@ -212,9 +212,10 @@ class ContentSentimentAgg(Base):
 
 
 # Tables that become Timescale hypertables (time-partitioned).
+# raw_content is deliberately excluded: its dedup needs UNIQUE(source, external_id)
+# and Timescale requires the partitioning column in every unique index.
 HYPERTABLES = {
     "prices": "time",
     "sentiments": "time",
     "signals": "time",
-    "raw_content": "fetched_at",
 }

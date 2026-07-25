@@ -123,3 +123,29 @@ export const GROUP_LABEL: Record<ServiceGroup, string> = {
   execute: 'Exécution',
   infra: 'Infrastructure',
 };
+
+/**
+ * Pipeline funnel — where signals die between raw analyses and executed
+ * trades. Fed by `GET /systems/funnel`; this is the diagnostic the whole
+ * "phase 1" effort exists to surface (see FunnelPanel).
+ */
+export interface FunnelStage {
+  stage: string;
+  count: number;
+  conversion_pct: number;
+}
+
+export interface FunnelBlockReason {
+  stage: string;
+  reason: string;
+  count: number;
+}
+
+export interface FunnelStats {
+  window: string;
+  stages: FunnelStage[];
+  score_histogram: { bucket: number; count: number }[];
+  factors_presence: Record<string, number>;
+  top_block_reasons: FunnelBlockReason[];
+  updated_at: string;
+}

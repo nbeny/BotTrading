@@ -10,6 +10,7 @@ import { PipelineFlow } from '@/components/systems/PipelineFlow';
 import { LiveEventStream } from '@/components/command/LiveEventStream';
 import { DecisionTraceDrawer } from '@/components/command/DecisionTraceDrawer';
 import { AiDecisionFeed } from '@/components/command/AiDecisionFeed';
+import { FunnelPanel } from '@/components/command/FunnelPanel';
 import { LivePnlPanel } from '@/components/command/LivePnlPanel';
 import { MarketHeatPanel } from '@/components/command/MarketHeatPanel';
 import { GuardrailPanel } from '@/components/command/GuardrailPanel';
@@ -47,6 +48,7 @@ export default function CommandCenterPage() {
         </Stack>
         <Stack spacing={2}>
           <AiDecisionFeed />
+          <FunnelPanel />
           <GuardrailPanel />
         </Stack>
       </Box>

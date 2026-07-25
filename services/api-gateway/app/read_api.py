@@ -525,6 +525,10 @@ async def data_stats(session: AsyncSession = Depends(get_session_dep)) -> dict:
 # risk-approved events only carry a size *fraction*). Documented assumption.
 BASE_CAPITAL = float(os.getenv("CMI_BASE_CAPITAL_USD", "100000"))
 OPEN_STATUSES = ("submitted", "filled")
+# ExecutionKind values meaning an order actually reached the exchange. The other
+# three — `pending` (queued), `failed`, `rejected` — are not executions, so the
+# funnel's "executed" stage must enumerate rather than exclude "approved".
+EXECUTED_STATUSES = ("submitted", "filled", "closed")
 DAILY_LOSS_LIMIT = 2000.0
 MAX_EXPOSURE_PCT = 80.0
 MAX_ASSET_PCT = 30.0
@@ -979,13 +983,18 @@ async def systems_funnel(
         select(func.count()).select_from(Trade).where(Trade.created_at >= since)
     )
     # A trade is born "approved" and is stamped with the ExecutionEvent kind once
-    # the engine acts on it, so "moved past approved" is the closest available
-    # proxy for "executed". Caveat: `failed` and `rejected` are terminal
-    # non-executions and `pending` is still queued, yet all three count here.
+    # the engine acts on it. Enumerate the kinds that mean an order actually
+    # reached the exchange rather than testing "moved past approved": of the six
+    # ExecutionKind values, `failed` and `rejected` are terminal non-executions
+    # and `pending` is still queued, so a negative test would report three kinds
+    # of non-execution as executions — in a funnel whose only job is to say where
+    # signals stop, that inverts the answer.
     executed = await session.scalar(
         select(func.count())
         .select_from(Trade)
-        .where(and_(Trade.created_at >= since, Trade.status != "approved"))
+        .where(
+            and_(Trade.created_at >= since, Trade.status.in_(EXECUTED_STATUSES))
+        )
     )
 
     # Floor-divide, not `/`: SQLAlchemy renders `/` on two Integers as true

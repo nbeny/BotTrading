@@ -92,9 +92,19 @@ class _FakeSession:
         self._n -= 1
         return _Result()
 
+    async def scalar(self, _stmt):
+        """Counting endpoints call `session.scalar` directly rather than going
+        through `execute`. Returning 0 exercises the all-zeros path, which is
+        the current production state of the pipeline."""
+        return 0
+
 
 # ── assertions ────────────────────────────────────────────────────────────────
+_ASSERTED: set[str] = set()
+
+
 def _assert_keys(name: str, obj: dict) -> None:
+    _ASSERTED.add(name)
     missing = CONTRACT[name] - set(obj)
     assert not missing, f"{name} missing keys: {sorted(missing)}"
 
@@ -174,3 +184,31 @@ async def test_systems_overview_contract() -> None:
 async def test_trace_contract() -> None:
     resp = await read_api.trace(cid="corr-x", session=_FakeSession(8))
     _assert_keys("trace", resp)
+
+
+async def test_systems_funnel_contract() -> None:
+    resp = await read_api.systems_funnel(window="24h", session=_FakeSession(40))
+    _assert_keys("systems/funnel", resp)
+
+
+# ── manifest coverage ─────────────────────────────────────────────────────────
+# Defined last on purpose: pytest runs a module's tests in definition order, so
+# every _assert_keys call above has already registered by the time this runs.
+def test_every_contract_entry_is_actually_asserted() -> None:
+    """A CONTRACT entry with no test is inert — it documents a shape nothing
+    enforces, which is worse than no entry because it reads as coverage.
+
+    This file enumerates endpoints by hand rather than iterating the manifest,
+    so adding a key to CONTRACT alone changes nothing in CI. This test is what
+    makes the manifest self-enforcing.
+
+    ``market/signals`` is excluded by design: it returns a heterogeneous union
+    of raw event dicts with no stable shared key set (see read_contract.py's
+    module docstring), and is smoke-checked live instead.
+    """
+    expected = set(CONTRACT) - {"market/signals"}
+    unasserted = expected - _ASSERTED
+    assert not unasserted, (
+        f"CONTRACT entries with no assertion: {sorted(unasserted)}. "
+        "Add a test calling _assert_keys for each, or the manifest lies."
+    )

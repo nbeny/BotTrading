@@ -56,7 +56,9 @@ volumes:
 services:
   # ------------------------------------------------------------ event bus
   kafka:
-    image: bitnami/kafka:3.7
+    # Bitnami deprecated its public Docker Hub catalog (2025); legacy tags now
+    # live under the bitnamilegacy/ namespace. Same image, same KAFKA_CFG_* env.
+    image: ${KAFKA_IMAGE:-bitnamilegacy/kafka:3.7}
     restart: unless-stopped
     environment:
       KAFKA_CFG_NODE_ID: "1"
@@ -81,7 +83,7 @@ services:
       - cmi
 
   kafka-init:
-    image: bitnami/kafka:3.7
+    image: ${KAFKA_IMAGE:-bitnamilegacy/kafka:3.7}
     depends_on:
       kafka:
         condition: service_healthy

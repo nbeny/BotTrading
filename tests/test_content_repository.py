@@ -41,39 +41,35 @@ async def test_fake_fetch_unscored_and_mark() -> None:
     assert len(await repo.fetch_unscored(limit=10)) == 1
 
 
-async def test_fake_upsert_aggregate_accumulates() -> None:
+async def test_fake_upsert_aggregate_creates_bucket() -> None:
     repo = FakeContentRepository()
     ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
     await repo.upsert_aggregate(
-        symbol="BTC", kind="social", window_start=ts, window_size=3600,
-        mentions=1, unique_authors=1, engagement_sum=2.0, avg_sentiment=0.5,
-        weighted_sentiment=0.4,
+        symbol="BTC", kind="social", bucket_start=ts,
+        mentions=1, score_sum=0.5, confidence_sum=0.8,
+        weighted_score_sum=0.4, engagement_sum=2.0,
     )
-    key = ("BTC", "social", ts, 3600)
-    assert repo.aggregates[key]["mentions"] == 1
+    agg = repo.aggregates[("BTC", "social", ts)]
+    assert agg["mentions"] == 1
+    assert agg["score_sum"] == 0.5
+    assert agg["engagement_sum"] == 2.0
 
 
-async def test_fake_upsert_aggregate_conflict_matches_sql_semantics() -> None:
-    # Second upsert into the same window: counts accumulate; sentiment values
-    # become the mentions-weighted running mean (mirrors ON CONFLICT DO UPDATE).
-    import pytest
-
+async def test_fake_upsert_aggregate_is_additive() -> None:
     repo = FakeContentRepository()
     ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
-    kw = dict(symbol="BTC", kind="social", window_start=ts, window_size=3600)
+    kw = dict(symbol="BTC", kind="social", bucket_start=ts)
     await repo.upsert_aggregate(
-        **kw, mentions=1, unique_authors=1, engagement_sum=2.0,
-        avg_sentiment=0.5, weighted_sentiment=0.4,
+        **kw, mentions=1, score_sum=0.5, confidence_sum=0.8,
+        weighted_score_sum=0.4, engagement_sum=2.0,
     )
     await repo.upsert_aggregate(
-        **kw, mentions=2, unique_authors=3, engagement_sum=5.0,
-        avg_sentiment=0.9, weighted_sentiment=0.8,
+        **kw, mentions=2, score_sum=1.8, confidence_sum=1.5,
+        weighted_score_sum=1.6, engagement_sum=5.0,
     )
-    agg = repo.aggregates[("BTC", "social", ts, 3600)]
-    assert agg["mentions"] == 3            # accumulated
-    assert agg["engagement_sum"] == 7.0    # accumulated
-    assert agg["unique_authors"] == 4      # accumulated (1 + 3)
-    # weighted running mean: (0.5*1 + 0.9*2) / 3 = 0.7667
-    assert agg["avg_sentiment"] == pytest.approx((0.5 * 1 + 0.9 * 2) / 3)
-    # (0.4*1 + 0.8*2) / 3 = 0.6667
-    assert agg["weighted_sentiment"] == pytest.approx((0.4 * 1 + 0.8 * 2) / 3)
+    agg = repo.aggregates[("BTC", "social", ts)]
+    assert agg["mentions"] == 3          # 1 + 2
+    assert agg["score_sum"] == 2.3       # 0.5 + 1.8
+    assert agg["confidence_sum"] == 2.3  # 0.8 + 1.5
+    assert agg["weighted_score_sum"] == 2.0  # 0.4 + 1.6
+    assert agg["engagement_sum"] == 7.0  # 2.0 + 5.0

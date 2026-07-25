@@ -10,7 +10,7 @@ from cmi_common import Settings, create_app
 from cmi_common.db import Database
 from cmi_common.kafka import EventConsumer, Topic
 
-from . import routers
+from . import read_api, routers
 from .persister import Persister
 
 
@@ -40,3 +40,5 @@ async def _shutdown(app: FastAPI, settings: Settings) -> None:
 
 app = create_app("api-gateway", on_startup=_startup, on_shutdown=_shutdown)
 app.include_router(routers.router)
+# Live-mode read API backing the web terminal (market + data explorer).
+app.include_router(read_api.router)

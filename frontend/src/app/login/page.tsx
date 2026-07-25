@@ -28,8 +28,8 @@ const DEMO_ACCOUNTS = [
 export default function LoginPage() {
   const { login, status } = useAuth();
   const router = useRouter();
-  const [email, setEmail] = useState('admin@cmi.io');
-  const [password, setPassword] = useState('demo');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -78,8 +78,8 @@ export default function LoginPage() {
             <Stack spacing={2}>
               {error && <Alert severity="error">{error}</Alert>}
               <TextField
-                label="Email"
-                type="email"
+                label="Identifiant"
+                type="text"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 autoComplete="username"

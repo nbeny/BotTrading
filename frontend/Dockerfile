@@ -15,6 +15,13 @@ ARG NEXT_PUBLIC_API_BASE=/api/gateway
 ENV NEXT_PUBLIC_USE_MOCK=$NEXT_PUBLIC_USE_MOCK
 ENV NEXT_PUBLIC_WS_URL=$NEXT_PUBLIC_WS_URL
 ENV NEXT_PUBLIC_API_BASE=$NEXT_PUBLIC_API_BASE
+# next.config.mjs bakes the rewrite() destinations into the routes manifest at
+# BUILD time, so the api-gateway / control-api targets must be provided here —
+# a runtime env is ignored for rewrites. Point them at the compose service names.
+ARG API_GATEWAY_URL=http://localhost:8000
+ARG CONTROL_API_URL=http://localhost:8001
+ENV API_GATEWAY_URL=$API_GATEWAY_URL
+ENV CONTROL_API_URL=$CONTROL_API_URL
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 

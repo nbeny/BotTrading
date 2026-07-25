@@ -20,16 +20,56 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cmi_common.db import Decision, News, Price, Sentiment, ServiceHealth, Signal, Token, Trade
 from cmi_common.db.models import RawContent
+from cmi_common.sources import SqlSentimentAggReader
 
 from .routers import get_session_dep
 
 router = APIRouter(tags=["read"])
+
+
+def get_reader_dep(session: AsyncSession = Depends(get_session_dep)) -> SqlSentimentAggReader:
+    return SqlSentimentAggReader(session)
+
+
+@router.get("/api/v1/sentiment/windows")
+async def sentiment_windows(
+    symbol: str | None = Query(None),
+    kind: str = Query("all"),
+    decay: float | None = Query(None, gt=0, description="decay half-life in hours"),
+    reader: SqlSentimentAggReader = Depends(get_reader_dep),
+) -> list[dict]:
+    sym = symbol.upper() if symbol else None
+    return await reader.all_windows(symbol=sym, kind=kind, half_life_h=decay)
+
+
+@router.get("/api/v1/sentiment/series")
+async def sentiment_series(
+    symbol: str | None = Query(None),
+    kind: Annotated[str | None, Query()] = None,
+    points: int = Query(12, ge=1, le=168),
+    reader: SqlSentimentAggReader = Depends(get_reader_dep),
+) -> list[dict]:
+    sym = symbol.upper() if symbol else None
+    return await reader.series(symbol=sym, kind=kind, points=points)
+
+
+@router.get("/api/v1/sentiment/authors")
+async def sentiment_authors(
+    symbol: str = Query(...),
+    window: str = Query("7d"),
+    reader: SqlSentimentAggReader = Depends(get_reader_dep),
+) -> dict:
+    sym = symbol.upper()
+    count = await reader.distinct_authors(symbol=sym, window=window)
+    return {"symbol": sym, "window": window, "unique_authors": count}
 
 _RANGE_TO_DELTA = {
     "1d": timedelta(days=1),

@@ -44,3 +44,44 @@ def test_neutral_text_zero() -> None:
 def test_empty_text() -> None:
     r = _lexicon_scorer().score("   ")
     assert r.score == 0.0 and r.confidence == 0.0
+
+
+class _FakePipe:
+    def __init__(self, preds):
+        self._preds = preds
+
+    def __call__(self, text):
+        return [self._preds]
+
+
+def _hf_scorer(preds):
+    s = scorer_mod.SentimentScorer("fake/model")
+    s._loaded = True
+    s._pipeline = _FakePipe(preds)
+    return s
+
+
+def test_continuous_score_bullish_lean() -> None:
+    import pytest
+
+    s = _hf_scorer(
+        [{"label": "Bullish", "score": 0.7},
+         {"label": "Neutral", "score": 0.2},
+         {"label": "Bearish", "score": 0.1}]
+    )
+    r = s.score("btc to the moon")
+    assert r.score == pytest.approx(0.6)       # 0.7 - 0.1
+    assert r.confidence == pytest.approx(0.8)  # 1 - 0.2
+
+
+def test_continuous_score_neutral_is_near_zero() -> None:
+    import pytest
+
+    s = _hf_scorer(
+        [{"label": "Bullish", "score": 0.1},
+         {"label": "Neutral", "score": 0.8},
+         {"label": "Bearish", "score": 0.1}]
+    )
+    r = s.score("nothing happening")
+    assert r.score == pytest.approx(0.0)
+    assert r.confidence == pytest.approx(0.2)

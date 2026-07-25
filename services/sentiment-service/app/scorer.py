@@ -71,14 +71,17 @@ class SentimentScorer:
         preds = self._pipeline(text)  # type: ignore[misc]
         # transformers returns list[list[dict]] with top_k=None.
         scores = preds[0] if isinstance(preds[0], list) else preds
-        best = max(scores, key=lambda p: p["score"])
-        label = best["label"].lower()
-        signed = 1.0 if "pos" in label or "bull" in label else (
-            -1.0 if "neg" in label or "bear" in label else 0.0
-        )
+        prob = {p["label"].lower(): float(p["score"]) for p in scores}
+
+        def _get(*keys: str) -> float:
+            return next((prob[k] for k in prob for key in keys if key in k), 0.0)
+
+        p_bull = _get("pos", "bull")
+        p_bear = _get("neg", "bear")
+        p_neu = _get("neu")
         return SentimentResult(
-            score=round(signed * best["score"], 4),
-            confidence=round(float(best["score"]), 4),
+            score=round(p_bull - p_bear, 4),
+            confidence=round(1.0 - p_neu, 4),
             model_name=self._model_name,
         )
 

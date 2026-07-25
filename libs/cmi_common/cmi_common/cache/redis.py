@@ -35,7 +35,14 @@ class Cache:
         return json.loads(raw) if raw else None
 
     async def set_json(self, key: str, value: Any, ttl_seconds: int = 60) -> None:
-        await self._redis.set(key, json.dumps(value, default=str), ex=ttl_seconds)
+        payload = json.dumps(value, default=str)
+        # ttl_seconds <= 0 means "persist, no expiry" (used for durable keys like
+        # trading:runtime). Redis rejects `EX 0` ("invalid expire time"), so omit
+        # the expiry entirely in that case instead of passing ex=0.
+        if ttl_seconds and ttl_seconds > 0:
+            await self._redis.set(key, payload, ex=ttl_seconds)
+        else:
+            await self._redis.set(key, payload)
 
     # --- Rate limiting (fixed-window token bucket) ----------------------
     async def allow(self, key: str, limit: int, window_seconds: int) -> bool:

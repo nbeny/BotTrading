@@ -82,7 +82,9 @@ additive and honest.
 ## Scoring worker (`sentiment-service`)
 
 `app/worker.py`, modified:
-- `fetch_unscored` / `UnscoredRow` gain `author` and `confidence` (SQL projection + dataclass).
+- No `UnscoredRow` change needed: the worker already has `result.score`/`result.confidence`
+  from the scorer and `row.engagement` from the row. Distinct authors are read from
+  `raw_content` at read time, not stored per bucket, so `author` is not needed here.
 - Per scored item, upsert the hourly bucket additively — one upsert per (symbol, kind):
   `mentions += 1`, `score_sum += score`, `confidence_sum += confidence`,
   `weighted_score_sum += score·confidence`, `engagement_sum += engagement`. No write
@@ -168,9 +170,9 @@ into hourly buckets (reuses `_floor_hour` + additive upsert), **disabled by defa
   repointing.
 
 **Backward compatibility**: `SentimentEvent` Kafka schema **unchanged** (decision-engine
-unaffected). Internal contracts change: `upsert_aggregate` signature and `UnscoredRow`
-(add `author`/`confidence`). Frontend `content.ts` types `content_sentiment_agg` — realign
-to the new schema in the same batch.
+unaffected). Internal contract change: `upsert_aggregate` signature (additive columns +
+`bucket_start`). `UnscoredRow` is unchanged. Frontend `content.ts` types
+`content_sentiment_agg` — realign to the new schema in the same batch.
 
 ## Out of scope
 

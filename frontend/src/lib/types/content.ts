@@ -29,8 +29,8 @@ export interface DataStats {
   market_24h: number;
   avg_sentiment: number;
   volume_series: { hour: string; social: number; news: number; market: number }[];
-  // Live `/data/stats` sources this from content_sentiment_agg buckets, so `hour`
-  // is an ISO timestamp and each point carries `mentions`. The mock omits mentions.
+  // Live `/data/stats` sources this from content_sentiment_agg buckets; each point
+  // carries `mentions` and `hour` is an "HHh" label (the mock omits mentions).
   sentiment_series: { hour: string; sentiment: number; mentions?: number }[];
   top_sources: { source: string; count: number }[];
   mentions: { symbol: string; count: number }[];

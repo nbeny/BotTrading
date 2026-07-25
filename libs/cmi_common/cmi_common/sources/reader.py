@@ -81,6 +81,7 @@ def aggregate_buckets(
 
     avg = score_sum / mentions if mentions else 0.0
     weighted_avg = wscore_sum / conf_sum if conf_sum else 0.0
+    # Means are returned UNROUNDED (full precision); round at the API edge.
     return {
         "mentions": mentions,
         "avg": avg,
@@ -145,9 +146,14 @@ class SqlSentimentAggReader:
         self, *, symbol: str | None, kind: str | None, points: int,
         now: datetime | None = None,
     ) -> list[dict[str, float]]:
-        """Last `points` hourly buckets, oldest first, as {hour, sentiment}."""
+        """Last `points` hourly buckets, oldest first, as {hour, sentiment}.
+
+        `since` is floored to the hour so at most `points` buckets are returned
+        (an unfloored cutoff would span points+1 partial hours).
+        """
         now = now or datetime.now(tz=UTC)
-        since = now - timedelta(hours=points)
+        current_hour = now.replace(minute=0, second=0, microsecond=0)
+        since = current_hour - timedelta(hours=points - 1)
         rows = await self._fetch_buckets(symbol=symbol, kind=kind, since=since)
         by_hour: dict[datetime, list[BucketRow]] = {}
         for r in rows:

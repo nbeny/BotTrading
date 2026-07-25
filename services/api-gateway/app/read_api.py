@@ -35,7 +35,9 @@ from .routers import get_session_dep
 router = APIRouter(tags=["read"])
 
 
-def get_reader_dep(session: AsyncSession = Depends(get_session_dep)) -> SqlSentimentAggReader:
+def get_reader_dep(
+    session: AsyncSession = Depends(get_session_dep),
+) -> SqlSentimentAggReader:
     return SqlSentimentAggReader(session)
 
 
@@ -494,7 +496,16 @@ async def data_stats(session: AsyncSession = Depends(get_session_dep)) -> dict:
     rows = (await session.execute(stmt)).scalars().all()
     stats = compute_content_stats(rows)
     reader = SqlSentimentAggReader(session)
-    stats["sentiment_series"] = await reader.series(symbol=None, kind=None, points=12)
+    # Reader returns ISO hours; DataStats/mock use an "HHh" label on the X axis.
+    series = await reader.series(symbol=None, kind=None, points=12)
+    stats["sentiment_series"] = [
+        {
+            "hour": datetime.fromisoformat(p["hour"]).strftime("%Hh"),
+            "sentiment": p["sentiment"],
+            "mentions": p["mentions"],
+        }
+        for p in series
+    ]
     day = await reader.window_stats(symbol=None, kind=None, window="24h")
     stats["avg_sentiment"] = round(day["avg"], 2)
     return stats

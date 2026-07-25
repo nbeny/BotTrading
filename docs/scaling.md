@@ -55,12 +55,19 @@ partition ⇒ ordre garanti et corrélation locale sans coordination globale.
 
 ```
   100%   news/social/market  ──► sentiment-service (HuggingFace, coût ~0)
-   ~30%  signaux corrélés     ──► ai-worker-haiku   (Claude Haiku, coût faible)
-    ~5%  score ≥ 75 (escalate)──► ai-worker-sonnet  (Claude Sonnet, coût élevé, rare)
+   ~30%  signaux corrélés     ──► ai-worker-haiku   (triage déterministe, coût 0)
+    ~5%  score ≥ 60 (escalate)──► ai-worker-sonnet  (Claude Sonnet, coût élevé, rare)
     ~1%  décisions            ──► risk-engine        (déterministe, coût ~0)
 ```
 
-Le seuil `ANTHROPIC_ESCALATION_THRESHOLD` règle directement le budget Sonnet.
+Le seuil `HAIKU_ESCALATE_SCORE` (défaut 60) règle directement le budget Sonnet :
+c'est lui qui décide quelle fraction du trafic atteint l'analyste payant.
+`ai-worker-haiku` n'appelle plus Claude — son triage est un scorer déterministe
+local, donc gratuit et illimité.
+
+Les pourcentages ci-dessus sont un objectif de dimensionnement, pas une mesure.
+`GET /systems/funnel` donne les taux réels par étage ; calibrer les seuils
+là-dessus, pas sur ce schéma.
 
 ## Résilience
 

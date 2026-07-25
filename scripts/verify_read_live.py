@@ -1,43 +1,74 @@
-"""Live smoke check: call the api-gateway read endpoints directly against the
-real DB, all within one event loop (avoids TestClient/asyncpg loop juggling).
-Seed rows via psql first. Run inside the api-gateway container. Not a unit test.
+"""Live smoke check: call every api-gateway read endpoint against the real DB in
+one event loop and assert each response satisfies read_contract.CONTRACT. Seed
+rows via psql first; run inside the api-gateway container. Exits non-zero if any
+endpoint is unreachable or missing required keys. Not a unit test.
 """
 
 from __future__ import annotations
 
 import asyncio
+import sys
 
 from cmi_common import Settings
 from cmi_common.db import Database
 
 from app import read_api
+from app.read_contract import CONTRACT
 
 settings = Settings()
 db = Database(settings.db)
 
 
-async def main() -> None:
+def _check(name: str, resp) -> list[str]:
+    required = CONTRACT[name]
+    if isinstance(resp, list):
+        if not resp:
+            return []  # empty collection is shape-less but reachable; OK
+        target = resp[0]
+    else:
+        target = resp
+    return sorted(required - set(target))
+
+
+async def main() -> int:
+    failures: list[str] = []
     async with db._sessionmaker() as s:  # noqa: SLF001
         calls = [
-            ("market/tokens", read_api.market_tokens(session=s)),
-            ("market/news", read_api.market_news(limit=20, session=s)),
-            ("market/signals", read_api.market_signals(limit=30, session=s)),
-            ("data/content", read_api.data_content(
-                category="all", symbol=None, q=None, sentiment="all", limit=50, offset=0, session=s)),
-            ("data/stats", read_api.data_stats(session=s)),
             ("portfolio", read_api.portfolio(session=s)),
             ("portfolio/positions", read_api.portfolio_positions(session=s)),
+            ("portfolio/trades", read_api.portfolio_trades(limit=50, session=s)),
+            ("portfolio/history", read_api.portfolio_history(range="30d", session=s)),
+            ("market/tokens", read_api.market_tokens(session=s)),
+            ("market/news", read_api.market_news(limit=20, session=s)),
+            ("market/decisions", read_api.market_decisions(limit=30, session=s)),
             ("risk/exposure", read_api.risk_exposure(session=s)),
-            ("trace/corr-live-1", read_api.trace(cid="corr-live-1", session=s)),
+            ("risk/limits", read_api.risk_limits(session=s)),
+            ("risk/alerts", read_api.risk_alerts(limit=30, session=s)),
+            ("data/content", read_api.data_content(
+                category="all", symbol=None, q=None, sentiment="all",
+                limit=50, offset=0, session=s)),
+            ("data/stats", read_api.data_stats(session=s)),
             ("systems/overview", read_api.systems_overview(session=s)),
         ]
         for name, coro in calls:
             try:
                 res = await coro
-                print(f"OK   {name}  ->  {str(res)[:170]}")
             except Exception as e:  # noqa: BLE001
                 print(f"ERR  {name}  ->  {type(e).__name__}: {e}")
+                failures.append(name)
+                continue
+            missing = _check(name, res)
+            if missing:
+                print(f"FAIL {name}  ->  missing {missing}")
+                failures.append(name)
+            else:
+                print(f"OK   {name}  ->  {str(res)[:120]}")
     await db.dispose()
+    if failures:
+        print(f"\n{len(failures)} endpoint(s) failed: {failures}")
+        return 1
+    print("\nall read endpoints conform to CONTRACT")
+    return 0
 
 
-asyncio.run(main())
+sys.exit(asyncio.run(main()))

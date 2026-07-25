@@ -23,6 +23,10 @@ class KafkaSettings(BaseSettings):
     enable_idempotence: bool = True
     acks: str = "all"
     max_poll_records: int = 500
+    # Max time a handler may block between polls before the broker considers the
+    # consumer dead and rebalances. The AI workers raise this (via env) so a long
+    # quota pause inside the handler doesn't trigger a rebalance.
+    max_poll_interval_ms: int = 300000
 
 
 class DatabaseSettings(BaseSettings):
@@ -82,6 +86,12 @@ class AISettings(BaseSettings):
     cli_path: str = "claude"
     cli_timeout_ms: int = 120000
     cli_concurrency: int = 4
+    # --- quota pause/resume (subscription usage limit) ---
+    # When the CLI reports a usage limit, the worker pauses until the reset time
+    # parsed from the message; if none is given it retries after this cooldown.
+    quota_cooldown_ms: int = 1800000  # 30 min
+    # Hard cap on a single pause so a bogus reset stamp can't sleep forever.
+    max_quota_wait_ms: int = 21600000  # 6 h
 
 
 class ObservabilitySettings(BaseSettings):

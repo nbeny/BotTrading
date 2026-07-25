@@ -235,6 +235,8 @@ services:
       ANTHROPIC_CLI_CONCURRENCY: ${ANTHROPIC_CLI_CONCURRENCY:-2}
       # Long-lived subscription token (claude setup-token) — no credentials mount.
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # Allow a multi-hour quota pause inside the handler without a rebalance.
+      KAFKA_MAX_POLL_INTERVAL_MS: ${KAFKA_MAX_POLL_INTERVAL_MS:-22200000}
     deploy:
       replicas: ${HAIKU_REPLICAS:-1}
 
@@ -249,6 +251,7 @@ services:
       ANTHROPIC_CLI_TIMEOUT_MS: ${ANTHROPIC_CLI_TIMEOUT_MS:-120000}
       ANTHROPIC_CLI_CONCURRENCY: ${ANTHROPIC_CLI_CONCURRENCY:-2}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      KAFKA_MAX_POLL_INTERVAL_MS: ${KAFKA_MAX_POLL_INTERVAL_MS:-22200000}
 
   decision-engine:
     <<: *svc

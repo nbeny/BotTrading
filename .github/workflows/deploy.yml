@@ -34,7 +34,9 @@ jobs:
           python -m pytest \
             tests/test_read_contract.py \
             tests/test_api_gateway_read.py \
-            tests/test_api_gateway_sentiment.py -q
+            tests/test_api_gateway_sentiment.py \
+            tests/test_ai_config.py \
+            tests/test_ai_quota.py -q
 
   # -------------------------------------------------------------- images
   images:

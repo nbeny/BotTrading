@@ -53,6 +53,7 @@ class EventConsumer:
             auto_offset_reset=self._settings.auto_offset_reset,
             enable_auto_commit=False,
             max_poll_records=self._settings.max_poll_records,
+            max_poll_interval_ms=self._settings.max_poll_interval_ms,
         )
         await self._consumer.start()
         logger.info(

@@ -29,6 +29,9 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
             timeout_ms=settings.ai.cli_timeout_ms,
             concurrency=settings.ai.cli_concurrency,
         ),
+        cache=cache,
+        quota_cooldown_s=settings.ai.quota_cooldown_ms // 1000,
+        max_quota_wait_s=settings.ai.max_quota_wait_ms // 1000,
     )
     worker = HaikuWorker(
         claude,

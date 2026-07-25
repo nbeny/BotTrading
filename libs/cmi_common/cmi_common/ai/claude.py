@@ -15,8 +15,10 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -90,6 +92,10 @@ class ClaudeResponse:
     input_tokens: int = 0
     output_tokens: int = 0
     actual_model: str | None = None
+    # Set when the CLI reported a subscription usage limit. `reset_at` is the
+    # epoch-seconds the limit lifts, parsed from the message when present.
+    quota_exceeded: bool = False
+    reset_at: int | None = None
 
     def json(self) -> dict[str, Any]:
         """Best-effort parse of a JSON object out of the model's reply."""
@@ -125,8 +131,14 @@ class ClaudeClient:
         max_tokens: int = 1024,
         transport: str = "api",
         cli: CliOptions | None = None,
+        cache: Any | None = None,
+        quota_cooldown_s: int = 1800,
+        max_quota_wait_s: int = 21600,
     ) -> None:
         self._model = model
+        self._cache = cache
+        self._quota_cooldown_s = quota_cooldown_s
+        self._max_quota_wait_s = max_quota_wait_s
         if transport == "cli":
             self._transport: _Transport = CliTransport(model, cli or CliOptions())
         elif api_key:
@@ -137,9 +149,58 @@ class ClaudeClient:
     async def complete(
         self, *, system: str, prompt: str, service: str
     ) -> ClaudeResponse:
-        return await self._transport.complete(
-            system=system, prompt=prompt, service=service
-        )
+        # On a subscription usage limit the transport returns quota_exceeded=True.
+        # Pause until the reported reset (capped), publish status to Redis for the
+        # UI, then retry. The caller — and thus its Kafka offset — blocks here, so
+        # no event is dropped or scored 0 during the outage; the backlog is
+        # consumed on resume.
+        while True:
+            resp = await self._transport.complete(
+                system=system, prompt=prompt, service=service
+            )
+            if not resp.quota_exceeded:
+                return resp
+            now = int(time.time())
+            resume_at = resp.reset_at or (now + self._quota_cooldown_s)
+            resume_at = max(now + 1, min(resume_at, now + self._max_quota_wait_s))
+            await self._set_quota_status(service, resume_at)
+            logger.warning(
+                "ai_quota_paused service=%s resume_at=%s (%ss)",
+                service,
+                resume_at,
+                resume_at - now,
+            )
+            await asyncio.sleep(resume_at - now)
+            await self._clear_quota_status(service)
+
+    async def _set_quota_status(self, service: str, resume_at: int) -> None:
+        if self._cache is None:
+            return
+        try:
+            await self._cache.set_json(
+                f"ai:quota:{service}",
+                {
+                    "paused": True,
+                    "service": service,
+                    "resume_at": resume_at,
+                    "since": int(time.time()),
+                },
+                ttl_seconds=max(60, resume_at - int(time.time()) + 60),
+            )
+        except Exception:  # noqa: BLE001 - status is best-effort, never fatal
+            logger.debug("failed to write quota status", exc_info=True)
+
+    async def _clear_quota_status(self, service: str) -> None:
+        if self._cache is None:
+            return
+        try:
+            await self._cache.set_json(
+                f"ai:quota:{service}",
+                {"paused": False, "service": service, "resumed_at": int(time.time())},
+                ttl_seconds=300,
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("failed to clear quota status", exc_info=True)
 
 
 class _Transport:
@@ -258,7 +319,8 @@ class CliTransport(_Transport):
                 logger.warning("claude CLI timeout for %s", service)
                 return ClaudeResponse(text="")
             if proc.returncode != 0:
-                outcome = "quota" if _is_quota(err) else "error"
+                is_quota = _is_quota(err)
+                outcome = "quota" if is_quota else "error"
                 AI_CLI_CALLS.labels(service, self._model, outcome).inc()
                 logger.warning(
                     "claude CLI exit %s (%s): %s",
@@ -266,6 +328,10 @@ class CliTransport(_Transport):
                     outcome,
                     err.decode(errors="replace")[:500],
                 )
+                if is_quota:
+                    return ClaudeResponse(
+                        text="", quota_exceeded=True, reset_at=_parse_reset(err)
+                    )
                 return ClaudeResponse(text="")
             return self._parse(out, service)
         finally:
@@ -319,9 +385,23 @@ class CliTransport(_Transport):
         AI_MODEL_TIER_MISMATCH.labels(service, want, got).inc()
 
 
+_QUOTA_RE = re.compile(r"rate.?limit|usage limit|quota|\b429\b|too many requests", re.I)
+# The CLI stamps the epoch the limit lifts, e.g. "Claude AI usage limit reached|1709312400"
+# or "Your limit will reset at 1709312400". 10 digits = seconds, 13 = milliseconds.
+_RESET_RE = re.compile(r"(?:usage limit reached|limit will reset|resets? at)\D*(\d{10,13})", re.I)
+
+
 def _is_quota(err: bytes) -> bool:
-    low = err.decode(errors="replace").lower()
-    return "usage limit" in low or "rate limit" in low or "quota" in low
+    return bool(_QUOTA_RE.search(err.decode(errors="replace")))
+
+
+def _parse_reset(err: bytes) -> int | None:
+    """Epoch **seconds** when the usage limit lifts, or None if not present."""
+    m = _RESET_RE.search(err.decode(errors="replace"))
+    if not m:
+        return None
+    raw = int(m.group(1))
+    return raw // 1000 if raw > 10_000_000_000 else raw  # ms -> s
 
 
 def _offline_stub(prompt: str) -> ClaudeResponse:

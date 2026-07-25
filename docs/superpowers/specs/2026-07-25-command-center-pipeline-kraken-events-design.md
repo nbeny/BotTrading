@@ -128,9 +128,18 @@ Les facteurs normalisés sont calculés puis jetés. On les conserve :
   permet de mesurer la couverture des facteurs *avant* de décider s'il faut les
   enrichir.
 - Nouvelle table `pipeline_rejections` (`time`, `stage`, `symbol`,
-  `correlation_id`, `reason`, `score`, `confidence`). `decision-engine` et
-  `risk-engine` calculent déjà ces refus mais ne les émettent qu'en logs — le
-  `reason` de `rules.py` se perd aujourd'hui.
+  `correlation_id`, `reason`, `score`, `confidence`).
+
+  Le risk-engine émet **déjà** un `RiskRejectedEvent` sur le topic
+  `decision.events` comme piste d'audit (`engine.py:100-112`,
+  `libs/cmi_common/cmi_common/events/risk.py:64`), et l'api-gateway consomme déjà
+  ce topic (`main.py:23`). Persister ces refus ne demande donc qu'une branche
+  supplémentaire dans `Persister.handle` — aucun nouveau canal.
+
+  Le decision-engine, lui, abandonne silencieusement (`engine.py:53-54`,
+  `return` nu) : c'est le seul étage à instrumenter réellement. Il émettra un
+  `RiskRejectedEvent` avec `source = DECISION_ENGINE` et un `reason` structuré,
+  réutilisant l'événement existant plutôt que d'en créer un second de même forme.
 
 Nouvel endpoint `GET /systems/funnel?window=24h` :
 
@@ -160,15 +169,24 @@ ferait sur une moyenne trompeuse.
 
 ### 1b. Seuils configurables + correction de la confiance
 
-Les quatre seuils deviennent des variables d'environnement, **avec les valeurs
-actuelles comme défaut** — ce changement ne modifie donc rien au comportement :
+**Trois des quatre seuils sont déjà configurables** — vérification faite dans le
+code :
 
-```
-CMI_ESCALATE_SCORE=60
-CMI_DECISION_THRESHOLD=70
-CMI_RISK_MIN_SCORE=70
-CMI_RISK_MIN_CONFIDENCE=0.55
-```
+| Seuil | Variable | Statut |
+|---|---|---|
+| decision-engine | `DECISION_THRESHOLD` | existe (`decision-engine/app/main.py:15`) |
+| risk-engine score | `RISK_MIN_SCORE` | existe (`risk-engine/app/main.py:24`) |
+| risk-engine confiance | `RISK_MIN_CONFIDENCE` | existe (`risk-engine/app/main.py:23`) |
+| escalade Haiku | `HAIKU_ESCALATE_SCORE` | **à créer** |
+
+Seul le scorer Haiku n'a aucun câblage : `main.py:22` construit
+`HaikuWorker(FeatureStore(cache), producer)` sans `scorer_config`, donc les
+défauts de `ScorerConfig` sont figés dans le code. C'est le seul travail de
+configuration réel de cette phase. Les variables gardent les valeurs actuelles
+comme défaut ; ce changement ne modifie donc rien au comportement.
+
+On conserve la convention de nommage existante (`RISK_*`, `DECISION_*`) plutôt
+que d'introduire un préfixe `CMI_` concurrent.
 
 Les valeurs cibles seront fixées après observation de l'entonnoir sur une période
 réelle. Aucune valeur n'est proposée ici : ce serait le calibrage à l'aveugle que
@@ -428,16 +446,16 @@ Tous avec les défauts actuels, donc aucun changement de comportement au
 déploiement :
 
 ```
-CMI_ESCALATE_SCORE=60
-CMI_DECISION_THRESHOLD=70
-CMI_RISK_MIN_SCORE=70
-CMI_RISK_MIN_CONFIDENCE=0.55
-KRAKEN_READ_API_KEY=
-KRAKEN_READ_API_SECRET=
-CMI_ACCOUNT_POLL_S=60
-CMI_EVENTS_RETENTION_MARKET_D=7
-CMI_EVENTS_RETENTION_SIGNAL_D=90
+HAIKU_ESCALATE_SCORE=60           # nouveau (seul seuil non câblé)
+KRAKEN_READ_API_KEY=              # nouveau
+KRAKEN_READ_API_SECRET=           # nouveau
+CMI_ACCOUNT_POLL_S=60             # nouveau
+CMI_EVENTS_RETENTION_MARKET_D=7   # nouveau
+CMI_EVENTS_RETENTION_SIGNAL_D=90  # nouveau
 ```
+
+Déjà existants, à exposer dans `docker-compose.vps.yml` pour être ajustables
+sans rebuild : `DECISION_THRESHOLD`, `RISK_MIN_SCORE`, `RISK_MIN_CONFIDENCE`.
 
 ## Ordre de livraison
 

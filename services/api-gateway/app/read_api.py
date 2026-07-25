@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cmi_common.db import Decision, News, Price, Sentiment, Signal, Token
+from cmi_common.db import Decision, News, Price, Sentiment, Signal, Token, Trade
 from cmi_common.db.models import RawContent
 
 from .routers import get_session_dep
@@ -341,6 +341,105 @@ async def data_content(
         stmt = stmt.where(where)
     rows = (await session.execute(stmt.offset(offset).limit(limit))).scalars().all()
     return {"items": [map_content(r) for r in rows], "total": int(total), "offset": offset, "limit": limit}
+
+
+def assemble_trace(cid: str, signal: Any | None, decision: Any | None, trade: Any | None) -> dict:
+    """Reconstruct an end-to-end DecisionTrace from persisted rows. Pure.
+
+    Stages map to what the pipeline durably records: analysis (signals) →
+    decision (decisions) → risk + order (trades). Price/sentiment context is
+    read from the analysis signal's payload when available.
+    """
+    p = getattr(signal, "payload", None) or {}
+    symbol = (
+        getattr(signal, "symbol", None)
+        or getattr(decision, "symbol", None)
+        or getattr(trade, "symbol", None)
+        or "?"
+    )
+    filled = bool(trade and str(getattr(trade, "status", "")).lower() in {"filled", "closed"})
+    stages = [
+        {
+            "kind": "price",
+            "at": _iso(getattr(signal, "time", None)),
+            "reached": "price_change_pct_24h" in p,
+            "summary": f"Contexte prix {symbol}",
+            "detail": {"change_24h_pct": p.get("price_change_pct_24h"), "volume_spike": p.get("volume_spike_ratio")},
+        },
+        {
+            "kind": "sentiment",
+            "at": _iso(getattr(signal, "time", None)),
+            "reached": p.get("sentiment_score") is not None,
+            "summary": "Sentiment agrégé",
+            "detail": {"score": p.get("sentiment_score"), "social_growth": p.get("social_growth")},
+        },
+        {
+            "kind": "analysis",
+            "at": _iso(getattr(signal, "time", None)),
+            "reached": signal is not None,
+            "summary": "Haiku — triage",
+            "detail": {
+                "opportunity_score": getattr(signal, "opportunity_score", None),
+                "confidence": _num(getattr(signal, "confidence", None)) if signal else None,
+                "escalate": bool(getattr(signal, "escalated", False)) if signal else None,
+            },
+        },
+        {
+            "kind": "decision",
+            "at": _iso(getattr(decision, "created_at", None)),
+            "reached": decision is not None,
+            "summary": "Sonnet — décision",
+            "detail": {
+                "direction": getattr(decision, "direction", None),
+                "confidence": _num(getattr(decision, "confidence", None)) if decision else None,
+                "ai_validated": bool(getattr(decision, "ai_validated", False)) if decision else None,
+            },
+        },
+        {
+            "kind": "risk",
+            "at": _iso(getattr(trade, "created_at", None)),
+            "reached": trade is not None,
+            "summary": "Risque — sizing & protection",
+            "detail": {
+                "size_pct": _num(getattr(trade, "position_size_pct", None)) if trade else None,
+                "stop_loss": _num(getattr(trade, "stop_loss", None)) if trade else None,
+                "take_profit": _num(getattr(trade, "take_profit", None)) if trade else None,
+                "rr": _num(getattr(trade, "risk_reward_ratio", None)) if trade else None,
+            },
+        },
+        {
+            "kind": "order",
+            "at": _iso(getattr(trade, "updated_at", None)),
+            "reached": filled,
+            "summary": "Ordre exécuté" if filled else "Ordre en attente",
+            "detail": {
+                "status": getattr(trade, "status", None) if trade else None,
+                "fill_price": _num(getattr(trade, "fill_price", None)) if trade and getattr(trade, "fill_price", None) else None,
+                "pnl": _num(getattr(trade, "pnl", None)) if trade and getattr(trade, "pnl", None) is not None else None,
+            },
+        },
+    ]
+    return {"correlation_id": cid, "symbol": symbol, "stages": stages}
+
+
+@router.get("/trace/{cid}")
+async def trace(cid: str, session: AsyncSession = Depends(get_session_dep)) -> dict:
+    sig = (
+        await session.execute(
+            select(Signal).where(Signal.payload["correlation_id"].astext == cid).order_by(Signal.time.desc()).limit(1)
+        )
+    ).scalars().first()
+    dec = (
+        await session.execute(
+            select(Decision).where(Decision.correlation_id == cid).order_by(Decision.created_at.desc()).limit(1)
+        )
+    ).scalars().first()
+    trd = (
+        await session.execute(
+            select(Trade).where(Trade.correlation_id == cid).order_by(Trade.created_at.desc()).limit(1)
+        )
+    ).scalars().first()
+    return assemble_trace(cid, sig, dec, trd)
 
 
 @router.get("/data/stats")

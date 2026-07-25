@@ -53,6 +53,7 @@ class Persister:
         async with self._db._sessionmaker() as s:  # noqa: SLF001
             stmt = insert(Decision).values(
                 event_id=e.event_id,
+                correlation_id=e.correlation_id,
                 symbol=e.symbol,
                 direction=e.direction,
                 opportunity_score=e.opportunity_score,
@@ -69,6 +70,7 @@ class Persister:
         async with self._db._sessionmaker() as s:  # noqa: SLF001
             stmt = insert(Trade).values(
                 event_id=e.event_id,
+                correlation_id=e.correlation_id,
                 symbol=e.symbol,
                 direction=e.direction,
                 entry_price=e.entry_price,

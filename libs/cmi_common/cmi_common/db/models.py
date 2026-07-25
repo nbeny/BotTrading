@@ -105,6 +105,7 @@ class Decision(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     event_id: Mapped[str] = mapped_column(String(64), unique=True)
+    correlation_id: Mapped[str | None] = mapped_column(String(64), index=True, default=None)
     symbol: Mapped[str] = mapped_column(String(32), index=True)
     direction: Mapped[str] = mapped_column(String(8))
     opportunity_score: Mapped[int] = mapped_column(Integer)
@@ -121,6 +122,7 @@ class Trade(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     event_id: Mapped[str] = mapped_column(String(64), unique=True)
+    correlation_id: Mapped[str | None] = mapped_column(String(64), index=True, default=None)
     decision_id: Mapped[int | None] = mapped_column(ForeignKey("decisions.id"))
     symbol: Mapped[str] = mapped_column(String(32), index=True)
     direction: Mapped[str] = mapped_column(String(8))

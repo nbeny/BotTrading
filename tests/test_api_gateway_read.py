@@ -22,6 +22,7 @@ if str(_SVC) not in sys.path:
 
 from app import read_api  # noqa: E402
 from app.read_api import (  # noqa: E402
+    assemble_trace,
     compute_content_stats,
     map_content,
     map_decision,
@@ -215,6 +216,51 @@ def test_endpoint_data_content_wiring() -> None:
     assert body["total"] == 2
     assert len(body["items"]) == 2
     assert body["items"][0]["source_category"] == "social"
+
+
+def test_assemble_trace_full_chain() -> None:
+    sig = SimpleNamespace(
+        symbol="BTC", time=NOW, opportunity_score=82, confidence=0.7, escalated=True,
+        payload={"price_change_pct_24h": 6.0, "sentiment_score": 0.4, "social_growth": 0.8,
+                 "volume_spike_ratio": 2.1},
+    )
+    dec = SimpleNamespace(symbol="BTC", created_at=NOW, direction="long", confidence=0.9, ai_validated=True)
+    trd = SimpleNamespace(
+        symbol="BTC", created_at=NOW, updated_at=NOW, status="filled", position_size_pct=0.04,
+        stop_loss=63000, take_profit=74000, risk_reward_ratio=2.4, fill_price=66800, pnl=120,
+    )
+    t = assemble_trace("corr-1", sig, dec, trd)
+    assert t["correlation_id"] == "corr-1"
+    assert t["symbol"] == "BTC"
+    kinds = {s["kind"]: s for s in t["stages"]}
+    assert len(t["stages"]) == 6
+    assert kinds["analysis"]["reached"] is True
+    assert kinds["decision"]["detail"]["direction"] == "long"
+    assert kinds["order"]["reached"] is True  # status filled
+    assert kinds["order"]["detail"]["fill_price"] == 66800.0
+
+
+def test_assemble_trace_partial_chain() -> None:
+    sig = SimpleNamespace(symbol="ETH", time=NOW, opportunity_score=60, confidence=0.6, escalated=False, payload={})
+    t = assemble_trace("corr-2", sig, None, None)
+    kinds = {s["kind"]: s for s in t["stages"]}
+    assert kinds["analysis"]["reached"] is True
+    assert kinds["decision"]["reached"] is False
+    assert kinds["risk"]["reached"] is False
+    assert kinds["order"]["reached"] is False
+
+
+def test_endpoint_trace_wiring() -> None:
+    sig = SimpleNamespace(symbol="BTC", time=NOW, opportunity_score=80, confidence=0.7, escalated=True, payload={})
+    dec = SimpleNamespace(symbol="BTC", created_at=NOW, direction="long", confidence=0.9, ai_validated=True)
+    trd = SimpleNamespace(symbol="BTC", created_at=NOW, updated_at=NOW, status="filled", position_size_pct=0.04,
+                          stop_loss=1, take_profit=2, risk_reward_ratio=2.0, fill_price=100, pnl=None)
+    client = _client([_Result(rows=[sig]), _Result(rows=[dec]), _Result(rows=[trd])])
+    r = client.get("/trace/corr-1")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["correlation_id"] == "corr-1"
+    assert len(body["stages"]) == 6
 
 
 def test_endpoint_market_news_wiring() -> None:

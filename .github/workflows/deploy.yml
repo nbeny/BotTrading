@@ -1,0 +1,125 @@
+name: deploy
+
+# CI on every push/PR; build + auto-deploy to the VPS only on push to master.
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io/nbeny
+
+jobs:
+  # ---------------------------------------------------------------- test
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install ./libs/cmi_common
+          pip install ./services/api-gateway
+          pip install pytest pytest-asyncio
+      - name: Read-plane parity + unit tests
+        run: |
+          python -m pytest \
+            tests/test_read_contract.py \
+            tests/test_api_gateway_read.py \
+            tests/test_api_gateway_sentiment.py -q
+
+  # -------------------------------------------------------------- images
+  images:
+    needs: test
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: collector-coingecko,   dockerfile: docker/Dockerfile,     path: services/collector-coingecko }
+          - { name: collector-dexscreener, dockerfile: docker/Dockerfile,     path: services/collector-dexscreener }
+          - { name: collector-social,      dockerfile: docker/Dockerfile,     path: services/collector-social }
+          - { name: collector-news,        dockerfile: docker/Dockerfile,     path: services/collector-news }
+          - { name: decision-engine,       dockerfile: docker/Dockerfile,     path: services/decision-engine }
+          - { name: risk-engine,           dockerfile: docker/Dockerfile,     path: services/risk-engine }
+          - { name: trading-engine,        dockerfile: docker/Dockerfile,     path: services/trading-engine }
+          - { name: api-gateway,           dockerfile: docker/Dockerfile,     path: services/api-gateway }
+          - { name: control-api,           dockerfile: docker/Dockerfile,     path: services/control-api }
+          - { name: websocket-gateway,     dockerfile: docker/Dockerfile,     path: services/websocket-gateway }
+          - { name: migrate,               dockerfile: docker/Dockerfile,     path: migrations }
+          - { name: sentiment-service,     dockerfile: docker/Dockerfile.ml,  path: services/sentiment-service }
+          - { name: ai-worker-haiku,       dockerfile: docker/Dockerfile.ai,  path: services/ai-worker-haiku }
+          - { name: ai-worker-sonnet,      dockerfile: docker/Dockerfile.ai,  path: services/ai-worker-sonnet }
+          - { name: web-terminal,          dockerfile: frontend/Dockerfile,   path: "",                          context: frontend, web: true }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build & push ${{ matrix.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context || '.' }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/bottrading-${{ matrix.name }}:latest
+            ${{ env.REGISTRY }}/bottrading-${{ matrix.name }}:${{ github.sha }}
+          build-args: |
+            SERVICE_PATH=${{ matrix.path }}
+            NEXT_PUBLIC_USE_MOCK=0
+            NEXT_PUBLIC_WS_URL=wss://crypto.nbeny.fr/ws
+            NEXT_PUBLIC_API_BASE=/api/gateway
+            NEXT_PUBLIC_CONTROL_BASE=/api/control
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  # -------------------------------------------------------------- deploy
+  deploy:
+    needs: images
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+      - name: Sync deploy files to VPS
+        run: |
+          rsync -az --mkpath \
+            docker-compose.vps.yml \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/bottrading/"
+          rsync -az --delete \
+            scripts/ \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/bottrading/scripts/"
+          rsync -az --delete \
+            observability/ \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/bottrading/observability/"
+      - name: Deploy on VPS
+        run: |
+          ssh "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            "REGISTRY=${{ env.REGISTRY }} TAG=${{ github.sha }} \
+             GHCR_USER=${{ github.actor }} GHCR_TOKEN=${{ secrets.GITHUB_TOKEN }} \
+             bash /opt/bottrading/scripts/deploy-vps.sh"

@@ -1,0 +1,386 @@
+# BotTrading / CMI — VPS deployment behind the shared Traefik (traefik-public).
+#
+# ONE public host: crypto.nbeny.fr
+#   - crypto.nbeny.fr        -> web-terminal (Next.js :3000), live mode
+#   - crypto.nbeny.fr/ws     -> websocket-gateway (:8000)
+#   REST (api-gateway, control-api) is NOT public — the Next.js server proxies it
+#   over the internal `cmi` network (rewrites /api/gateway/* and /api/control/*).
+#
+# Images are prebuilt in CI and pulled from GHCR (the VPS never builds).
+# Observability (prometheus/grafana/otel) is behind the `observability` profile,
+# OFF by default to save RAM. Enable with:
+#   docker compose -f docker-compose.vps.yml --profile observability up -d
+#
+# Deploy is driven by scripts/deploy-vps.sh (called from .github/workflows/deploy.yml).
+# Requires a `.env` on the VPS (see .env.vps.example) and the external `traefik-public`
+# network (created by scripts/setup-vps.sh).
+
+x-common-env: &common-env
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  DB_HOST: postgres
+  DB_USER: ${DB_USER:-cmi}
+  DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+  DB_NAME: ${DB_NAME:-cmi}
+  REDIS_HOST: redis
+  # Tracing off by default (no otel-collector unless the observability profile is up).
+  OTEL_TRACING_ENABLED: ${OTEL_TRACING_ENABLED:-false}
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+  OTEL_SENTRY_DSN: ${SENTRY_DSN:-}
+  OTEL_ENVIRONMENT: ${ENVIRONMENT:-production}
+
+x-svc: &svc
+  restart: unless-stopped
+  depends_on:
+    kafka:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  networks:
+    - cmi
+
+networks:
+  cmi:
+    driver: bridge
+  traefik-public:
+    external: true
+
+volumes:
+  kafka-data:
+  pg-data:
+  redis-data:
+  hf-cache:
+  prom-data:
+  grafana-data:
+
+services:
+  # ------------------------------------------------------------ event bus
+  kafka:
+    image: bitnami/kafka:3.7
+    restart: unless-stopped
+    environment:
+      KAFKA_CFG_NODE_ID: "1"
+      KAFKA_CFG_PROCESS_ROLES: broker,controller
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+      # Cap the JVM heap on the memory-constrained VPS (default is ~1 GB).
+      KAFKA_HEAP_OPTS: ${KAFKA_HEAP_OPTS:--Xmx512m -Xms512m}
+    volumes:
+      - kafka-data:/bitnami/kafka
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    networks:
+      - cmi
+
+  kafka-init:
+    image: bitnami/kafka:3.7
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "/init/create-topics.sh"]
+    volumes:
+      - ./scripts/create-topics.sh:/init/create-topics.sh:ro
+    restart: on-failure
+    networks:
+      - cmi
+
+  # ------------------------------------------------------------- storage
+  postgres:
+    image: timescale/timescaledb:2.15.3-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-cmi}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      POSTGRES_DB: ${DB_NAME:-cmi}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-cmi}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - cmi
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - cmi
+
+  # --------------------------------------------------------- migrations
+  migrate:
+    image: ${REGISTRY:-ghcr.io/nbeny}/bottrading-migrate:${TAG:-latest}
+    command: ["sh", "-c", "alembic upgrade head"]
+    environment: *common-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: on-failure
+    networks:
+      - cmi
+
+  # --------------------------------------------------------- collectors
+  collector-coingecko:
+    <<: *svc
+    image: ${REGISTRY:-ghcr.io/nbeny}/bottrading-collector-coingecko:${TAG:-latest}
+    environment:
+      <<: *common-env
+      COINGECKO_API_KEY: ${COINGECKO_API_KEY:-}
+      COINGECKO_POLL_INTERVAL: ${COINGECKO_POLL_INTERVAL:-60}
+
+  collector-dexscreener:
+    <<: *svc
+    image: ${REGISTRY:-ghcr.io/nbeny}/bottrading-collector-dexscreener:${TAG:-latest}
+    environment:
+      <<: *common-env
+      DEXSCREENER_POLL_INTERVAL: ${DEXSCREENER_POLL_INTERVAL:-30}
+
+  collector-social:
+    <<: *svc
+    image: ${REGISTRY:-ghcr.io/nbeny}/bottrading-collector-social:${TAG:-latest}
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      SOCIAL_POLL_INTERVAL: ${SOCIAL_POLL_INTERVAL:-300}
+      BLUESKY_QUERY: ${BLUESKY_QUERY:-crypto}
+      REDDIT_SUBREDDITS: ${REDDIT_SUBREDDITS:-CryptoCurrency,CryptoMoonShots,solana}
+      REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID:-}
+      REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET:-}
+      MASTODON_INSTANCE: ${MASTODON_INSTANCE:-mastodon.social}
+      MASTODON_HASHTAG: ${MASTODON_HASHTAG:-crypto}
+      NEYNAR_API_KEY: ${NEYNAR_API_KEY:-}
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
+      LENS_QUERY: ${LENS_QUERY:-crypto}
+      SOURCE_BREAKER_COOLDOWN: ${SOURCE_BREAKER_COOLDOWN:-300}
+
+  collector-news:
+    <<: *svc
+    image: ${REGISTRY:-ghcr.io/nbeny}/bottrading-collector-news:${TAG:-latest}
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      NEWS_POLL_INTERVAL: ${NEWS_POLL_INTERVAL:-300}
+      CRYPTOCOMPARE_API_KEY: ${CRYPTOCOMPARE_API_KEY:-}
+      RSS_FEEDS: ${RSS_FEEDS:-}
+      GDELT_QUERY: ${GDELT_QUERY:-cryptocurrency}
+      NEWSDATA_API_KEY: ${NEWSDATA_API_KEY:-}
+      SOURCE_BREAKER_COOLDOWN: ${SOURCE_BREAKER_COOLDOWN:-300}
+
+  # ----------------------------------------------------------- analytics
+  sentiment-service:
+    <<: *svc
+    image: ${REGISTRY:-ghcr.io/nbeny}/bottrading-sentiment-service:${TAG:-latest}
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      SENTIMENT_MODEL: ${SENTIMENT_MODEL:-ElKulako/cryptobert}
+      SENTIMENT_WORKER_INTERVAL: ${SENTIMENT_WORKER_INTERVAL:-10}
+      SENTIMENT_BATCH: ${SENTIMENT_BATCH:-100}
+    volumes:
+      - hf-cache:/home/appuser/.cache/huggingface
+
+  ai-worker-haiku:
+    <<: *svc
+    image: ${REGISTRY:-ghcr.io/nbeny}/bottrading-ai-worker-haiku:${TAG:-latest}
+    environment:
+      <<: *common-env
+      ANTHROPIC_HAIKU_MODEL: ${ANTHROPIC_HAIKU_MODEL:-claude-haiku-4-5-20251001}
+      ANTHROPIC_ESCALATION_THRESHOLD: ${ANTHROPIC_ESCALATION_THRESHOLD:-75}
+      ANTHROPIC_TRANSPORT: ${ANTHROPIC_TRANSPORT:-cli}
+      ANTHROPIC_CLI_PATH: ${ANTHROPIC_CLI_PATH:-claude}
+      ANTHROPIC_CLI_TIMEOUT_MS: ${ANTHROPIC_CLI_TIMEOUT_MS:-120000}
+      # Keep CLI concurrency low on the 2-vCPU VPS (shares the box with claudo).
+      ANTHROPIC_CLI_CONCURRENCY: ${ANTHROPIC_CLI_CONCURRENCY:-2}
+      # Long-lived subscription token (claude setup-token) — no credentials mount.
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+    deploy:
+      replicas: ${HAIKU_REPLICAS:-1}
+
+  ai-worker-sonnet:
+    <<: *svc
+    image: ${REGISTRY:-ghcr.io/nbeny}/bottrading-ai-worker-sonnet:${TAG:-latest}
+    environment:
+      <<: *common-env
+      ANTHROPIC_SONNET_MODEL: ${ANTHROPIC_SONNET_MODEL:-claude-sonnet-4-6}
+      ANTHROPIC_TRANSPORT: ${ANTHROPIC_TRANSPORT:-cli}
+      ANTHROPIC_CLI_PATH: ${ANTHROPIC_CLI_PATH:-claude}
+      ANTHROPIC_CLI_TIMEOUT_MS: ${ANTHROPIC_CLI_TIMEOUT_MS:-120000}
+      ANTHROPIC_CLI_CONCURRENCY: ${ANTHROPIC_CLI_CONCURRENCY:-2}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+
+  decision-engine:
+    <<: *svc
+    image: ${REGISTRY:-ghcr.io/nbeny}/bottrading-decision-engine:${TAG:-latest}
+    environment:
+      <<: *common-env
+      DECISION_THRESHOLD: ${DECISION_THRESHOLD:-70}
+
+  risk-engine:
+    <<: *svc
+    image: ${REGISTRY:-ghcr.io/nbeny}/bottrading-risk-engine:${TAG:-latest}
+    environment:
+      <<: *common-env
+      RISK_MAX_POSITION_PCT: ${RISK_MAX_POSITION_PCT:-0.05}
+
+  trading-engine:
+    <<: *svc
+    image: ${REGISTRY:-ghcr.io/nbeny}/bottrading-trading-engine:${TAG:-latest}
+    environment:
+      <<: *common-env
+      TRADING_MODE: ${TRADING_MODE:-dry_run}
+      TRADING_ENABLED: ${TRADING_ENABLED:-true}
+      MAX_ORDER_USD: ${MAX_ORDER_USD:-500}
+      MAX_LEVERAGE: ${MAX_LEVERAGE:-3}
+      MAX_ORDERS_PER_HOUR: ${MAX_ORDERS_PER_HOUR:-10}
+      ENTRY_TIMEOUT_S: ${ENTRY_TIMEOUT_S:-30}
+      RECONCILE_INTERVAL_S: ${RECONCILE_INTERVAL_S:-10}
+      KRAKEN_API_KEY: ${KRAKEN_API_KEY:-}
+      KRAKEN_API_SECRET: ${KRAKEN_API_SECRET:-}
+
+  # ------------------------------------------------- control / read plane
+  api-gateway:
+    <<: *svc
+    image: ${REGISTRY:-ghcr.io/nbeny}/bottrading-api-gateway:${TAG:-latest}
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment: *common-env
+    # Internal only — reached by the Next.js server over the `cmi` network.
+
+  control-api:
+    <<: *svc
+    image: ${REGISTRY:-ghcr.io/nbeny}/bottrading-control-api:${TAG:-latest}
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      CONTROL_ADMIN_USER: ${CONTROL_ADMIN_USER:-admin}
+      CONTROL_ADMIN_PASSWORD: ${CONTROL_ADMIN_PASSWORD:?set CONTROL_ADMIN_PASSWORD in .env}
+    # Internal only — reached by the Next.js server over the `cmi` network.
+
+  websocket-gateway:
+    <<: *svc
+    image: ${REGISTRY:-ghcr.io/nbeny}/bottrading-websocket-gateway:${TAG:-latest}
+    environment:
+      <<: *common-env
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+    networks:
+      - cmi
+      - traefik-public
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik-public
+      - "traefik.http.routers.crypto-ws.rule=Host(`crypto.nbeny.fr`) && PathPrefix(`/ws`)"
+      - traefik.http.routers.crypto-ws.priority=100
+      - traefik.http.routers.crypto-ws.entrypoints=websecure
+      - traefik.http.routers.crypto-ws.tls=true
+      - traefik.http.routers.crypto-ws.tls.certresolver=letsencrypt
+      - traefik.http.services.crypto-ws.loadbalancer.server.port=8000
+
+  # ------------------------------------------------- web terminal (frontend)
+  web-terminal:
+    image: ${REGISTRY:-ghcr.io/nbeny}/bottrading-web-terminal:${TAG:-latest}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      # Server-side rewrite targets (internal cmi network).
+      API_GATEWAY_URL: http://api-gateway:8000
+      CONTROL_API_URL: http://control-api:8000
+    depends_on:
+      - api-gateway
+      - control-api
+      - websocket-gateway
+    networks:
+      - cmi
+      - traefik-public
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik-public
+      - "traefik.http.routers.crypto-web.rule=Host(`crypto.nbeny.fr`)"
+      - traefik.http.routers.crypto-web.entrypoints=websecure
+      - traefik.http.routers.crypto-web.tls=true
+      - traefik.http.routers.crypto-web.tls.certresolver=letsencrypt
+      - traefik.http.services.crypto-web.loadbalancer.server.port=3000
+      - traefik.http.middlewares.crypto-hsts.headers.stsSeconds=31536000
+      - traefik.http.middlewares.crypto-hsts.headers.stsIncludeSubdomains=true
+      - traefik.http.middlewares.crypto-hsts.headers.stsPreload=true
+      - traefik.http.middlewares.crypto-hsts.headers.forceSTSHeader=true
+      - traefik.http.routers.crypto-web.middlewares=crypto-hsts
+
+  # -------------------------------------------------------- observability (opt-in)
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    profiles: ["observability"]
+    restart: unless-stopped
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom-data:/prometheus
+    networks:
+      - cmi
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    profiles: ["observability"]
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - cmi
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.104.0
+    profiles: ["observability"]
+    restart: unless-stopped
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./observability/otel-collector.yaml:/etc/otel/config.yaml:ro
+    networks:
+      - cmi

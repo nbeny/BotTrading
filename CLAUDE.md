@@ -71,10 +71,18 @@ Runtime state lives in Redis under `trading:runtime` (mode/kill/auto/caps),
 `{ username: email, email, password }` (control-api reads `username`, mock reads `email`); the
 hardcoded admin account mints the **`admin`** role so RBAC allows mode-switch/settings.
 
-⚠️ **Remaining gap — read plane:** the frontend's read endpoints (`/portfolio`, `/market/*`,
-`/risk/*`) don't exist on any backend yet — api-gateway only serves `/api/v1/{opportunities,
-decisions,trades}`. Live mode still needs those GET endpoints built (or reads left on mock). See
+✅ **Read plane — built & contract-verified.** api-gateway now also serves the full frontend read
+plane from `app/read_api.py` (mounted at root): `/portfolio*`, `/market/*`, `/risk/*`, `/data/*`,
+`/trace/{cid}`, `/systems/overview` (plus the original `/api/v1/{opportunities,decisions,trades}`).
+Response shapes are locked to the TS contract by a manifest (`app/read_contract.py`) enforced by an
+offline parity test (`tests/test_read_contract.py`) and a live harness (`scripts/verify_read_live.py`).
+Every frontend read path has a matching route; live mode is wired. See
 `memory/web-terminal-backend-gap.md` and `memory/control-api-owns-frontend-control.md`.
+
+**Deployment:** `docker-compose.vps.yml` + `.github/workflows/deploy.yml` build every service to
+GHCR and auto-deploy to the Hostinger VPS behind the shared Traefik on push to `master`
+(single host `crypto.nbeny.fr`, REST proxied server-side by Next.js). See
+`docs/superpowers/specs/2026-07-25-vps-deployment-design.md`.
 
 ## Layout & conventions
 

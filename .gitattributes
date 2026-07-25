@@ -1,0 +1,7 @@
+# Shell scripts must stay LF — they run on the Linux VPS / CI runner and CRLF
+# breaks bash ($'\r' errors). Same for compose/env/yaml consumed on Linux.
+*.sh    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+.env.*  text eol=lf
+Dockerfile* text eol=lf

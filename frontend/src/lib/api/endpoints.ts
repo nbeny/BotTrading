@@ -120,6 +120,11 @@ export interface AiQuotaStatus {
   workers: { service: string; paused: boolean; resume_at?: number }[];
 }
 
+export interface Coverage {
+  sentiment: { total: number; scored: number; unscored: number };
+  escalations: { pending: number };
+}
+
 export const collectorsApi = {
   runtime: () => control.get<CollectorRuntime>('/collectors/runtime').then((r) => r.data),
   setRuntime: (patch: {
@@ -128,6 +133,11 @@ export const collectorsApi = {
     platforms?: Record<string, boolean>;
   }) => control.post<CollectorRuntime>('/collectors/runtime', patch).then((r) => r.data),
   aiQuota: () => control.get<AiQuotaStatus>('/systems/ai/quota').then((r) => r.data),
+  coverage: () => control.get<Coverage>('/systems/coverage').then((r) => r.data),
+  backfill: () =>
+    control
+      .post<{ requeued: number; candidates: number }>('/systems/backfill')
+      .then((r) => r.data),
 };
 
 // ── Systems / infrastructure observability ─────────────────────────────────────

@@ -7,6 +7,7 @@ import { RbacMatrixPanel } from '@/components/settings/RbacMatrixPanel';
 import { ConnectionPanel } from '@/components/settings/ConnectionPanel';
 import { PreferencesPanel } from '@/components/settings/PreferencesPanel';
 import { SourcesPanel } from '@/components/settings/SourcesPanel';
+import { CoveragePanel } from '@/components/settings/CoveragePanel';
 
 export default function SettingsPage() {
   return (
@@ -33,6 +34,9 @@ export default function SettingsPage() {
         <Box sx={{ gridColumn: { xs: '1', lg: '1 / -1' } }}>
           <SourcesPanel />
         </Box>
+
+        {/* Coverage & backfill */}
+        <CoveragePanel />
 
         {/* RBAC Matrix — full width */}
         <Box sx={{ gridColumn: { xs: '1', lg: '1 / -1' } }}>

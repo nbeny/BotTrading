@@ -146,10 +146,11 @@ class SqlSentimentAggReader:
         self, *, symbol: str | None, kind: str | None, points: int,
         now: datetime | None = None,
     ) -> list[dict[str, float]]:
-        """Last `points` hourly buckets, oldest first, as {hour, sentiment}.
+        """Exactly `points` hourly buckets, oldest first, as {hour, sentiment}.
 
-        `since` is floored to the hour so at most `points` buckets are returned
-        (an unfloored cutoff would span points+1 partial hours).
+        The full hour grid ``[current_hour - (points-1)h .. current_hour]`` is
+        emitted; hours with no data are zero-filled. This gives the same fixed,
+        gap-free shape as the volume series so a chart plots them side by side.
         """
         now = now or datetime.now(tz=UTC)
         current_hour = now.replace(minute=0, second=0, microsecond=0)
@@ -159,8 +160,9 @@ class SqlSentimentAggReader:
         for r in rows:
             by_hour.setdefault(r.bucket_start, []).append(r)
         out = []
-        for hour in sorted(by_hour):
-            agg = aggregate_buckets(by_hour[hour], now=now, half_life_h=None)
+        for i in range(points):
+            hour = since + timedelta(hours=i)
+            agg = aggregate_buckets(by_hour.get(hour, []), now=now, half_life_h=None)
             out.append({"hour": hour.isoformat(), "sentiment": agg["avg"],
                         "mentions": agg["mentions"]})
         return out

@@ -55,3 +55,41 @@ def test_aggregate_decay_weights_recent_more() -> None:
     out = aggregate_buckets([recent, old], now=now, half_life_h=1.0)
     # 1h half-life crushes the 100h-old bearish bucket -> weighted_avg strongly positive
     assert out["weighted_avg"] > 0.9
+
+
+class _FakeResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def all(self):
+        return self._rows
+
+
+class _FakeSession:
+    """Minimal AsyncSession double: execute() ignores the stmt, returns rows."""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    async def execute(self, _stmt):
+        return _FakeResult(self._rows)
+
+
+async def test_series_returns_exactly_points_gap_filled() -> None:
+    from cmi_common.sources import SqlSentimentAggReader
+
+    now = datetime(2024, 1, 2, 10, 30, tzinfo=timezone.utc)
+    current_hour = now.replace(minute=0, second=0, microsecond=0)
+    two_ago = current_hour - timedelta(hours=2)
+    # _fetch_buckets projects (bucket_start, mentions, score_sum, confidence_sum,
+    # weighted_score_sum, engagement_sum).
+    rows = [(two_ago, 2, 1.0, 1.6, 0.8, 4.0)]
+    reader = SqlSentimentAggReader(_FakeSession(rows))
+
+    out = await reader.series(symbol="BTC", kind="all", points=12, now=now)
+
+    assert len(out) == 12                                    # fixed, gap-free
+    assert out[0]["hour"] == (current_hour - timedelta(hours=11)).isoformat()
+    assert out[-1]["hour"] == current_hour.isoformat()       # oldest→newest
+    assert out[9]["mentions"] == 2 and out[9]["sentiment"] == pytest.approx(0.5)
+    assert out[0]["mentions"] == 0 and out[0]["sentiment"] == 0.0  # zero-filled

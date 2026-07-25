@@ -988,17 +988,30 @@ class PipelineRejection(Base):
 Export it in `libs/cmi_common/cmi_common/db/__init__.py`: add
 `PipelineRejection` to the import list from `.models` and to `__all__`.
 
-- [ ] **Step 3: Verify the migration applies**
+- [ ] **Step 3: Verify the migration offline**
 
-Run: `make migrate`
+No database is available in this environment by operator decision, so the
+migration is validated by generating its SQL rather than applying it. It will be
+applied for real on the VPS at deploy time.
 
-Expected: `Running upgrade 0007 -> 0008, signal diagnostics columns + pipeline_rejections`.
+Run: `cd migrations && python -m alembic upgrade head --sql`
 
-Then verify the table is a hypertable:
+Expected: the emitted script ends with the `0007 -> 0008` step. Read the generated
+DDL and confirm, line by line:
 
-Run: `docker compose exec postgres psql -U cmi -d cmi -c "SELECT hypertable_name FROM timescaledb_information.hypertables WHERE hypertable_name = 'pipeline_rejections';"`
+1. Three `ALTER TABLE signals ADD COLUMN` with `DEFAULT` clauses — a `NOT NULL`
+   column added without a default would fail on a non-empty table.
+2. `CREATE TABLE pipeline_rejections` whose primary key **includes `time`**.
+   TimescaleDB rejects `create_hypertable` when the partitioning column is absent
+   from the primary key, and that failure would only appear at deploy.
+3. `UPDATE alembic_version SET version_num='0008'`.
 
-Expected: one row, `pipeline_rejections`.
+Then run `cd migrations && python -m alembic downgrade 0007 --sql` and confirm it
+emits the matching `DROP`s. A downgrade that does not round-trip is how a failed
+deploy becomes unrecoverable.
+
+Because this is not applied against a live TimescaleDB, `create_hypertable`'s
+runtime behaviour is unverified here. Flag that explicitly in your report.
 
 - [ ] **Step 4: Commit**
 
@@ -1743,25 +1756,40 @@ Run: `make lint`
 
 Expected: ruff, black --check and mypy all clean.
 
-- [ ] **Step 3: Bring the stack up and apply the migration**
+- [ ] **Step 3: Offline migration check**
 
-Run: `make up && make migrate`
+No local database by operator decision — the stack is not brought up. Run
+`cd migrations && python -m alembic upgrade head --sql` and confirm the `0008`
+step is emitted, then `python -m alembic downgrade 0007 --sql` for the round trip.
 
-Expected: `Running upgrade 0007 -> 0008`.
+- [ ] **Step 4: Frontend build**
 
-- [ ] **Step 4: Confirm the funnel answers**
+Run: `cd frontend && npx tsc --noEmit && npm run build`
 
-Run: `curl -s http://localhost:8000/systems/funnel?window=24h | python -m json.tool`
+Expected: clean. The funnel panel renders against the mock BFF route, so the
+Command Center is verifiable without any backend.
 
-Expected: a JSON object with the five stages. On a stalled pipeline you should
-see a large `analyses` count, `escalated: 0`, and `top_block_reasons` dominated
-by `haiku · score_below_threshold` — this is the diagnosis rendered as data.
+- [ ] **Step 5: Post-deploy verification (on the VPS, after merge)**
 
-- [ ] **Step 5: Confirm no behaviour changed**
+These cannot run before deployment. Record them as the acceptance checklist:
 
-Run: `docker compose logs ai-worker-haiku --tail 50`
+```bash
+ssh <VPS_USER>@<VPS_HOST> 'cd /opt/bottrading && docker compose logs migrate --tail 20'
+# expect: Running upgrade 0007 -> 0008
 
-Expected: analyses still published at the same rate; no new errors.
+ssh <VPS_USER>@<VPS_HOST> 'docker compose exec -T postgres psql -U cmi -d cmi -c \
+  "SELECT hypertable_name FROM timescaledb_information.hypertables \
+   WHERE hypertable_name = '"'"'pipeline_rejections'"'"';"'
+# expect: one row
+
+curl -s https://crypto.nbeny.fr/api/gateway/systems/funnel?window=24h | python -m json.tool
+# expect: five stages. On the current stalled pipeline: a large `analyses` count,
+# `escalated: 0`, and top_block_reasons dominated by haiku/score_below_threshold.
+```
+
+Also confirm no behaviour regressed:
+`ssh <VPS_USER>@<VPS_HOST> 'cd /opt/bottrading && docker compose logs ai-worker-haiku --tail 50'`
+— analyses still published at the same rate, no new errors.
 
 ---
 

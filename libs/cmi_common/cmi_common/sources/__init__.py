@@ -6,6 +6,13 @@ from .cascade import CircuitBreaker, RateLimitedError
 from .loop import AdaptivePollLoop
 from .provider import Provider, parse_retry_after
 from .raw import RawItem
+from .reader import (
+    WINDOWS,
+    BucketRow,
+    SqlSentimentAggReader,
+    aggregate_buckets,
+    window_delta,
+)
 from .repository import (
     ContentRepository,
     FakeContentRepository,
@@ -15,6 +22,7 @@ from .repository import (
 
 __all__ = [
     "AdaptivePollLoop",
+    "BucketRow",
     "CircuitBreaker",
     "ContentRepository",
     "FakeContentRepository",
@@ -22,6 +30,10 @@ __all__ = [
     "RateLimitedError",
     "RawItem",
     "SqlContentRepository",
+    "SqlSentimentAggReader",
+    "WINDOWS",
+    "aggregate_buckets",
     "parse_retry_after",
     "raw_item_to_row",
+    "window_delta",
 ]

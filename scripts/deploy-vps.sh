@@ -36,7 +36,14 @@ echo "==> applying migrations"
 $COMPOSE run --rm migrate
 
 echo "==> starting stack"
-$COMPOSE up -d --remove-orphans
+# Recreating ~15 services at once on 2 vCPU can briefly spike load and make an
+# already-healthy Kafka's healthcheck flap, which aborts `up -d`. Retry once
+# after a short settle before giving up.
+$COMPOSE up -d --remove-orphans || {
+  echo "up -d failed (likely a transient health flap under load); settling 30s and retrying once"
+  sleep 30
+  $COMPOSE up -d --remove-orphans
+}
 
 echo "==> pruning dangling images"
 docker image prune -f >/dev/null 2>&1 || true

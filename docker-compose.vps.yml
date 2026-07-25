@@ -75,10 +75,15 @@ services:
     volumes:
       - kafka-data:/bitnami/kafka
     healthcheck:
+      # kafka-topics.sh spawns a full JVM per probe — costly on the 2-vCPU VPS.
+      # Probe less often and tolerate a longer degraded window so a load spike
+      # during a redeploy doesn't flip an already-running broker to "unhealthy"
+      # (which would abort `up -d` for every service that depends_on it).
       test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
-      interval: 10s
-      timeout: 10s
+      interval: 30s
+      timeout: 15s
       retries: 10
+      start_period: 60s
     networks:
       - cmi
 

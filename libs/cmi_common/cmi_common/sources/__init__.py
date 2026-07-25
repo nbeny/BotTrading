@@ -19,8 +19,16 @@ from .repository import (
     SqlContentRepository,
     raw_item_to_row,
 )
+from .runtime import (
+    KNOWN_PLATFORMS,
+    default_runtime,
+    get_runtime,
+    is_enabled,
+    set_runtime,
+)
 
 __all__ = [
+    "KNOWN_PLATFORMS",
     "WINDOWS",
     "AdaptivePollLoop",
     "BucketRow",
@@ -33,7 +41,11 @@ __all__ = [
     "SqlContentRepository",
     "SqlSentimentAggReader",
     "aggregate_buckets",
+    "default_runtime",
+    "get_runtime",
+    "is_enabled",
     "parse_retry_after",
     "raw_item_to_row",
+    "set_runtime",
     "window_delta",
 ]

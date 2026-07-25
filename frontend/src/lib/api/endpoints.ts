@@ -106,6 +106,30 @@ export const settingsApi = {
   setCaps: (caps: Partial<EngineCaps>) => control.post('/trading/caps', caps).then((r) => r.data),
 };
 
+// ── Collector sources (operator toggles) + AI quota status ─────────────────────
+export interface CollectorRuntime {
+  social_enabled: boolean;
+  news_enabled: boolean;
+  platforms: Record<string, boolean>;
+  known_platforms: { social: string[]; news: string[] };
+}
+
+export interface AiQuotaStatus {
+  paused: boolean;
+  resume_at: number | null;
+  workers: { service: string; paused: boolean; resume_at?: number }[];
+}
+
+export const collectorsApi = {
+  runtime: () => control.get<CollectorRuntime>('/collectors/runtime').then((r) => r.data),
+  setRuntime: (patch: {
+    social_enabled?: boolean;
+    news_enabled?: boolean;
+    platforms?: Record<string, boolean>;
+  }) => control.post<CollectorRuntime>('/collectors/runtime', patch).then((r) => r.data),
+  aiQuota: () => control.get<AiQuotaStatus>('/systems/ai/quota').then((r) => r.data),
+};
+
 // ── Systems / infrastructure observability ─────────────────────────────────────
 // Read-only aggregate of every service's health/metrics. In live mode this maps
 // to the api-gateway (or a dedicated observability endpoint); on mock it hits the

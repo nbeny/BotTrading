@@ -18,6 +18,7 @@ from ..observability import EVENTS_PRODUCED, UPSTREAM_REQUESTS
 from .cascade import RateLimitedError
 from .provider import Provider
 from .repository import ContentRepository
+from .runtime import is_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,14 @@ class AdaptivePollLoop:
     async def run(self) -> None:
         max_calls, window = self._provider.rate_limit
         name = self._provider.name
+        kind = self._provider.kind
         while True:
+            # Operator toggle (collectors:runtime) — skip a cycle when this
+            # platform or its whole category is disabled from the UI.
+            if not await is_enabled(self._cache, kind, name):
+                logger.debug("%s disabled by operator; skipping cycle", name)
+                await self._sleep(self._interval)
+                continue
             if not await self._cache.allow(name, max_calls, window):
                 logger.debug("%s budget spent; waiting %ss", name, window)
                 await self._sleep(window)

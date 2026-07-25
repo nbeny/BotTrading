@@ -6,6 +6,7 @@ import { SessionPanel } from '@/components/settings/SessionPanel';
 import { RbacMatrixPanel } from '@/components/settings/RbacMatrixPanel';
 import { ConnectionPanel } from '@/components/settings/ConnectionPanel';
 import { PreferencesPanel } from '@/components/settings/PreferencesPanel';
+import { SourcesPanel } from '@/components/settings/SourcesPanel';
 
 export default function SettingsPage() {
   return (
@@ -27,6 +28,11 @@ export default function SettingsPage() {
 
         {/* Connection */}
         <ConnectionPanel />
+
+        {/* Sources — full width */}
+        <Box sx={{ gridColumn: { xs: '1', lg: '1 / -1' } }}>
+          <SourcesPanel />
+        </Box>
 
         {/* RBAC Matrix — full width */}
         <Box sx={{ gridColumn: { xs: '1', lg: '1 / -1' } }}>

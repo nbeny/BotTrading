@@ -123,9 +123,10 @@ of them in one pytest session makes the second shadow the first in
 FeatureStore`` resolves against the wrong service and raises ModuleNotFoundError
 — which aborted collection of the whole suite.
 
-Registering each service under a distinct alias (``haiku_app``, ``gateway_app``,
-…) gives every module a parent package rooted at its own service directory, so
-relative imports resolve within that service and nowhere else.
+Registering each service under an alias derived from its directory name
+(``ai_worker_haiku_app``, ``api_gateway_app``, …) gives every module a parent
+package rooted at its own service directory, so relative imports resolve within
+that service and nowhere else.
 """
 
 from __future__ import annotations
@@ -138,13 +139,15 @@ from types import ModuleType
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def load_service_module(service: str, module: str, alias: str) -> ModuleType:
-    """Import ``services/<service>/app/<module>.py`` as ``<alias>.<module>``.
+def load_service_module(service: str, module: str) -> ModuleType:
+    """Import ``services/<service>/app/<module>.py`` under a per-service alias.
 
-    ``alias`` must be unique per service across the whole test suite — that
-    uniqueness is the entire point. The parent package is created with its
-    search path pinned to the service's ``app/`` directory.
+    The alias is derived from ``service`` rather than passed in, so uniqueness
+    holds by construction. A caller-supplied alias could collide silently: the
+    module would be loaded under another service's ``__path__``, or the cache
+    would hand back the wrong service's module — with no error either way.
     """
+    alias = service.replace("-", "_") + "_app"
     app_dir = _REPO_ROOT / "services" / service / "app"
 
     if alias not in sys.modules:
@@ -181,7 +184,7 @@ from cmi_common.events.sentiment import SentimentEvent
 
 from .service_modules import load_service_module
 
-hw = load_service_module("ai-worker-haiku", "worker", "haiku_app")
+hw = load_service_module("ai-worker-haiku", "worker")
 ```
 
 If the relative import `from .service_modules import ...` fails because `tests/`
@@ -197,10 +200,42 @@ Replace its importlib preamble with the same pattern:
 ```python
 from service_modules import load_service_module
 
-sc = load_service_module("ai-worker-haiku", "scorer", "haiku_app")
+sc = load_service_module("ai-worker-haiku", "scorer")
 ```
 
 Leave the seven test functions untouched.
+
+- [ ] **Step 4b: Close the remaining `app` claim and guard against recurrence**
+
+Three files still do `sys.path.insert` + `import app` for api-gateway:
+`tests/test_api_gateway_read.py`, `tests/test_api_gateway_sentiment.py`,
+`tests/test_read_contract.py`. Nothing breaks today only because no *second*
+service is imported under the bare name — but tasks 6, 7 and 8 add more
+api-gateway test loading, and `pyproject.toml`'s `pythonpath` already lists three
+further services shipping an `app/`. Migrate all three onto
+`load_service_module("api-gateway", ...)`.
+
+Migrate `tests/test_scorer.py` too: it is the file whose docstring first
+documented this workaround, and leaving it on an ad-hoc loader means the teacher
+contradicts the lesson.
+
+Then add `tests/conftest.py` (none exists in the repo today):
+
+```python
+"""Guard: load service `app` packages via tests/service_modules.py, never bare."""
+
+import sys
+
+
+def pytest_collection_finish(session):
+    leaked = sorted(k for k in sys.modules if k == "app" or k.startswith("app."))
+    assert not leaked, (
+        f"{leaked} loaded under the bare name 'app'. Every service ships a package "
+        "named 'app'; use tests/service_modules.load_service_module() instead."
+    )
+```
+
+Order matters: the guard fails until the three migrations land, so migrate first.
 
 - [ ] **Step 5: Verify the whole suite now collects**
 
@@ -241,11 +276,16 @@ Utiliser systématiquement :
 ```python
 from service_modules import load_service_module
 
-mod = load_service_module("<service-dir>", "<module>", "<alias>")
+mod = load_service_module("<service-dir>", "<module>")
 ```
 
-Alias attribués : `haiku_app` (ai-worker-haiku), `gateway_app` (api-gateway),
-`decision_app` (decision-engine), `risk_app` (risk-engine).
+L'alias est **dérivé du nom du service** par le helper — il n'est pas un
+paramètre. Un alias fourni par l'appelant n'apporte rien que le nom du service ne
+porte déjà, et sa seule fonction (l'unicité) est garantie par construction quand
+il est dérivé. Passé en argument, il ouvrait deux défaillances silencieuses
+démontrées en revue : deux services partageant un alias donnaient soit un module
+chargé sous le `__path__` d'un autre service, soit un retour de cache livrant le
+module du mauvais service — sans erreur ni avertissement.
 
 ---
 
@@ -640,7 +680,7 @@ from __future__ import annotations
 
 from service_modules import load_service_module
 
-hm = load_service_module("ai-worker-haiku", "main", "haiku_app")
+hm = load_service_module("ai-worker-haiku", "main")
 
 
 def test_default_preserves_current_behaviour(monkeypatch) -> None:
@@ -726,7 +766,7 @@ from cmi_common.kafka import Topic
 
 from service_modules import load_service_module
 
-de = load_service_module("decision-engine", "engine", "decision_app")
+de = load_service_module("decision-engine", "engine")
 
 
 class FakeProducer:
@@ -996,7 +1036,7 @@ from cmi_common.events.risk import RiskRejectedEvent
 
 from service_modules import load_service_module
 
-persister_mod = load_service_module("api-gateway", "persister", "gateway_app")
+persister_mod = load_service_module("api-gateway", "persister")
 
 
 def test_stage_from_source_maps_both_producers() -> None:
@@ -1160,7 +1200,7 @@ from __future__ import annotations
 
 from service_modules import load_service_module
 
-funnel = load_service_module("api-gateway", "funnel", "gateway_app")
+funnel = load_service_module("api-gateway", "funnel")
 
 
 def test_stages_are_ordered_and_complete() -> None:

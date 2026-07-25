@@ -43,6 +43,14 @@ class AnalysisEvent(BaseEvent):
     correlated_event_ids: list[str] = Field(default_factory=list)
     # True when the score crosses the escalation threshold for Sonnet.
     escalate: bool = False
+    # Triage diagnostics — carried so the pipeline funnel can report *where* a
+    # signal stopped without re-deriving it. Defaults keep older producers valid;
+    # "unknown" rather than "escalated" so an event from a producer that does not
+    # set it is never mistaken for one that reached the senior analyst.
+    ambiguous: bool = False
+    block_reason: str = "unknown"
+    factors_present: int = Field(default=0, ge=0, le=4)
+    liquidity_source: str = "unknown"
 
     def partition_key(self) -> str:
         return self.symbol

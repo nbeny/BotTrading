@@ -73,3 +73,35 @@ async def test_fake_upsert_aggregate_is_additive() -> None:
     assert agg["confidence_sum"] == 2.3  # 0.8 + 1.5
     assert agg["weighted_score_sum"] == 2.0  # 0.4 + 1.6
     assert agg["engagement_sum"] == 7.0  # 2.0 + 5.0
+
+
+async def test_fake_compaction_rolls_hourly_into_daily() -> None:
+    from datetime import timedelta
+
+    repo = FakeContentRepository()
+    day = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    for h in (3, 9):  # two hourly buckets, same day + (symbol, kind)
+        await repo.upsert_aggregate(
+            symbol="BTC", kind="social", bucket_start=day + timedelta(hours=h),
+            mentions=1, score_sum=0.5, confidence_sum=0.8,
+            weighted_score_sum=0.4, engagement_sum=2.0,
+        )
+    recent = datetime(2024, 6, 1, tzinfo=timezone.utc)  # must NOT be compacted
+    await repo.upsert_aggregate(
+        symbol="BTC", kind="social", bucket_start=recent,
+        mentions=1, score_sum=0.1, confidence_sum=0.2,
+        weighted_score_sum=0.02, engagement_sum=1.0,
+    )
+    cutoff = datetime(2024, 5, 1, tzinfo=timezone.utc)
+
+    n = await repo.compact_hourly_to_daily(older_than=cutoff)
+
+    assert n == 2
+    d = repo.daily[("BTC", "social", day)]
+    assert d["mentions"] == 2 and d["score_sum"] == 1.0 and d["engagement_sum"] == 4.0
+    assert ("BTC", "social", day + timedelta(hours=3)) not in repo.aggregates
+    assert ("BTC", "social", recent) in repo.aggregates  # recent survives
+
+    # idempotent: nothing new to compact, daily unchanged
+    assert await repo.compact_hourly_to_daily(older_than=cutoff) == 0
+    assert repo.daily[("BTC", "social", day)]["mentions"] == 2

@@ -212,8 +212,11 @@ def _client(results) -> TestClient:
 
 def test_endpoint_data_stats_wiring() -> None:
     rows = [_content(sentiment_score=0.5), _content(kind="news", sentiment_score=-0.3)]
-    # 3 DB calls: raw_content scan, reader.series (_fetch_buckets), reader.window_stats (_fetch_buckets)
-    client = _client([_Result(rows=rows), _Result(rows=[]), _Result(rows=[])])
+    # 4 DB calls: raw_content scan, reader.series (hourly), then window_stats
+    # unions hourly + daily (two fetches).
+    client = _client(
+        [_Result(rows=rows), _Result(rows=[]), _Result(rows=[]), _Result(rows=[])]
+    )
     r = client.get("/data/stats")
     assert r.status_code == 200
     body = r.json()

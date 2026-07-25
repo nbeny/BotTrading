@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db.models import ContentSentimentAgg, RawContent
+from ..db.models import ContentSentimentAgg, ContentSentimentAggDaily, RawContent
 
 WINDOWS: tuple[str, ...] = ("1h", "24h", "7d", "30d", "6mo", "1y", "5y")
 
@@ -97,9 +97,10 @@ class SqlSentimentAggReader:
         self._session = session
 
     async def _fetch_buckets(
-        self, *, symbol: str | None, kind: str | None, since: datetime
+        self, *, symbol: str | None, kind: str | None, since: datetime,
+        model: type = ContentSentimentAgg,
     ) -> list[BucketRow]:
-        m = ContentSentimentAgg
+        m = model
         stmt = select(
             m.bucket_start, m.mentions, m.score_sum, m.confidence_sum,
             m.weighted_score_sum, m.engagement_sum,
@@ -126,7 +127,13 @@ class SqlSentimentAggReader:
     ) -> dict[str, float]:
         now = now or datetime.now(tz=UTC)
         since = now - window_delta(window)
+        # Union hourly (recent) + daily (aged-out) buckets. A day lives in exactly
+        # one table, so no dedup is needed; windows <= the compaction retention
+        # never reach the daily table.
         rows = await self._fetch_buckets(symbol=symbol, kind=kind, since=since)
+        rows += await self._fetch_buckets(
+            symbol=symbol, kind=kind, since=since, model=ContentSentimentAggDaily
+        )
         out = aggregate_buckets(rows, now=now, half_life_h=half_life_h)
         out["window"] = window
         return out
@@ -146,10 +153,11 @@ class SqlSentimentAggReader:
         self, *, symbol: str | None, kind: str | None, points: int,
         now: datetime | None = None,
     ) -> list[dict[str, float]]:
-        """Last `points` hourly buckets, oldest first, as {hour, sentiment}.
+        """Exactly `points` hourly buckets, oldest first, as {hour, sentiment}.
 
-        `since` is floored to the hour so at most `points` buckets are returned
-        (an unfloored cutoff would span points+1 partial hours).
+        The full hour grid ``[current_hour - (points-1)h .. current_hour]`` is
+        emitted; hours with no data are zero-filled. This gives the same fixed,
+        gap-free shape as the volume series so a chart plots them side by side.
         """
         now = now or datetime.now(tz=UTC)
         current_hour = now.replace(minute=0, second=0, microsecond=0)
@@ -159,8 +167,9 @@ class SqlSentimentAggReader:
         for r in rows:
             by_hour.setdefault(r.bucket_start, []).append(r)
         out = []
-        for hour in sorted(by_hour):
-            agg = aggregate_buckets(by_hour[hour], now=now, half_life_h=None)
+        for i in range(points):
+            hour = since + timedelta(hours=i)
+            agg = aggregate_buckets(by_hour.get(hour, []), now=now, half_life_h=None)
             out.append({"hour": hour.isoformat(), "sentiment": agg["avg"],
                         "mentions": agg["mentions"]})
         return out

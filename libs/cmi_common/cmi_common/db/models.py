@@ -215,6 +215,33 @@ class ContentSentimentAgg(Base):
     )
 
 
+class ContentSentimentAggDaily(Base):
+    """Daily rollup of aged-out hourly buckets (same additive columns).
+
+    A compaction loop rolls hourly buckets older than the retention window into
+    one daily bucket per (symbol, kind, day) and deletes the compacted hourly
+    rows in the same transaction, so a given day lives in exactly one of the two
+    tables — never both. Long-window reads union the two; short windows (<= the
+    retention) never reach this table.
+    """
+
+    __tablename__ = "content_sentiment_agg_daily"
+
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), primary_key=True)
+    bucket_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
+    mentions: Mapped[int] = mapped_column(Integer, default=0)
+    score_sum: Mapped[float] = mapped_column(Float, default=0.0)
+    confidence_sum: Mapped[float] = mapped_column(Float, default=0.0)
+    weighted_score_sum: Mapped[float] = mapped_column(Float, default=0.0)
+    engagement_sum: Mapped[float] = mapped_column(Float, default=0.0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 # Tables that become Timescale hypertables (time-partitioned).
 # raw_content is deliberately excluded: its dedup needs UNIQUE(source, external_id)
 # and Timescale requires the partitioning column in every unique index.

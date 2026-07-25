@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from sqlalchemy import update
 from sqlalchemy.dialects.postgresql import insert
 
-from cmi_common.db import Database, Decision, Price, Signal, Trade
+from cmi_common.db import Database, Decision, PipelineRejection, Price, Signal, Trade
 from cmi_common.events import (
     AnalysisEvent,
     BaseEvent,
@@ -16,7 +16,9 @@ from cmi_common.events import (
     PriceEvent,
     RiskApprovedEvent,
 )
+from cmi_common.events.base import Source
 from cmi_common.events.execution import ExecutionEvent
+from cmi_common.events.risk import RiskRejectedEvent
 from cmi_common.kafka import Topic
 from cmi_common.observability import EVENTS_CONSUMED
 
@@ -33,6 +35,25 @@ def _naive_utc(dt: datetime) -> datetime:
     return dt
 
 
+_STAGE_BY_SOURCE = {
+    Source.DECISION_ENGINE: "decision_engine",
+    Source.RISK_ENGINE: "risk_engine",
+}
+
+
+def stage_for(source: str) -> str:
+    """Which pipeline stage refused.
+
+    ``BaseEvent`` sets ``use_enum_values=True``, so ``event.source`` is a plain
+    string rather than a ``Source`` member. The lookup below still resolves
+    because ``Source`` is a str enum, but reaching for ``.value`` would raise
+    AttributeError — inside a Kafka consumer loop, on exactly the unmapped case
+    this fallback exists to survive. Unmapped producers keep their raw name: an
+    unexpected rejector must stay visible in the funnel.
+    """
+    return _STAGE_BY_SOURCE.get(source, str(source))
+
+
 class Persister:
     def __init__(self, db: Database) -> None:
         self._db = db
@@ -42,6 +63,14 @@ class Persister:
             await self._save_price(event)
         elif isinstance(event, AnalysisEvent):
             await self._save_signal(event)
+        elif isinstance(event, RiskRejectedEvent):
+            # RiskRejectedEvent and DecisionEvent both arrive on the decision
+            # topic. Checked here, ahead of DecisionEvent: they are independent
+            # direct subclasses of BaseEvent (neither derives from the other),
+            # so isinstance() cannot conflate them regardless of order — this
+            # placement is belt-and-suspenders to keep a rejection from ever
+            # being mistaken for a decision.
+            await self._save_rejection(event)
         elif isinstance(event, DecisionEvent):
             await self._save_decision(event)
         elif isinstance(event, RiskApprovedEvent):
@@ -75,7 +104,24 @@ class Persister:
                 confidence=e.confidence,
                 reason=e.reason,
                 escalated=e.escalate,
+                ambiguous=e.ambiguous,
+                block_reason=e.block_reason,
+                factors_present=e.factors_present,
                 payload=e.model_dump(mode="json"),
+            ).on_conflict_do_nothing()
+            await s.execute(stmt)
+            await s.commit()
+
+    async def _save_rejection(self, e: RiskRejectedEvent) -> None:
+        EVENTS_CONSUMED.labels(SERVICE, Topic.DECISION.value, e.event_type).inc()
+        async with self._db._sessionmaker() as s:  # noqa: SLF001
+            stmt = insert(PipelineRejection).values(
+                time=_naive_utc(e.occurred_at),
+                event_id=e.event_id,
+                stage=stage_for(e.source),
+                symbol=e.symbol,
+                correlation_id=e.correlation_id,
+                reason=e.reason,
             ).on_conflict_do_nothing()
             await s.execute(stmt)
             await s.commit()

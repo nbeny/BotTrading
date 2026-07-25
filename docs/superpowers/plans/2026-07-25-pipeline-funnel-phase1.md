@@ -254,6 +254,29 @@ Alias attribués : `haiku_app` (ai-worker-haiku), `gateway_app` (api-gateway),
 Le scorer calcule déjà `ambiguous` et les facteurs, mais ne dit pas *pourquoi* il
 n'escalade pas, ni combien de facteurs étaient réellement disponibles.
 
+> **Réalisé en deux commits.** `1e61a00` implémente le plan ci-dessous ; `c3dc14f`
+> corrige deux défauts que la revue qualité a trouvés et que j'ai reproduits :
+>
+> 1. **La formule de confiance ci-dessous est erronée** — `0.3 + 0.4·liq_f +
+>    0.15·(fp/4)` récompense l'absence de données (dict vide → 0.50 contre 0.45
+>    pour quatre facteurs avec liquidité faible), parce que la substitution
+>    neutre de 0.5 pour une liquidité inconnue rapporte 0.20 quand le terme de
+>    couverture plafonne à 0.15. Elle est aussi bornée à [0.30, 0.85], rendant
+>    son `_clamp` inatteignable. Remplacée par
+>    `round(0.25 + 0.35 * liq_f + 0.4 * (factors_present / _N_FACTORS), 2)`,
+>    monotone et bornée à [0.25, 1.00], sans clamp.
+> 2. **`liquidity_usd == 0.0` est le chemin normal, pas un cas limite** —
+>    `worker.py:83` envoie `float(event.liquidity_usd or 0)`, donc une liquidité
+>    absente arrive à `0.0`. `thin_liq_big_move` la lisait comme « liquidité
+>    ténue » et escaladait vers le LLM payant un symbole sans information.
+>    Corrigé par des prédicats `has_chg`/`has_vol`/`has_sent`/`has_liq` employés
+>    par `factors_present`, `liquidity_source`, la normalisation,
+>    `thin_liq_big_move` et la chaîne `reason`. **Changement de comportement
+>    assumé**, couvert par un test.
+>
+> `block_reason` prend aussi `"unknown"` comme défaut de dataclass (et non
+> `"escalated"`), ce que les tâches 2 et 5 répercutent.
+
 **Files:**
 - Modify: `services/ai-worker-haiku/app/scorer.py`
 - Test: `tests/test_scorer_diagnostics.py`
@@ -521,13 +544,14 @@ from cmi_common.events import AnalysisEvent
 
 
 def test_defaults_are_backwards_compatible() -> None:
-    """Existing producers that omit the new fields must still validate."""
+    """Existing producers that omit the new fields must still validate, and an
+    unset block_reason must not read as "this reached the senior analyst"."""
     ev = AnalysisEvent(
         symbol="BTC", opportunity_score=22, confidence=0.6, reason="r"
     )
     assert ev.ambiguous is False
     assert ev.factors_present == 0
-    assert ev.block_reason == "escalated"
+    assert ev.block_reason == "unknown"
 
 
 def test_diagnostics_round_trip_through_json() -> None:
@@ -560,9 +584,11 @@ immediately after the `escalate: bool = False` line:
 
 ```python
     # Triage diagnostics — carried so the pipeline funnel can report *where* a
-    # signal stopped without re-deriving it. Defaults keep older producers valid.
+    # signal stopped without re-deriving it. Defaults keep older producers valid;
+    # "unknown" rather than "escalated" so an event from a producer that does not
+    # set it is never mistaken for one that reached the senior analyst.
     ambiguous: bool = False
-    block_reason: str = "escalated"
+    block_reason: str = "unknown"
     factors_present: int = Field(default=0, ge=0, le=4)
     liquidity_source: str = "unknown"
 ```
@@ -852,7 +878,7 @@ def upgrade() -> None:
     op.add_column(
         "signals",
         sa.Column(
-            "block_reason", sa.String(32), server_default="escalated", nullable=False
+            "block_reason", sa.String(32), server_default="unknown", nullable=False
         ),
     )
     op.add_column(
@@ -894,7 +920,7 @@ In `libs/cmi_common/cmi_common/db/models.py`, add three columns to `Signal`
 
 ```python
     ambiguous: Mapped[bool] = mapped_column(Boolean, default=False)
-    block_reason: Mapped[str] = mapped_column(String(32), default="escalated")
+    block_reason: Mapped[str] = mapped_column(String(32), default="unknown")
     factors_present: Mapped[int] = mapped_column(Integer, default=0)
 ```
 

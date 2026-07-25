@@ -11,6 +11,9 @@ dependencies = [
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
     "aiokafka>=0.11",
+    # aiokafka's producer is configured with compression_type="lz4"
+    # (kafka/producer.py) which needs the lz4 codec installed.
+    "lz4>=4.0",
     "sqlalchemy[asyncio]>=2.0",
     "asyncpg>=0.29",
     "psycopg[binary]>=3.2",

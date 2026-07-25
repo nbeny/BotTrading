@@ -1057,9 +1057,21 @@ def test_stage_from_source_maps_both_producers() -> None:
     assert persister_mod.stage_for(Source.RISK_ENGINE) == "risk_engine"
 
 
-def test_unknown_source_falls_back_to_its_value() -> None:
-    """An unmapped producer must stay visible rather than be silently dropped."""
-    assert persister_mod.stage_for(Source.AI_HAIKU) == Source.AI_HAIKU.value
+def test_source_arrives_as_a_plain_string_on_a_real_event() -> None:
+    """BaseEvent sets use_enum_values=True, so `source` is a str, not a Source
+    member. The dict lookup still works (Source is a str enum), but any code
+    reaching for `.value` would raise AttributeError inside the persister's
+    Kafka consumer loop."""
+    ev = RiskRejectedEvent(source=Source.RISK_ENGINE, symbol="BTC", reason="x")
+    assert isinstance(ev.source, str)
+    assert not isinstance(ev.source, Source)
+    assert persister_mod.stage_for(ev.source) == "risk_engine"
+
+
+def test_unknown_source_keeps_its_raw_name() -> None:
+    """An unmapped producer must stay visible rather than be dropped — and must
+    not crash the consumer on the way."""
+    assert persister_mod.stage_for("some-future-service") == "some-future-service"
 
 
 class FakeSession:
@@ -1135,10 +1147,17 @@ _STAGE_BY_SOURCE = {
 }
 
 
-def stage_for(source: Source) -> str:
-    """Which pipeline stage refused. Unmapped producers keep their raw source
-    name rather than being dropped — an unexpected rejector must stay visible."""
-    return _STAGE_BY_SOURCE.get(source, source.value)
+def stage_for(source: str) -> str:
+    """Which pipeline stage refused.
+
+    ``BaseEvent`` sets ``use_enum_values=True``, so ``event.source`` is a plain
+    string, not a ``Source`` member. The dict lookup below still resolves because
+    ``Source`` is a str enum, but reaching for ``.value`` would raise
+    AttributeError — inside a Kafka consumer loop, on precisely the unmapped case
+    this fallback exists to survive. Unmapped producers keep their raw name: an
+    unexpected rejector must stay visible in the funnel.
+    """
+    return _STAGE_BY_SOURCE.get(source, str(source))
 ```
 
 In `Persister.handle`, add a branch **before** the `DecisionEvent` branch —

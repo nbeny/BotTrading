@@ -27,19 +27,19 @@ _spec.loader.exec_module(sc)
 def test_typical_major_pair_is_blocked_by_score() -> None:
     """The real-world case: BTC +3%, mild sentiment, no volume spike.
 
-    Scores ~22 against an escalation floor of 60. This is why the pipeline
+    Scores ~22 against the escalation floor. This is why the pipeline
     produced no decisions at all.
     """
     r = sc.local_opportunity(
         {"price_change_pct_24h": 3.0, "sentiment_score": 0.3}
     )
-    assert r.opportunity_score < 60
+    assert r.opportunity_score < sc.ScorerConfig().escalate_score
     assert r.escalate is False
     assert r.block_reason == "score_below_threshold"
 
 
 def test_strong_score_but_calm_move_is_blocked_by_gate() -> None:
-    """Score clears 60 but the setup is unanimous and liquid: no LLM needed."""
+    """Score clears the floor but the setup is unanimous and liquid: no LLM needed."""
     r = sc.local_opportunity(
         {
             "price_change_pct_24h": 8.0,
@@ -48,7 +48,7 @@ def test_strong_score_but_calm_move_is_blocked_by_gate() -> None:
             "liquidity_usd": 900_000.0,
         }
     )
-    assert r.opportunity_score >= 60
+    assert r.opportunity_score >= sc.ScorerConfig().escalate_score
     assert r.ambiguous is False
     assert r.escalate is False
     assert r.block_reason == "gate_not_met"
@@ -92,7 +92,11 @@ def test_liquidity_source_is_unknown_when_absent() -> None:
 
 def test_liquidity_source_is_dex_when_supplied() -> None:
     r = sc.local_opportunity(
-        {"price_change_pct_24h": 3.0, "sentiment_score": 0.3, "liquidity_usd": 500_000.0}
+        {
+            "price_change_pct_24h": 3.0,
+            "sentiment_score": 0.3,
+            "liquidity_usd": 500_000.0,
+        }
     )
     assert r.liquidity_source == "dex"
 
@@ -110,3 +114,44 @@ def test_ambiguity_no_longer_drags_confidence_under_the_risk_floor() -> None:
     )
     assert r.ambiguous is True
     assert r.confidence >= 0.55
+
+
+def test_zero_liquidity_placeholder_is_not_thin_liquidity() -> None:
+    """worker.py sends `float(event.liquidity_usd or 0)`, so a dex pair with no
+    liquidity reading arrives as 0.0. Reading that as "thin" invents ambiguity
+    and buys an LLM call for a symbol we know nothing about."""
+    base = {
+        "price_change_pct_24h": 8.5,
+        "volume_spike_ratio": 2.5,
+        "sentiment_score": 0.95,
+    }
+    absent = sc.local_opportunity(base)
+    placeholder = sc.local_opportunity({**base, "liquidity_usd": 0.0})
+    assert placeholder.ambiguous == absent.ambiguous
+    assert placeholder.escalate == absent.escalate
+    assert placeholder.factors_present == absent.factors_present == 3
+    assert placeholder.liquidity_source == "unknown"
+
+
+def test_empty_features_are_the_least_confident() -> None:
+    """The degenerate state operators see most often on unseeded symbols.
+    Knowing nothing must never outrank knowing everything."""
+    empty = sc.local_opportunity({})
+    full = sc.local_opportunity(
+        {
+            "price_change_pct_24h": 3.0,
+            "volume_spike_ratio": 1.5,
+            "sentiment_score": 0.3,
+            "liquidity_usd": 1.0,
+        }
+    )
+    assert empty.factors_present == 0
+    assert empty.confidence < full.confidence
+
+
+def test_score_below_threshold_wins_when_neither_condition_holds() -> None:
+    """Precedence guard: a weak, calm signal reports the score reason, not the
+    gate reason. Easy to invert accidentally."""
+    r = sc.local_opportunity({"price_change_pct_24h": 0.5})
+    assert r.escalate is False
+    assert r.block_reason == "score_below_threshold"

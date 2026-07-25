@@ -1,4 +1,6 @@
-/** A single collected item (mirrors backend raw_content + content_sentiment_agg). */
+/** A single collected item (mirrors backend raw_content; sentiment aggregates now
+ *  live in the additive hourly-bucket content_sentiment_agg, exposed via
+ *  /api/v1/sentiment/{windows,series,authors} and overlaid onto DataStats). */
 export interface RawContentItem {
   id: string;
   platform: string;
@@ -27,7 +29,9 @@ export interface DataStats {
   market_24h: number;
   avg_sentiment: number;
   volume_series: { hour: string; social: number; news: number; market: number }[];
-  sentiment_series: { hour: string; sentiment: number }[];
+  // Live `/data/stats` sources this from content_sentiment_agg buckets; each point
+  // carries `mentions` and `hour` is an "HHh" label (the mock omits mentions).
+  sentiment_series: { hour: string; sentiment: number; mentions?: number }[];
   top_sources: { source: string; count: number }[];
   mentions: { symbol: string; count: number }[];
   updated_at: string;

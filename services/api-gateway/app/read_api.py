@@ -20,16 +20,58 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cmi_common.db import Decision, News, Price, Sentiment, ServiceHealth, Signal, Token, Trade
 from cmi_common.db.models import RawContent
+from cmi_common.sources import SqlSentimentAggReader
 
 from .routers import get_session_dep
 
 router = APIRouter(tags=["read"])
+
+
+def get_reader_dep(
+    session: AsyncSession = Depends(get_session_dep),
+) -> SqlSentimentAggReader:
+    return SqlSentimentAggReader(session)
+
+
+@router.get("/api/v1/sentiment/windows")
+async def sentiment_windows(
+    symbol: str | None = Query(None),
+    kind: str = Query("all"),
+    decay: float | None = Query(None, gt=0, description="decay half-life in hours"),
+    reader: SqlSentimentAggReader = Depends(get_reader_dep),
+) -> list[dict]:
+    sym = symbol.upper() if symbol else None
+    return await reader.all_windows(symbol=sym, kind=kind, half_life_h=decay)
+
+
+@router.get("/api/v1/sentiment/series")
+async def sentiment_series(
+    symbol: str | None = Query(None),
+    kind: Annotated[str | None, Query()] = None,
+    points: int = Query(12, ge=1, le=168),
+    reader: SqlSentimentAggReader = Depends(get_reader_dep),
+) -> list[dict]:
+    sym = symbol.upper() if symbol else None
+    return await reader.series(symbol=sym, kind=kind, points=points)
+
+
+@router.get("/api/v1/sentiment/authors")
+async def sentiment_authors(
+    symbol: str = Query(...),
+    window: str = Query("7d"),
+    reader: SqlSentimentAggReader = Depends(get_reader_dep),
+) -> dict:
+    sym = symbol.upper()
+    count = await reader.distinct_authors(symbol=sym, window=window)
+    return {"symbol": sym, "window": window, "unique_authors": count}
 
 _RANGE_TO_DELTA = {
     "1d": timedelta(days=1),
@@ -182,9 +224,6 @@ def compute_content_stats(rows: Iterable[Any], *, now: datetime | None = None) -
     src: Counter[str] = Counter()
     mentions: Counter[str] = Counter()
     vol: dict[int, dict[str, int]] = defaultdict(lambda: {"social": 0, "news": 0, "market": 0})
-    sent: dict[int, list[float]] = defaultdict(list)
-    score_sum = 0.0
-    score_n = 0
 
     for r in rows:
         cat = _KIND_TO_CATEGORY.get(r.kind, "market")
@@ -192,17 +231,12 @@ def compute_content_stats(rows: Iterable[Any], *, now: datetime | None = None) -
         src[r.source] += 1
         for sym in (r.symbols or []):
             mentions[sym] += 1
-        if r.sentiment_score is not None:
-            score_sum += float(r.sentiment_score)
-            score_n += 1
         ts = r.published_at or r.fetched_at
         if isinstance(ts, datetime):
             age_h = int((now - ts).total_seconds() // 3600)
             if 0 <= age_h < 12:
                 bucket = 11 - age_h
                 vol[bucket][cat] += 1
-                if r.sentiment_score is not None:
-                    sent[bucket].append(float(r.sentiment_score))
 
     def label(bucket: int) -> str:
         hour = (now - timedelta(hours=11 - bucket)).hour
@@ -212,18 +246,14 @@ def compute_content_stats(rows: Iterable[Any], *, now: datetime | None = None) -
         {"hour": label(b), **{k: vol[b][k] for k in ("social", "news", "market")}}
         for b in range(12)
     ]
-    sentiment_series = [
-        {"hour": label(b), "sentiment": round(sum(sent[b]) / len(sent[b]), 2) if sent[b] else 0.0}
-        for b in range(12)
-    ]
     return {
         "total_24h": len(rows),
         "social_24h": by_cat["social"],
         "news_24h": by_cat["news"],
         "market_24h": by_cat["market"],
-        "avg_sentiment": round(score_sum / score_n, 2) if score_n else 0.0,
+        "avg_sentiment": 0.0,
         "volume_series": volume_series,
-        "sentiment_series": sentiment_series,
+        "sentiment_series": [],
         "top_sources": [{"source": s, "count": c} for s, c in src.most_common(6)],
         "mentions": [{"symbol": s, "count": c} for s, c in mentions.most_common(8)],
         "updated_at": now.isoformat(),
@@ -464,7 +494,21 @@ async def data_stats(session: AsyncSession = Depends(get_session_dep)) -> dict:
         .limit(5000)
     )
     rows = (await session.execute(stmt)).scalars().all()
-    return compute_content_stats(rows)
+    stats = compute_content_stats(rows)
+    reader = SqlSentimentAggReader(session)
+    # Reader returns ISO hours; DataStats/mock use an "HHh" label on the X axis.
+    series = await reader.series(symbol=None, kind=None, points=12)
+    stats["sentiment_series"] = [
+        {
+            "hour": datetime.fromisoformat(p["hour"]).strftime("%Hh"),
+            "sentiment": p["sentiment"],
+            "mentions": p["mentions"],
+        }
+        for p in series
+    ]
+    day = await reader.window_stats(symbol=None, kind=None, window="24h")
+    stats["avg_sentiment"] = round(day["avg"], 2)
+    return stats
 
 
 # ── portfolio / risk (derived from the persisted trades ledger + prices) ──────

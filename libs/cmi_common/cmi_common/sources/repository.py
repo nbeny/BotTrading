@@ -66,13 +66,12 @@ class ContentRepository(Protocol):
         *,
         symbol: str,
         kind: str,
-        window_start: datetime,
-        window_size: int,
+        bucket_start: datetime,
         mentions: int,
-        unique_authors: int,
+        score_sum: float,
+        confidence_sum: float,
+        weighted_score_sum: float,
         engagement_sum: float,
-        avg_sentiment: float,
-        weighted_sentiment: float,
     ) -> None: ...
 
 
@@ -136,56 +135,43 @@ class SqlContentRepository:
         *,
         symbol: str,
         kind: str,
-        window_start: datetime,
-        window_size: int,
+        bucket_start: datetime,
         mentions: int,
-        unique_authors: int,
+        score_sum: float,
+        confidence_sum: float,
+        weighted_score_sum: float,
         engagement_sum: float,
-        avg_sentiment: float,
-        weighted_sentiment: float,
     ) -> None:
         values = {
             "symbol": symbol,
             "kind": kind,
-            "window_start": window_start,
-            "window_size": window_size,
+            "bucket_start": bucket_start,
             "mentions": mentions,
-            "unique_authors": unique_authors,
+            "score_sum": score_sum,
+            "confidence_sum": confidence_sum,
+            "weighted_score_sum": weighted_score_sum,
             "engagement_sum": engagement_sum,
-            "avg_sentiment": avg_sentiment,
-            "weighted_sentiment": weighted_sentiment,
             "updated_at": _utcnow(),
         }
         stmt = pg_insert(ContentSentimentAgg).values(**values)
-        # On conflict, counts accumulate and the sentiment values become the
-        # mentions-weighted running mean: (old*old_n + inc*inc_n) / (old_n + inc_n).
-        # Table-qualified columns reference the pre-update row, excluded the
-        # incoming payload, so the denominator uses the OLD count. unique_authors
-        # accumulates as an approximate contribution count (an exact distinct
-        # count would require querying raw_content, which no consumer needs yet).
-        old_n = ContentSentimentAgg.mentions
-        inc_n = stmt.excluded.mentions
-        total_n = old_n + inc_n
+        # All columns are additive: on conflict, accumulate. Means (avg /
+        # weighted_avg) are derived at read time from these sums, so there is no
+        # running-mean drift here.
         stmt = stmt.on_conflict_do_update(
-            index_elements=["symbol", "kind", "window_start", "window_size"],
+            index_elements=["symbol", "kind", "bucket_start"],
             set_={
-                "mentions": total_n,
-                "unique_authors": (
-                    ContentSentimentAgg.unique_authors + stmt.excluded.unique_authors
+                "mentions": ContentSentimentAgg.mentions + stmt.excluded.mentions,
+                "score_sum": ContentSentimentAgg.score_sum + stmt.excluded.score_sum,
+                "confidence_sum": (
+                    ContentSentimentAgg.confidence_sum + stmt.excluded.confidence_sum
+                ),
+                "weighted_score_sum": (
+                    ContentSentimentAgg.weighted_score_sum
+                    + stmt.excluded.weighted_score_sum
                 ),
                 "engagement_sum": (
                     ContentSentimentAgg.engagement_sum + stmt.excluded.engagement_sum
                 ),
-                "avg_sentiment": (
-                    ContentSentimentAgg.avg_sentiment * old_n
-                    + stmt.excluded.avg_sentiment * inc_n
-                )
-                / total_n,
-                "weighted_sentiment": (
-                    ContentSentimentAgg.weighted_sentiment * old_n
-                    + stmt.excluded.weighted_sentiment * inc_n
-                )
-                / total_n,
                 "updated_at": stmt.excluded.updated_at,
             },
         )
@@ -202,7 +188,7 @@ class FakeContentRepository:
     """In-memory double mirroring ContentRepository for unit tests."""
 
     rows: list[dict[str, Any]] = field(default_factory=list)
-    aggregates: dict[tuple[str, str, datetime, int], dict[str, Any]] = field(
+    aggregates: dict[tuple[str, str, datetime], dict[str, Any]] = field(
         default_factory=dict
     )
     _seq: int = 0
@@ -254,36 +240,24 @@ class FakeContentRepository:
         *,
         symbol: str,
         kind: str,
-        window_start: datetime,
-        window_size: int,
+        bucket_start: datetime,
         mentions: int,
-        unique_authors: int,
+        score_sum: float,
+        confidence_sum: float,
+        weighted_score_sum: float,
         engagement_sum: float,
-        avg_sentiment: float,
-        weighted_sentiment: float,
     ) -> None:
-        key = (symbol, kind, window_start, window_size)
+        key = (symbol, kind, bucket_start)
         cur = self.aggregates.get(key)
+        inc = {
+            "mentions": mentions,
+            "score_sum": score_sum,
+            "confidence_sum": confidence_sum,
+            "weighted_score_sum": weighted_score_sum,
+            "engagement_sum": engagement_sum,
+        }
         if cur is None:
-            self.aggregates[key] = {
-                "mentions": mentions,
-                "unique_authors": unique_authors,
-                "engagement_sum": engagement_sum,
-                "avg_sentiment": avg_sentiment,
-                "weighted_sentiment": weighted_sentiment,
-            }
+            self.aggregates[key] = inc
         else:
-            # Mirror SqlContentRepository's ON CONFLICT DO UPDATE: counts
-            # accumulate; sentiment values become the mentions-weighted running
-            # mean (computed with the OLD mentions before updating it).
-            total = cur["mentions"] + mentions
-            cur["avg_sentiment"] = (
-                cur["avg_sentiment"] * cur["mentions"] + avg_sentiment * mentions
-            ) / total
-            cur["weighted_sentiment"] = (
-                cur["weighted_sentiment"] * cur["mentions"]
-                + weighted_sentiment * mentions
-            ) / total
-            cur["mentions"] = total
-            cur["unique_authors"] += unique_authors
-            cur["engagement_sum"] += engagement_sum
+            for k, v in inc.items():
+                cur[k] += v

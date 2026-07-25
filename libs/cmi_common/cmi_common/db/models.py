@@ -191,21 +191,25 @@ class ServiceHealth(Base):
 
 
 class ContentSentimentAgg(Base):
-    """Per-symbol/window rollup derived from scored raw_content."""
+    """Per-symbol hourly rollup derived from scored raw_content.
+
+    All stored quantities are additive so any trailing window is derived by
+    summing the covering buckets; means are computed once at read time. The key
+    is (symbol, kind, bucket_start) at a single hourly resolution.
+    """
 
     __tablename__ = "content_sentiment_agg"
 
     symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
     kind: Mapped[str] = mapped_column(String(16), primary_key=True)
-    window_start: Mapped[datetime] = mapped_column(
+    bucket_start: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), primary_key=True
     )
-    window_size: Mapped[int] = mapped_column(Integer, primary_key=True)
     mentions: Mapped[int] = mapped_column(Integer, default=0)
-    unique_authors: Mapped[int] = mapped_column(Integer, default=0)
+    score_sum: Mapped[float] = mapped_column(Float, default=0.0)
+    confidence_sum: Mapped[float] = mapped_column(Float, default=0.0)
+    weighted_score_sum: Mapped[float] = mapped_column(Float, default=0.0)
     engagement_sum: Mapped[float] = mapped_column(Float, default=0.0)
-    avg_sentiment: Mapped[float] = mapped_column(Float, default=0.0)
-    weighted_sentiment: Mapped[float] = mapped_column(Float, default=0.0)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

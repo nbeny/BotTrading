@@ -26,7 +26,6 @@ from cmi_common.sources import ContentRepository
 
 logger = logging.getLogger(__name__)
 SERVICE = "sentiment-service"
-WINDOW_SIZE = 3600  # seconds
 
 
 class ScoreResult(Protocol):
@@ -66,18 +65,18 @@ class SentimentDbWorker:
                 model=result.model_name,
             )
             symbols = row.symbols or ["MARKET"]
-            window_start = _floor_hour(row.published_at)
+            bucket_start = _floor_hour(row.published_at)
+            engagement = float(row.engagement or 0.0)
             for symbol in symbols:
                 await self._repo.upsert_aggregate(
                     symbol=symbol,
                     kind=row.kind,
-                    window_start=window_start,
-                    window_size=WINDOW_SIZE,
+                    bucket_start=bucket_start,
                     mentions=1,
-                    unique_authors=1,
-                    engagement_sum=float(row.engagement or 0.0),
-                    avg_sentiment=result.score,
-                    weighted_sentiment=result.score * result.confidence,
+                    score_sum=result.score,
+                    confidence_sum=result.confidence,
+                    weighted_score_sum=result.score * result.confidence,
+                    engagement_sum=engagement,
                 )
                 await self._producer.publish(
                     Topic.SENTIMENT,

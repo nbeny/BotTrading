@@ -6,6 +6,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 from cmi_common.sources import FakeContentRepository, RawItem
 
 _spec = importlib.util.spec_from_file_location(
@@ -86,3 +88,26 @@ async def test_symbolless_item_scored_as_market() -> None:
     await worker.run_once()
 
     assert {e.symbol for e in producer.published} == {"MARKET"}
+
+
+async def test_worker_accumulates_additive_bucket() -> None:
+    from datetime import datetime, timezone
+
+    repo = FakeContentRepository()
+    ts = datetime(2024, 1, 1, 10, 30, tzinfo=timezone.utc)
+    for ext in ("a", "b"):
+        await repo.insert_items([RawItem(
+            source="bluesky", kind="social", external_id=ext, text="$BTC up",
+            symbols=["BTC"], engagement=2.0, published_at=ts,
+        )])
+    # FakeScorer returns score=0.8, confidence=0.9 for text containing "up".
+    worker = sw.SentimentDbWorker(repo, FakeScorer(), FakeProducer(), batch=10)
+
+    await worker.run_once()
+
+    bucket = repo.aggregates[("BTC", "social", sw._floor_hour(ts))]
+    assert bucket["mentions"] == 2
+    assert bucket["score_sum"] == pytest.approx(1.6)           # 0.8 + 0.8
+    assert bucket["confidence_sum"] == pytest.approx(1.8)      # 0.9 + 0.9
+    assert bucket["weighted_score_sum"] == pytest.approx(1.44)  # 0.72 + 0.72
+    assert bucket["engagement_sum"] == pytest.approx(4.0)      # 2.0 + 2.0

@@ -79,6 +79,176 @@ Ce qui existe déjà et qu'il ne faut PAS recréer :
 
 ---
 
+## Task 0 : Réparer le chargement des modules de service dans les tests
+
+**Prérequis dur.** `pytest tests/` échoue aujourd'hui à la *collecte* sur
+`master` — aucun test ne s'exécute, donc `make test` est vert par accident
+d'affichage seulement. Sans cette tâche, la tâche 11 est invérifiable et chaque
+test ajouté aggrave la collision.
+
+**Cause :** chaque service a un package nommé `app`. `tests/test_api_gateway_read.py`
+s'exécute avant `tests/test_haiku_extract.py` (ordre alphabétique) et laisse
+`sys.modules["app"]` pointant sur l'`app` de l'api-gateway. `test_haiku_extract.py`
+charge ensuite `app.worker` du worker Haiku, dont l'import relatif
+`from .features import FeatureStore` cherche `app.features` dans le mauvais
+package → `ModuleNotFoundError`, collecte interrompue.
+
+`tests/test_scorer.py:3-4` documente déjà la parade (charger sous un nom unique)
+mais chaque fichier la réinvente ou l'oublie. On la centralise.
+
+**Files:**
+- Create: `tests/service_modules.py`
+- Modify: `tests/test_haiku_extract.py`
+- Modify: `tests/test_scorer_diagnostics.py` (créé en T1 avec le mauvais motif)
+
+- [ ] **Step 1: Reproduce the failure**
+
+Run: `python -m pytest tests/ -q`
+
+Expected: `ERROR tests/test_haiku_extract.py` … `ModuleNotFoundError: No module
+named 'app.features'` … `Interrupted: 1 error during collection`.
+
+Note the exact error — Step 5 checks it is gone.
+
+- [ ] **Step 2: Write the shared loader**
+
+Create `tests/service_modules.py`:
+
+```python
+"""Load a service's ``app`` package under a unique top-level alias.
+
+Every service in this repo ships a package literally named ``app``. Loading two
+of them in one pytest session makes the second shadow the first in
+``sys.modules``, so a relative import such as ``from .features import
+FeatureStore`` resolves against the wrong service and raises ModuleNotFoundError
+— which aborted collection of the whole suite.
+
+Registering each service under a distinct alias (``haiku_app``, ``gateway_app``,
+…) gives every module a parent package rooted at its own service directory, so
+relative imports resolve within that service and nowhere else.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import sys
+from pathlib import Path
+from types import ModuleType
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def load_service_module(service: str, module: str, alias: str) -> ModuleType:
+    """Import ``services/<service>/app/<module>.py`` as ``<alias>.<module>``.
+
+    ``alias`` must be unique per service across the whole test suite — that
+    uniqueness is the entire point. The parent package is created with its
+    search path pinned to the service's ``app/`` directory.
+    """
+    app_dir = _REPO_ROOT / "services" / service / "app"
+
+    if alias not in sys.modules:
+        pkg_spec = importlib.util.spec_from_file_location(
+            alias,
+            app_dir / "__init__.py",
+            submodule_search_locations=[str(app_dir)],
+        )
+        assert pkg_spec and pkg_spec.loader
+        pkg = importlib.util.module_from_spec(pkg_spec)
+        sys.modules[alias] = pkg
+        pkg_spec.loader.exec_module(pkg)
+
+    qualified = f"{alias}.{module}"
+    if qualified in sys.modules:
+        return sys.modules[qualified]
+
+    spec = importlib.util.spec_from_file_location(qualified, app_dir / f"{module}.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    # Registered before exec so dataclasses and relative imports can resolve it.
+    sys.modules[qualified] = mod
+    spec.loader.exec_module(mod)
+    return mod
+```
+
+- [ ] **Step 3: Migrate `tests/test_haiku_extract.py`**
+
+Replace its entire importlib preamble (the block from `import importlib.util`
+through `_spec.loader.exec_module(hw)`, roughly lines 5-25) with:
+
+```python
+from cmi_common.events.sentiment import SentimentEvent
+
+from .service_modules import load_service_module
+
+hw = load_service_module("ai-worker-haiku", "worker", "haiku_app")
+```
+
+If the relative import `from .service_modules import ...` fails because `tests/`
+is not a package, use `from service_modules import load_service_module` instead —
+pytest puts the test file's directory on `sys.path` under rootdir-based
+collection. Verify which one works in Step 5 and use that form consistently in
+every migrated file.
+
+- [ ] **Step 4: Migrate `tests/test_scorer_diagnostics.py`**
+
+Replace its importlib preamble with the same pattern:
+
+```python
+from service_modules import load_service_module
+
+sc = load_service_module("ai-worker-haiku", "scorer", "haiku_app")
+```
+
+Leave the seven test functions untouched.
+
+- [ ] **Step 5: Verify the whole suite now collects**
+
+Run: `python -m pytest tests/ -q`
+
+Expected: collection completes — no `Interrupted: N error during collection`.
+Record the pass/fail counts. **Pre-existing failures may now become visible for
+the first time; that is progress, not regression.** Report them, do not fix them
+in this task.
+
+Run: `python -m pytest tests/test_haiku_extract.py tests/test_scorer_diagnostics.py tests/test_scorer.py -v`
+
+Expected: all pass (2 + 7 + 5 = 14).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add tests/service_modules.py tests/test_haiku_extract.py tests/test_scorer_diagnostics.py
+git commit -m "fix(tests): load service app packages under unique aliases
+
+Every service ships a package named 'app'. Loading two in one pytest session
+shadowed the first in sys.modules, so a relative import inside the second
+resolved against the wrong service and aborted collection of the entire suite —
+'make test' has been running zero tests.
+
+Centralises the workaround that test_scorer.py already documented ad hoc.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+```
+
+---
+
+## Convention pour tous les tests suivants
+
+**Ne jamais charger un module de service sous un nom commençant par `app.`.**
+Utiliser systématiquement :
+
+```python
+from service_modules import load_service_module
+
+mod = load_service_module("<service-dir>", "<module>", "<alias>")
+```
+
+Alias attribués : `haiku_app` (ai-worker-haiku), `gateway_app` (api-gateway),
+`decision_app` (decision-engine), `risk_app` (risk-engine).
+
+---
+
 ## Task 1 : Le scorer expose ses diagnostics
 
 Le scorer calcule déjà `ambiguous` et les facteurs, mais ne dit pas *pourquoi* il
@@ -442,21 +612,9 @@ Create `tests/test_haiku_scorer_config.py`:
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
+from service_modules import load_service_module
 
-_APP_ROOT = Path(__file__).resolve().parents[1] / "services" / "ai-worker-haiku"
-if str(_APP_ROOT) not in sys.path:
-    sys.path.insert(0, str(_APP_ROOT))
-
-_spec = importlib.util.spec_from_file_location(
-    "app.main_cfg", _APP_ROOT / "app" / "main.py"
-)
-hm = importlib.util.module_from_spec(_spec)
-assert _spec.loader
-sys.modules[_spec.name] = hm
-_spec.loader.exec_module(hm)
+hm = load_service_module("ai-worker-haiku", "main", "haiku_app")
 
 
 def test_default_preserves_current_behaviour(monkeypatch) -> None:
@@ -534,27 +692,15 @@ Create `tests/test_decision_engine_rejection.py`:
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
-
 import pytest
 
 from cmi_common.events import AnalysisEvent
 from cmi_common.events.base import Source
 from cmi_common.kafka import Topic
 
-_APP_ROOT = Path(__file__).resolve().parents[1] / "services" / "decision-engine"
-if str(_APP_ROOT) not in sys.path:
-    sys.path.insert(0, str(_APP_ROOT))
+from service_modules import load_service_module
 
-_spec = importlib.util.spec_from_file_location(
-    "app.engine", _APP_ROOT / "app" / "engine.py"
-)
-de = importlib.util.module_from_spec(_spec)
-assert _spec.loader
-sys.modules[_spec.name] = de
-_spec.loader.exec_module(de)
+de = load_service_module("decision-engine", "engine", "decision_app")
 
 
 class FakeProducer:
@@ -822,15 +968,9 @@ import pytest
 from cmi_common.events.base import Source
 from cmi_common.events.risk import RiskRejectedEvent
 
-from importlib import import_module
-import sys
-from pathlib import Path
+from service_modules import load_service_module
 
-_APP_ROOT = Path(__file__).resolve().parents[1] / "services" / "api-gateway"
-if str(_APP_ROOT) not in sys.path:
-    sys.path.insert(0, str(_APP_ROOT))
-
-persister_mod = import_module("app.persister")
+persister_mod = load_service_module("api-gateway", "persister", "gateway_app")
 
 
 def test_stage_from_source_maps_both_producers() -> None:
@@ -992,15 +1132,9 @@ Create `tests/test_funnel_aggregation.py`:
 
 from __future__ import annotations
 
-import sys
-from importlib import import_module
-from pathlib import Path
+from service_modules import load_service_module
 
-_APP_ROOT = Path(__file__).resolve().parents[1] / "services" / "api-gateway"
-if str(_APP_ROOT) not in sys.path:
-    sys.path.insert(0, str(_APP_ROOT))
-
-funnel = import_module("app.funnel")
+funnel = load_service_module("api-gateway", "funnel", "gateway_app")
 
 
 def test_stages_are_ordered_and_complete() -> None:
@@ -1528,7 +1662,14 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 Run: `make test`
 
-Expected: all tests pass. Note the count so a later regression is visible.
+Expected: **collection completes** (no `Interrupted: N error during collection`)
+and the tests added by this phase pass.
+
+Caveat inherited from Task 0: the suite never ran end-to-end before this phase,
+so failures unrelated to phase 1 may surface here for the first time. Triage each
+one — `git stash` the phase's commits and re-run to confirm whether it predates
+this work. Report pre-existing failures to the operator; **do not fix them inside
+this phase** and do not weaken a test to make it green.
 
 - [ ] **Step 2: Lint**
 

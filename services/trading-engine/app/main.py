@@ -10,6 +10,7 @@ from cmi_common import Settings, create_app
 from cmi_common.cache import Cache
 from cmi_common.kafka import EventConsumer, EventProducer, Topic
 
+from .account import build_poller
 from .config import TradingConfig
 from .engine import TradingEngine
 from .kraken import KrakenFuturesClient
@@ -67,6 +68,14 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     reconciler = Reconciler(cache, producer, kraken)
     await reconciler.sweep()
 
+    # Optional: absent (not failing) when no read-only spot key is configured.
+    poller = build_poller(config, producer, cache)
+    app.state.account_poller = poller
+    app.state.account_task = None
+    if poller is not None:
+        await poller.start()
+        app.state.account_task = asyncio.create_task(poller.run())
+
     app.state.cache = cache
     app.state.producer = producer
     app.state.kraken = kraken
@@ -80,12 +89,19 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
 
 async def _shutdown(app: FastAPI, settings: Settings) -> None:
     app.state.reconciler.stop()
+    if app.state.account_poller is not None:
+        app.state.account_poller.stop()
     await app.state.signals.stop()
     await app.state.commands.stop()
-    await asyncio.gather(
+    # Awaited *before* the producer and cache close: a poll still in flight
+    # would otherwise finish by publishing to a stopped producer.
+    tasks = [
         app.state.signals_task, app.state.commands_task, app.state.reconcile_task,
-        return_exceptions=True,
-    )
+        app.state.account_task,
+    ]
+    await asyncio.gather(*[t for t in tasks if t is not None], return_exceptions=True)
+    if app.state.account_poller is not None:
+        await app.state.account_poller.close()
     await app.state.kraken.close()
     await app.state.producer.stop()
     await app.state.cache.close()

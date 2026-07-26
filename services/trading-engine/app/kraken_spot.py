@@ -27,8 +27,10 @@ BASE_URL = "https://api.kraken.com"
 BALANCE_PATH = "/0/private/Balance"
 TRADE_BALANCE_PATH = "/0/private/TradeBalance"
 QUOTE_ASSET = "ZUSD"
-# Kraken keeps sub-satoshi dust on old accounts; it adds nothing to a balance
-# display and only lengthens the payload.
+# Kraken keeps dust on old accounts; it adds nothing to a balance display and
+# only lengthens the payload. The comparison is strict, so a balance of exactly
+# one satoshi is dropped too -- deliberate, and worth stating because 1e-8 is
+# the satoshi itself, not a value below it.
 DUST = 1e-8
 
 

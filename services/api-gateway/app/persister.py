@@ -102,7 +102,7 @@ class Persister:
             await self._save_account_snapshot(event)
 
     async def _save_price(self, e: PriceEvent) -> None:
-        EVENTS_CONSUMED.labels(SERVICE, Topic.PRICE.value, e.event_type).inc()
+        EVENTS_CONSUMED.labels(SERVICE, Topic.PRICE.value, event_type_of(e)).inc()
         async with self._db._sessionmaker() as s:  # noqa: SLF001
             stmt = insert(Price).values(
                 time=_naive_utc(e.occurred_at),
@@ -117,7 +117,7 @@ class Persister:
             await s.commit()
 
     async def _save_signal(self, e: AnalysisEvent) -> None:
-        EVENTS_CONSUMED.labels(SERVICE, Topic.ANALYSIS.value, e.event_type).inc()
+        EVENTS_CONSUMED.labels(SERVICE, Topic.ANALYSIS.value, event_type_of(e)).inc()
         async with self._db._sessionmaker() as s:  # noqa: SLF001
             stmt = insert(Signal).values(
                 time=_naive_utc(e.occurred_at),
@@ -136,7 +136,7 @@ class Persister:
             await s.commit()
 
     async def _save_journal(self, e: JournalEntryEvent) -> None:
-        EVENTS_CONSUMED.labels(SERVICE, Topic.JOURNAL.value, e.event_type).inc()
+        EVENTS_CONSUMED.labels(SERVICE, Topic.JOURNAL.value, event_type_of(e)).inc()
         payload = e.model_dump(
             mode="json",
             exclude={"event_type", "schema_version", "source", "occurred_at", "meta"},
@@ -158,7 +158,7 @@ class Persister:
             await s.commit()
 
     async def _save_rejection(self, e: RiskRejectedEvent) -> None:
-        EVENTS_CONSUMED.labels(SERVICE, Topic.DECISION.value, e.event_type).inc()
+        EVENTS_CONSUMED.labels(SERVICE, Topic.DECISION.value, event_type_of(e)).inc()
         async with self._db._sessionmaker() as s:  # noqa: SLF001
             stmt = insert(PipelineRejection).values(
                 time=_naive_utc(e.occurred_at),
@@ -178,7 +178,7 @@ class Persister:
             )
 
     async def _save_decision(self, e: DecisionEvent) -> None:
-        EVENTS_CONSUMED.labels(SERVICE, Topic.DECISION.value, e.event_type).inc()
+        EVENTS_CONSUMED.labels(SERVICE, Topic.DECISION.value, event_type_of(e)).inc()
         async with self._db._sessionmaker() as s:  # noqa: SLF001
             stmt = insert(Decision).values(
                 event_id=e.event_id,
@@ -195,7 +195,9 @@ class Persister:
             await s.commit()
 
     async def _save_trade(self, e: RiskApprovedEvent) -> None:
-        EVENTS_CONSUMED.labels(SERVICE, Topic.RISK_APPROVED.value, e.event_type).inc()
+        EVENTS_CONSUMED.labels(
+            SERVICE, Topic.RISK_APPROVED.value, event_type_of(e)
+        ).inc()
         async with self._db._sessionmaker() as s:  # noqa: SLF001
             stmt = insert(Trade).values(
                 event_id=e.event_id,
@@ -243,7 +245,7 @@ class Persister:
             await s.commit()
 
     async def _update_trade(self, e: ExecutionEvent) -> None:
-        EVENTS_CONSUMED.labels(SERVICE, Topic.EXECUTION.value, e.event_type).inc()
+        EVENTS_CONSUMED.labels(SERVICE, Topic.EXECUTION.value, event_type_of(e)).inc()
         async with self._db._sessionmaker() as s:  # noqa: SLF001
             stmt = (
                 update(Trade)

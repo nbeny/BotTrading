@@ -38,12 +38,10 @@ def upgrade() -> None:
         sa.Column("correlation_id", sa.String(64)),
         sa.Column("payload", postgresql.JSONB, nullable=False, server_default="{}"),
     )
-    op.create_index(
-        "ix_events_signal_page",
-        "events_signal",
-        ["time", "event_id"],
-        postgresql_using="btree",
-    )
+    # No index on (time, event_id): PRIMARY KEY (time, event_id) is already
+    # backed by a btree on exactly those columns, and a btree scans backwards,
+    # so it serves ORDER BY time DESC, event_id DESC. A duplicate would cost
+    # write throughput per chunk on the busiest table for no read benefit.
     op.create_index("ix_events_signal_symbol", "events_signal", ["symbol", "time"])
     op.create_index(
         "ix_events_signal_correlation",

@@ -145,10 +145,12 @@ def upgrade() -> None:
         sa.Column("correlation_id", sa.String(64)),
         sa.Column("payload", postgresql.JSONB, nullable=False, server_default="{}"),
     )
-    op.create_index(
-        "ix_events_market_page", "events_market", ["time", "event_id"],
-        postgresql_using="btree",
-    )
+    # No index on (time, event_id): the PRIMARY KEY is already backed by a
+    # btree on exactly those columns, and a btree scans backwards, so it serves
+    # ORDER BY time DESC, event_id DESC. Verified against production:
+    # `pk_decision_journal | CREATE UNIQUE INDEX ... btree ("time", event_id)`.
+    # A duplicate would cost write throughput per chunk on the busiest table in
+    # the system for no read benefit.
     op.create_index("ix_events_market_symbol", "events_market", ["symbol", "time"])
     op.create_index(
         "ix_events_market_correlation", "events_market", ["correlation_id"],
@@ -1233,8 +1235,10 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 - [ ] **Step 1** — `python -m pytest tests/ -rN --tb=no` → 3 known failures only.
 - [ ] **Step 2** — lint delta vs `master`, as in the previous plans; report any new category.
-- [ ] **Step 3** — `cd migrations && python -m alembic upgrade head --sql` then
-  `downgrade 0009 --sql`; confirm both new steps and their round trip.
+- [ ] **Step 3** — `cd migrations && python -m alembic upgrade head --sql`, then
+  `python -m alembic downgrade head:0009 --sql`. The range form is required:
+  offline downgrade rejects a bare target with
+  `FAILED: downgrade with --sql requires <fromrev>:<torev>`.
 - [ ] **Step 4** — `cd frontend && npx tsc --noEmit && npm run build`.
 - [ ] **Step 5 — post-deploy acceptance (VPS, after merge):**
 

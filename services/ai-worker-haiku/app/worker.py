@@ -8,7 +8,11 @@ Strong signals are flagged with ``escalate=True`` for the senior Sonnet analyst.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
+import os
+import time
 
 from cmi_common.events import (
     AnalysisEvent,
@@ -28,6 +32,23 @@ from .scorer import ScorerConfig, local_opportunity
 logger = logging.getLogger(__name__)
 SERVICE = "ai-worker-haiku"
 
+# One collector poll delivers a symbol's PriceEvent and VolumeEvent seconds
+# apart, both derived from the same upstream response. Scoring on each arrival
+# published two analyses per cycle -- measured 200 prices/min producing 376
+# analyses/min -- the first being a strictly partial view of the second.
+#
+# So the symbol is allowed to settle: the analysis is emitted once the events of
+# its window have stopped arriving. This aggregates the *inference*, never the
+# events. FeatureStore.update runs on every single one, and its merge is
+# monotone in keys, so the analysis that does get published is computed on a
+# superset of the inputs of the ones that do not.
+SETTLE_S = float(os.getenv("CMI_ANALYSIS_SETTLE_S", "3"))
+# Ceiling, so a symbol that receives something every two seconds still gets
+# analysed. Without it, settling on a busy symbol would become suppression.
+MAX_DELAY_S = float(os.getenv("CMI_ANALYSIS_MAX_DELAY_S", "20"))
+# How often the sweeper looks for symbols that have gone quiet.
+SWEEP_S = float(os.getenv("CMI_ANALYSIS_SWEEP_S", "1"))
+
 
 class HaikuWorker:
     """LLM-free triage: a deterministic scorer runs on every ready symbol and
@@ -40,23 +61,73 @@ class HaikuWorker:
         producer: EventProducer,
         *,
         scorer_config: ScorerConfig | None = None,
+        clock=None,
     ) -> None:
         self._store = store
         self._producer = producer
         self._cfg = scorer_config or ScorerConfig()
+        self._clock = clock or time.monotonic
+        # symbol -> (last event seen at, first event of this window seen at,
+        # correlation id to carry onto the analysis)
+        self._pending: dict[str, tuple[float, float, str]] = {}
+        self._stop = asyncio.Event()
 
     async def handle(self, event: BaseEvent) -> None:
         symbol, fields, topic = self._extract(event)
         if symbol is None:
             return
         EVENTS_CONSUMED.labels(SERVICE, topic, event.event_type).inc()
-        features = await self._store.update(symbol, fields)
-        # Only score once we have at least a price/dex anchor plus one signal.
-        if not self._ready(features):
-            return
-        analysis = self._score(symbol, features, event.correlation_id)
-        await self._producer.publish(Topic.ANALYSIS, analysis)
-        EVENTS_PRODUCED.labels(SERVICE, Topic.ANALYSIS.value, analysis.event_type).inc()
+        # Unconditional: the event is folded into the symbol's state whether or
+        # not it triggers an inference. Nothing arriving here is discarded.
+        await self._store.update(symbol, fields)
+        now = self._clock()
+        _last, first, _corr = self._pending.get(symbol, (now, now, ""))
+        self._pending[symbol] = (now, first, event.correlation_id)
+
+    async def flush_settled(self) -> None:
+        """Emit one analysis per symbol whose window has gone quiet.
+
+        Read from the store rather than from what `handle` passed in: that is
+        what makes this an aggregation of the window instead of a replay of the
+        last event to arrive.
+        """
+        now = self._clock()
+        due = [
+            (symbol, corr)
+            for symbol, (last, first, corr) in self._pending.items()
+            if now - last >= SETTLE_S or now - first >= MAX_DELAY_S
+        ]
+        for symbol, correlation_id in due:
+            del self._pending[symbol]
+            features = await self._store.get(symbol)
+            # Only score once we have at least a price/dex anchor plus one signal.
+            if not self._ready(features):
+                continue
+            analysis = self._score(symbol, features, correlation_id)
+            await self._producer.publish(Topic.ANALYSIS, analysis)
+            EVENTS_PRODUCED.labels(
+                SERVICE, Topic.ANALYSIS.value, analysis.event_type
+            ).inc()
+
+    def pending_symbols(self) -> int:
+        return len(self._pending)
+
+    async def run(self) -> None:
+        """Sweeper loop. One task for the whole worker rather than one timer per
+        symbol: the universe is ~200 symbols and a task each would cost more
+        than the work it schedules."""
+        while not self._stop.is_set():
+            try:
+                await self.flush_settled()
+            except Exception:
+                # A scoring or publish failure must not kill the sweeper and
+                # strand every pending symbol behind it.
+                logger.warning("analysis sweep failed", exc_info=True)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._stop.wait(), timeout=SWEEP_S)
+
+    def stop(self) -> None:
+        self._stop.set()
 
     @staticmethod
     def _ready(f: dict) -> bool:

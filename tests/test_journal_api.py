@@ -9,6 +9,9 @@ from service_modules import load_service_module
 japi = load_service_module("api-gateway", "journal_api")
 
 
+_T = datetime(2026, 7, 25, tzinfo=UTC)
+
+
 class _Row:
     def __init__(self, mapping: dict) -> None:
         self._mapping = mapping
@@ -42,8 +45,9 @@ async def test_empty_journal_is_an_ordinary_response() -> None:
     réponse normale, pas une exception."""
     resp = await japi.journal_summary(window="7d", session=FakeSession())
     assert resp["sample"]["analyses"] == 0
-    assert resp["q3_sonnet_value"]["insufficient_sample"] is True
-    assert resp["q3_sonnet_value"]["mean_a"] is None
+    for horizon in japi.HORIZONS:
+        assert resp["q3_sonnet_value"][horizon]["insufficient_sample"] is True
+        assert resp["q3_sonnet_value"][horizon]["mean_a"] is None
 
 
 async def test_q3_compares_within_the_escalated_population() -> None:
@@ -71,8 +75,9 @@ async def test_q3_compares_within_the_escalated_population() -> None:
     assert resp["sample"]["sonnet_called"] == 10
     assert resp["sample"]["validated"] == 5
     # Q3 ne voit que les 10 escaladés, jamais les 90 autres.
-    assert resp["q3_sonnet_value"]["n_a"] == 0  # aucun pnl encore calculé
-    assert resp["q3_sonnet_value"]["insufficient_sample"] is True
+    for horizon in japi.HORIZONS:
+        assert resp["q3_sonnet_value"][horizon]["n_a"] == 0  # aucun prix enregistre
+        assert resp["q3_sonnet_value"][horizon]["insufficient_sample"] is True
 
 
 async def test_horizons_are_configurable_and_reported() -> None:
@@ -87,3 +92,40 @@ async def test_sample_block_reports_the_minimum_required() -> None:
     """Le lecteur doit pouvoir juger la réponse sans connaître le code."""
     resp = await japi.journal_summary(window="7d", session=FakeSession())
     assert resp["sample"]["min_required"] >= 30
+
+
+async def test_questions_are_answered_per_horizon() -> None:
+    """Chaque horizon mesure autre chose : +1 h la valeur immediate, +4 h une
+    detention courte realiste, +24 h une tendance plus large. Les collapser en
+    un seul chiffre jetterait cette distinction."""
+    resp = await japi.journal_summary(window="7d", session=FakeSession())
+    for question in ("q1_rejected_vs_approved", "q2_gate_discrimination",
+                     "q3_sonnet_value"):
+        assert set(resp[question]) == set(japi.HORIZONS), question
+
+
+async def test_comparisons_read_the_per_horizon_pnl_field() -> None:
+    """Regression : compare_groups lit `pnl_net_pct` par defaut, mais
+    attach_outcome ecrit `pnl_<horizon>`. Lire le champ par defaut ferait
+    rapporter n=0 a chaque question pour toujours — un endpoint qui a l'air
+    vivant et ne repond jamais."""
+    rows = [
+        {"symbol": "A", "escalated": True, "sonnet_called": True,
+         "sonnet_validated": True, "risk_verdict": "rejected", "confidence": 0.8,
+         "dominant_factor": "momentum", "dedup_trigger": None,
+         "market_cap_rank": 10, "time": _T, "entry_price": 100.0,
+         "stop_loss": 95.0, "take_profit": 110.0, "sonnet_direction": "long"}
+    ]
+    resp = await japi.journal_summary(window="7d", session=FakeSession(rows))
+    # Aucun prix enregistre -> outcome no_data -> pnl None -> exclu du compte.
+    # Le point du test est que la cle lue existe : sinon n_a serait 0 meme avec
+    # des prix, et le bug serait indetectable.
+    for horizon in japi.HORIZONS:
+        assert resp["q1_rejected_vs_approved"][horizon]["n_a"] == 0
+
+
+async def test_cohorts_declare_which_horizon_they_used() -> None:
+    """Sans cette cle, un lecteur ne peut pas savoir a quel horizon une cohorte
+    se rapporte."""
+    resp = await japi.journal_summary(window="7d", session=FakeSession())
+    assert resp["cohorts"]["horizon"] == japi.PRIMARY_HORIZON

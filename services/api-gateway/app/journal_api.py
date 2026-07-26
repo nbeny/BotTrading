@@ -34,6 +34,9 @@ HORIZONS = tuple(
     if h.strip()
 )
 _WINDOWS = {"7d": 7, "30d": 30, "90d": 90}
+# Cohorts are reported for one horizon only -- see the comment at their use.
+# Defaults to the middle horizon: a realistic short-term hold.
+PRIMARY_HORIZON = os.getenv("COUNTERFACTUAL_PRIMARY_HORIZON", "4h")
 
 
 def attach_outcome(
@@ -121,20 +124,45 @@ async def journal_summary(
             "approved": len(approved),
             "matured": {h: matured(rows, f"pnl_{h}") for h in HORIZONS},
         },
+        # Each question is answered per horizon, because each horizon asks a
+        # different one: +1h whether the signal had immediate value, +4h a
+        # realistic short-term hold, +24h whether it caught a broader move.
+        # Collapsing them to a single number would discard that distinction.
+        #
+        # The field name matters: attach_outcome writes `pnl_<horizon>`, never
+        # `pnl_net_pct`. Reading the default field here would report n=0 for
+        # every question forever, whatever the data volume -- an endpoint that
+        # looks alive and never answers.
+        #
         # Q1 -- were the risk rejections right?
-        "q1_rejected_vs_approved": compare_groups(rejected, approved),
+        "q1_rejected_vs_approved": {
+            h: compare_groups(rejected, approved, field=f"pnl_{h}") for h in HORIZONS
+        },
         # Q2 -- did the gate let value through? Confounded by construction: the
         # two populations differ before Sonnet ever intervenes.
-        "q2_gate_discrimination": compare_groups(
-            [r for r in rows if not r.get("escalated")], escalated
-        ),
+        "q2_gate_discrimination": {
+            h: compare_groups(
+                [r for r in rows if not r.get("escalated")], escalated, field=f"pnl_{h}"
+            )
+            for h in HORIZONS
+        },
         # Q3 -- the central question. Clean comparison: both groups passed the
         # same gate and saw the same analyst; only the verdict differs.
-        "q3_sonnet_value": compare_groups(validated, refused),
+        "q3_sonnet_value": {
+            h: compare_groups(validated, refused, field=f"pnl_{h}") for h in HORIZONS
+        },
+        # Cohorts use a single horizon: crossing three axes by three horizons
+        # would emit nine blocks of mostly-null cells long before any of them
+        # holds 30 observations.
         "cohorts": {
-            "by_dominant_factor": by_cohort(rows, key="dominant_factor"),
-            "by_dedup_trigger": by_cohort(rows, key="dedup_trigger"),
-            "by_symbol": by_cohort(rows, key="symbol"),
+            "horizon": PRIMARY_HORIZON,
+            "by_dominant_factor": by_cohort(
+                rows, key="dominant_factor", field=f"pnl_{PRIMARY_HORIZON}"
+            ),
+            "by_dedup_trigger": by_cohort(
+                rows, key="dedup_trigger", field=f"pnl_{PRIMARY_HORIZON}"
+            ),
+            "by_symbol": by_cohort(rows, key="symbol", field=f"pnl_{PRIMARY_HORIZON}"),
         },
         "updated_at": utcnow().isoformat(),
     }

@@ -80,7 +80,7 @@ class EventConsumer:
                     event = parse_event(msg.value)
                     await self._handler(event)
                     await self._consumer.commit()
-                except Exception:  # noqa: BLE001 - never kill the loop
+                except Exception:
                     logger.exception(
                         "handler failed topic=%s offset=%s", msg.topic, msg.offset
                     )

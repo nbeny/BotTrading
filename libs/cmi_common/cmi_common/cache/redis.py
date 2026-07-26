@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from redis.asyncio import Redis
@@ -70,5 +70,5 @@ class Cache:
             if acquired:
                 try:
                     await lock.release()
-                except Exception:  # noqa: BLE001 - lock may have expired
+                except Exception:
                     pass

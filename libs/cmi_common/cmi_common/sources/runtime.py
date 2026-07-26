@@ -46,7 +46,7 @@ async def is_enabled(cache: Cache, kind: str, platform: str) -> bool:
     read/parse error leaves the source running rather than silently muting it."""
     try:
         cfg = await cache.get_json(RUNTIME_KEY)
-    except Exception:  # noqa: BLE001 - never mute a source on a cache blip
+    except Exception:
         return True
     if not cfg:
         return True

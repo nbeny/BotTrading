@@ -8,22 +8,22 @@ consumers can route, deduplicate and trace events without parsing the payload.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
 def _utcnow() -> datetime:
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 def _new_id() -> str:
     return str(uuid.uuid4())
 
 
-class EventType(str, Enum):
+class EventType(StrEnum):
     """Discriminator used across the platform for typed dispatch."""
 
     PRICE = "PriceEvent"
@@ -42,7 +42,7 @@ class EventType(str, Enum):
     ACCOUNT_SNAPSHOT = "AccountSnapshotEvent"
 
 
-class Source(str, Enum):
+class Source(StrEnum):
     COINGECKO = "coingecko"
     DEXSCREENER = "dexscreener"
     CRYPTOCOMPARE = "cryptocompare"

@@ -1,7 +1,7 @@
 """Control commands issued by control-api and applied by the trading-engine."""
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import Field
@@ -9,7 +9,7 @@ from pydantic import Field
 from .base import BaseEvent, EventType, Source
 
 
-class ControlCommand(str, Enum):
+class ControlCommand(StrEnum):
     SET_MODE = "set_mode"
     SET_KILL_SWITCH = "set_kill_switch"
     SET_AUTO_TRADING = "set_auto_trading"

@@ -141,3 +141,20 @@ t3  SentimentEvent(SOL, +0.7)           ─► features: {sentiment_score:0.7}
   "kraken_order_id": "OABC-123","fill_price": 150.2,"size": 1.5,"pnl": null
 }
 ```
+
+### `journal.entries` — JournalEntryEvent (ai-worker-sonnet → api-gateway)
+
+Une ligne par analyse, escaladée ou non. Les non-escaladées sont le groupe
+témoin : sans elles, « ce signal méritait-il un appel ? » est indécidable, parce
+que la seule population observable serait celle que la porte a déjà retenue.
+Persisté dans `decision_journal` (180 j) et **exclu** de l'archive brute — il a
+déjà sa table, l'archiver doublerait la plus grosse du système.
+
+### `account.snapshot.events` — AccountSnapshotEvent (trading-engine → api-gateway / WS)
+
+Solde réel d'un venue à un instant, publié par le seul service détenteur des
+secrets d'exchange. Clé de partition : le `venue`, pour que ses instantanés
+restent ordonnés entre eux — un instantané périmé livré après un frais ferait
+reculer le solde affiché. Persisté dans `account_snapshots` ; le plan de lecture
+en sert le dernier, ou `null` avec `balance_source: "unavailable"` quand aucune
+clé n'est configurée.

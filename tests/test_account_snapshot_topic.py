@@ -45,3 +45,17 @@ def test_partition_key_is_the_venue() -> None:
     """Les snapshots d'un même venue doivent rester ordonnés entre eux : un
     snapshot périmé livré après un frais afficherait un solde qui recule."""
     assert _snapshot().partition_key() == "kraken_spot"
+
+
+def test_formatting_an_enum_yields_its_value_not_its_repr() -> None:
+    """These enums are StrEnum, not `class X(str, Enum)`.
+
+    The difference is not cosmetic. Under the old form `str()` and f-strings
+    yielded "EventType.PRICE" while `==` still matched "PriceEvent", so the bug
+    was invisible to every equality assertion and only surfaced where a value
+    was formatted -- which in this repo meant Prometheus label values. Two sets
+    of series shipped mislabelled that way before it was caught.
+    """
+    assert f"{EventType.ACCOUNT_SNAPSHOT}" == "AccountSnapshotEvent"
+    assert str(Topic.ACCOUNT_SNAPSHOT) == "account.snapshot.events"
+    assert "%s" % EventType.ACCOUNT_SNAPSHOT == "AccountSnapshotEvent"

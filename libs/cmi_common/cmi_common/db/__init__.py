@@ -20,6 +20,7 @@ from .models import (
 from .session import Database
 
 __all__ = [
+    "HYPERTABLES",
     "AccountSnapshot",
     "Base",
     "Database",
@@ -27,7 +28,6 @@ __all__ = [
     "DecisionJournal",
     "EventMarket",
     "EventSignal",
-    "HYPERTABLES",
     "News",
     "PipelineRejection",
     "Price",

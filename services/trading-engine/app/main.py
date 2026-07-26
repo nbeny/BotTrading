@@ -23,9 +23,12 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     producer = EventProducer(settings.kafka)
     await producer.start()
 
-    from .runtime import RuntimeConfig
+    from cmi_common.events.control import (
+        ControlCommandEvent,  # noqa: F401 (topic import)
+    )
+
     from .control import ControlHandler
-    from cmi_common.events.control import ControlCommandEvent  # noqa: F401 (topic import)
+    from .runtime import RuntimeConfig
 
     await RuntimeConfig.write_defaults_if_absent(cache, config)
 

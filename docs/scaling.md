@@ -34,6 +34,8 @@ market.analysis.events (6 partitions)
 | risk.approved.events     | 3          | faible volume (signaux finaux)                 |
 | execution.events         | 3          | faible volume (résultats d'exécution)          |
 | control.commands         | 3          | faible volume ; partition unique (`"control"`) → ordre total des commandes |
+| journal.entries          | 6          | une ligne par analyse, escaladée ou non         |
+| account.snapshot.events  | 1          | un venue, un instantané par minute — le topic le moins chargé du bus |
 
 `market.news.events` / `market.social.events` restent définis (6 partitions) mais ne sont
 plus alimentés : l'ingestion sociale/news passe désormais par Postgres `raw_content`.

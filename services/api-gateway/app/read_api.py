@@ -17,17 +17,24 @@ from __future__ import annotations
 
 import os
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable
-
-from typing import Annotated
+from collections.abc import Iterable
+from datetime import UTC, datetime, timedelta
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cmi_common.db import (
-    AccountSnapshot, Decision, News, Price, Sentiment, ServiceHealth, Signal, Token, Trade,
+    AccountSnapshot,
+    Decision,
+    News,
+    Price,
+    Sentiment,
+    ServiceHealth,
+    Signal,
+    Token,
+    Trade,
 )
 from cmi_common.db.models import PipelineRejection, RawContent
 from cmi_common.sources import SqlSentimentAggReader
@@ -99,7 +106,7 @@ def _iso(v: Any) -> str | None:
 
 def _utcnow() -> datetime:
     """Aware UTC — for tz-aware columns (raw_content, service_health)."""
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 def _utcnow_naive() -> datetime:
@@ -112,7 +119,7 @@ def _utcnow_naive() -> datetime:
     reads a naive literal in the session timezone, which is UTC here, so it
     resolves to the same instant an aware UTC value would.
     """
-    return datetime.now(tz=timezone.utc).replace(tzinfo=None)
+    return datetime.now(tz=UTC).replace(tzinfo=None)
 
 
 # ── pure mappers (unit-tested) ────────────────────────────────────────────────
@@ -158,7 +165,7 @@ def map_news(row: Any) -> dict:
         "symbols": list(row.symbols or []),
         "sentiment": _num(row.provider_sentiment),
         # News.published_at is a unix-epoch BigInteger
-        "published_at": datetime.fromtimestamp(row.published_at, tz=timezone.utc).isoformat()
+        "published_at": datetime.fromtimestamp(row.published_at, tz=UTC).isoformat()
         if row.published_at
         else None,
     }
@@ -228,7 +235,7 @@ def map_content(row: Any) -> dict:
 
 def compute_content_stats(rows: Iterable[Any], *, now: datetime | None = None) -> dict:
     """Aggregate a bounded window of raw_content rows into DataStats. Pure."""
-    now = now or datetime.now(tz=timezone.utc)
+    now = now or datetime.now(tz=UTC)
     rows = list(rows)
     by_cat: Counter[str] = Counter()
     src: Counter[str] = Counter()
@@ -496,7 +503,7 @@ async def trace(cid: str, session: AsyncSession = Depends(get_session_dep)) -> d
 
 @router.get("/data/stats")
 async def data_stats(session: AsyncSession = Depends(get_session_dep)) -> dict:
-    since = datetime.now(tz=timezone.utc) - timedelta(hours=24)
+    since = datetime.now(tz=UTC) - timedelta(hours=24)
     stmt = (
         select(RawContent)
         .where(RawContent.fetched_at >= since)
@@ -619,7 +626,7 @@ def _balance_fields(snapshot: dict | None, now: datetime) -> dict:
     # The persister writes naive UTC; comparing that to an aware `now` raises,
     # and swallowing the error would present a stale balance as a current one.
     if isinstance(fetched, datetime) and fetched.tzinfo is None:
-        fetched = fetched.replace(tzinfo=timezone.utc)
+        fetched = fetched.replace(tzinfo=UTC)
     age = (now - fetched).total_seconds() if isinstance(fetched, datetime) else None
     return {
         "kraken_balance_usd": round(float(snapshot["equity_usd"]), 2),
@@ -637,7 +644,7 @@ def compute_portfolio(
     snapshot: dict | None = None,
     now: datetime | None = None,
 ) -> dict:
-    now = now or datetime.now(tz=timezone.utc)
+    now = now or datetime.now(tz=UTC)
     if base_capital is None:
         base_capital = reference_capital(snapshot)
     invested = round(sum(p["value_usd"] for p in positions), 2)
@@ -659,7 +666,7 @@ def compute_portfolio(
 
 
 def compute_exposure(positions: list[dict], total: float, daily_loss: float = 0.0, *, now: datetime | None = None) -> dict:
-    now = now or datetime.now(tz=timezone.utc)
+    now = now or datetime.now(tz=UTC)
     by_asset = [
         {
             "symbol": p["symbol"],
@@ -704,7 +711,7 @@ def compute_risk_limits(exposure: dict, cash_pct: float) -> list[dict]:
 
 
 def compute_risk_alerts(exposure: dict, *, now: datetime | None = None) -> list[dict]:
-    now = now or datetime.now(tz=timezone.utc)
+    now = now or datetime.now(tz=UTC)
     alerts: list[dict] = []
     for a in exposure["by_asset"]:
         if a["exposure_pct"] > MAX_ASSET_PCT:
@@ -894,7 +901,7 @@ _PIPELINE = [
 
 def assemble_systems_snapshot(rows: Iterable[Any], *, now: datetime | None = None) -> dict:
     """Build the SystemsSnapshot from persisted health rows. Pure."""
-    now = now or datetime.now(tz=timezone.utc)
+    now = now or datetime.now(tz=UTC)
     by_svc = {r.service: r for r in rows}
 
     services = []

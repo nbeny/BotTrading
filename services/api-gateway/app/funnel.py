@@ -12,12 +12,22 @@ queries live in ``read_api.systems_funnel``.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import re
+from collections import defaultdict
+from datetime import UTC, datetime
 
 STAGE_ORDER = ["analyses", "escalated", "decisions", "approved", "executed"]
 SCORE_BUCKET_WIDTH = 10
 N_SCORE_BUCKETS = 100 // SCORE_BUCKET_WIDTH
 N_FACTORS = 4
+MAX_BLOCK_REASONS = 10
+
+# Rejection reasons are free text with the offending value written into the
+# sentence, so `score 13 below decision threshold 70` and `score 14 …` group as
+# two different reasons. Measured in production: the twelve largest rows were
+# twelve spellings of one reason, ~70 in total, burying every genuinely
+# different rejection below them. A decimal collapses whole, not to `N.N`.
+_NUMBER = re.compile(r"\d+(?:\.\d+)?")
 
 
 def _pct(numerator: int, denominator: int) -> float:
@@ -64,7 +74,12 @@ def build_funnel(
     window: str = "24h",
     now: datetime | None = None,
 ) -> dict:
-    now = now or datetime.now(tz=timezone.utc)
+    now = now or datetime.now(tz=UTC)
+    merged = _merge_block_reasons(block_reasons)
+    top_reasons = [
+        {"stage": stage, "reason": reason, "count": count}
+        for stage, reason, count in merged[:MAX_BLOCK_REASONS]
+    ]
     counts = [analyses, escalated, decisions, approved, executed]
     stages = [
         {
@@ -88,11 +103,28 @@ def build_funnel(
         "factors_presence": {
             str(k): factors_presence.get(k, 0) for k in range(N_FACTORS + 1)
         },
-        "top_block_reasons": [
-            {"stage": stage, "reason": reason, "count": count}
-            for stage, reason, count in sorted(
-                block_reasons, key=lambda r: r[2], reverse=True
-            )
-        ],
+        "top_block_reasons": top_reasons,
+        # "top" has to mean something: a silently truncated list reads as the
+        # whole picture. The flag lets the UI say the tail was dropped.
+        "block_reasons_truncated": len(merged) > MAX_BLOCK_REASONS,
         "updated_at": now.isoformat(),
     }
+
+
+def _merge_block_reasons(
+    block_reasons: list[tuple[str, str, int]],
+) -> list[tuple[str, str, int]]:
+    """Group reasons that differ only by the value written into their text.
+
+    The stage stays part of the identity: merging a decision-engine refusal with
+    a risk-engine one would erase where the signal actually died, which is the
+    single thing this panel exists to show.
+    """
+    totals: dict[tuple[str, str], int] = defaultdict(int)
+    for stage, reason, count in block_reasons:
+        totals[(stage, _NUMBER.sub("N", reason))] += count
+    return sorted(
+        ((stage, reason, count) for (stage, reason), count in totals.items()),
+        key=lambda r: r[2],
+        reverse=True,
+    )

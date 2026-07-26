@@ -2,7 +2,7 @@
 """Execution events produced by the trading-engine after it acts on Kraken."""
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import Field
@@ -11,7 +11,7 @@ from .base import BaseEvent, EventType, Source
 from .decision import Direction
 
 
-class ExecutionKind(str, Enum):
+class ExecutionKind(StrEnum):
     SUBMITTED = "submitted"   # order sent to Kraken
     PENDING = "pending"       # queued awaiting operator approval (auto-trading off)
     FILLED = "filled"         # entry filled, SL/TP placed

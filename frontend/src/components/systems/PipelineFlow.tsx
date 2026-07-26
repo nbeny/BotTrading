@@ -94,6 +94,11 @@ export function PipelineFlow({ stages }: { stages: PipelineStage[] }) {
         display: 'flex',
         alignItems: 'center',
         overflowX: 'auto',
+        // A flex item defaults to `min-width: auto`, which means it refuses to
+        // shrink below its content. Without this the overflowX above never
+        // engages: instead of scrolling, the row pushes the whole Command
+        // Center column wider than the viewport below ~1650px.
+        minWidth: 0,
         pb: 1,
         // hide native scrollbar chrome but keep scroll
         '&::-webkit-scrollbar': { height: 6 },

@@ -31,11 +31,11 @@ class Reconciler:
         while not self._stopped.is_set():
             try:
                 await self.sweep()
-            except Exception:  # noqa: BLE001 - never kill the loop
+            except Exception:
                 logger.exception("reconcile sweep failed")
             try:
                 await asyncio.wait_for(self._stopped.wait(), timeout=interval_s)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
     def stop(self) -> None:
@@ -72,7 +72,7 @@ class Reconciler:
         ev = ExecutionEvent(
             kind=ExecutionKind.CLOSED,
             symbol=pos["symbol"],
-            direction=Direction(pos.get("side") == "sell" and "short" or "long"),
+            direction=Direction((pos.get("side") == "sell" and "short") or "long"),
             risk_event_id=event_id,
             size=pos.get("size"),
         )

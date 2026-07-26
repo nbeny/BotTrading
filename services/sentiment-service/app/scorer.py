@@ -53,7 +53,7 @@ class SentimentScorer:
                 top_k=None,
             )
             logger.info("loaded HF sentiment model %s", self._model_name)
-        except Exception as exc:  # noqa: BLE001 - fall back gracefully
+        except Exception as exc:
             logger.warning(
                 "HF model unavailable (%s); using lexicon fallback", exc
             )

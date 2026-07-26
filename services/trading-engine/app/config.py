@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class Mode(str, Enum):
+class Mode(StrEnum):
     DRY_RUN = "dry_run"   # log only, no network calls
     DEMO = "demo"         # demo-futures.kraken.com (testnet)
     LIVE = "live"         # futures.kraken.com (real money)
@@ -39,7 +39,7 @@ class TradingConfig:
     account_poll_s: int = 60
 
     @classmethod
-    def from_env(cls) -> "TradingConfig":
+    def from_env(cls) -> TradingConfig:
         return cls(
             mode=Mode(os.getenv("TRADING_MODE", "dry_run")),
             api_key=os.getenv("KRAKEN_API_KEY", ""),

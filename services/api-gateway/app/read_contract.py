@@ -63,6 +63,8 @@ CONTRACT: dict[str, set[str]] = {
         "updated_at",
     },
     "trace": {"correlation_id", "symbol", "stages"},
+    # events.ts — archived broadcast stream, composite-cursor paginated.
+    "events": {"items", "next_cursor"},
     # systems.ts
     "systems/overview": {
         "summary", "services", "pipeline", "kafka", "collectors", "workers",

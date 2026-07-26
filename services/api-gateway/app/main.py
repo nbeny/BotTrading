@@ -10,7 +10,7 @@ from cmi_common import Settings, create_app
 from cmi_common.db import Database
 from cmi_common.kafka import EventConsumer, Topic
 
-from . import journal_api, read_api, routers
+from . import events_api, journal_api, read_api, routers
 from .archiver import EventArchiver
 from .health_collector import HealthCollector
 from .persister import Persister
@@ -90,3 +90,5 @@ app.include_router(routers.router)
 app.include_router(read_api.router)
 # Counterfactual-journal summary (own router: read_api is already ~1000 lines).
 app.include_router(journal_api.router)
+# Archived broadcast stream, so the Command Center feed survives a reload.
+app.include_router(events_api.router)

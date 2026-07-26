@@ -331,8 +331,15 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-    environment: *common-env
-    # Internal only — reached by the Next.js server over the `cmi` network.
+    environment:
+      <<: *common-env
+      # Required, not optional: require_principal falls back to permissive
+      # dev-mode when no secret is configured, so an unset value here would
+      # silently reopen the whole read plane. `:?` fails the deploy instead.
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+    # Internal only — reached by the Next.js server over the `cmi` network,
+    # but Next.js proxies /api/gateway/* straight through from the public
+    # internet, so every router below still enforces a bearer token.
 
   control-api:
     <<: *svc

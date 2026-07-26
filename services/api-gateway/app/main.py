@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 
 from cmi_common import Settings, create_app
+from cmi_common.auth import require_principal
 from cmi_common.db import Database
 from cmi_common.kafka import EventConsumer, Topic
 
@@ -113,10 +114,18 @@ async def _shutdown(app: FastAPI, settings: Settings) -> None:
 
 
 app = create_app("api-gateway", on_startup=_startup, on_shutdown=_shutdown)
-app.include_router(routers.router)
+
+# Read-only does not mean public. Next.js proxies /api/gateway/* from the open
+# internet, so without this every route below served raw content, portfolio
+# holdings, positions and the daily AI spend to anyone who knew the path.
+# Applied per-router rather than on the app so /health and /metrics stay open
+# for the container healthcheck and Prometheus.
+_authed = [Depends(require_principal)]
+
+app.include_router(routers.router, dependencies=_authed)
 # Live-mode read API backing the web terminal (market + data explorer).
-app.include_router(read_api.router)
+app.include_router(read_api.router, dependencies=_authed)
 # Counterfactual-journal summary (own router: read_api is already ~1000 lines).
-app.include_router(journal_api.router)
+app.include_router(journal_api.router, dependencies=_authed)
 # Archived broadcast stream, so the Command Center feed survives a reload.
-app.include_router(events_api.router)
+app.include_router(events_api.router, dependencies=_authed)

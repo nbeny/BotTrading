@@ -54,6 +54,13 @@ class SentimentDbWorker:
 
     async def run_once(self) -> int:
         rows = await self._repo.fetch_unscored(self._batch)
+        # One grouped lookup for the whole batch rather than one per row. This
+        # service owns the mention counts, so it is where the derivative belongs;
+        # ai-worker-haiku is a pure Kafka consumer with no database to compute it
+        # from, which is why its social_score axis had been dead since Plan-1.
+        growth = await self._repo.mention_growth(
+            sorted({s for row in rows for s in (row.symbols or [])})
+        )
         for row in rows:
             text = f"{row.title}. {row.text}" if row.title else row.text
             result = self._scorer.score(text)
@@ -100,6 +107,7 @@ class SentimentDbWorker:
                         model_name=result.model_name,
                         input_kind=row.kind,
                         sample_size=1,
+                        social_growth=growth.get(symbol),
                         meta={"source": row.source},
                     ),
                 )

@@ -25,6 +25,12 @@ class SentimentEvent(BaseEvent):
     # What was scored: 'news' | 'social' | 'aggregate'.
     input_kind: str = "aggregate"
     sample_size: int = Field(default=1, ge=1)
+    #: Mentions this hour against the symbol's own 24h mean, as a ratio: 0.0 is
+    #: "as talked about as usual", 0.5 is +50%. Carried here because this service
+    #: owns the mention counts and ai-worker-haiku, a pure Kafka consumer, has no
+    #: database to derive it from. ``None`` means no baseline yet -- which is not
+    #: the same claim as "flat", and the scorer treats the two differently.
+    social_growth: float | None = None
 
     def partition_key(self) -> str:
         return self.symbol

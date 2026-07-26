@@ -38,6 +38,11 @@ class FakeRepo:
     async def upsert_aggregate(self, *, symbol: str, **kw: object) -> None:
         self.aggregated.append(symbol)
 
+    async def mention_growth(
+        self, symbols: list[str], **kw: object
+    ) -> dict[str, float]:
+        return {}
+
 
 class FakeScorer:
     class _R:

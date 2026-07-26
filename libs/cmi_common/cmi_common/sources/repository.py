@@ -9,7 +9,7 @@ is the async SQLAlchemy implementation (integration-tested against Postgres).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 from sqlalchemy import delete, func, select, update
@@ -73,6 +73,10 @@ class ContentRepository(Protocol):
         weighted_score_sum: float,
         engagement_sum: float,
     ) -> None: ...
+
+    async def mention_growth(
+        self, symbols: list[str], *, now: datetime | None = None
+    ) -> dict[str, float]: ...
 
     async def compact_hourly_to_daily(self, *, older_than: datetime) -> int: ...
 
@@ -179,6 +183,74 @@ class SqlContentRepository:
         )
         await self._session.execute(stmt)
         await self._session.commit()
+
+    #: Hours of history the growth baseline averages over, excluding the live hour.
+    GROWTH_BASELINE_HOURS = 24
+
+    async def mention_growth(
+        self, symbols: list[str], *, now: datetime | None = None
+    ) -> dict[str, float]:
+        """Recent chatter for each symbol against its own recent normal.
+
+        Returns ``{symbol: ratio}`` where ``0.0`` means "as talked about as
+        usual", ``0.5`` means +50%, ``-0.5`` means half the usual. That is the
+        shape ``Features.social_growth`` documents and ``_norm_social`` expects.
+
+        The baseline is the symbol's own mean hourly mentions over the preceding
+        24 hours, so a coin that is permanently noisy does not read as
+        permanently surging — it is the change that carries information, not the
+        volume. Symbols with no baseline yet are omitted rather than reported as
+        flat: absent and average are different claims, and the scorer treats
+        them differently.
+
+        The measured hour is the last **complete** one, never the hour in
+        progress. Comparing a partial hour against complete ones made the metric
+        structurally negative: measured against production, every symbol read
+        -1.0 at 37 minutes past, because the live bucket held 3 mentions where
+        the previous hour held 73. The cost is up to an hour of lag, which is
+        the right trade for a buzz signal that is not supposed to be tick-level.
+
+        One grouped query for the whole batch; the caller resolves a poll's
+        worth of symbols at once rather than per row.
+        """
+        if not symbols:
+            return {}
+        now = now or datetime.now(tz=UTC)
+        live_hour = now.replace(minute=0, second=0, microsecond=0)
+        current_start = live_hour - timedelta(hours=1)
+        baseline_start = current_start - timedelta(hours=self.GROWTH_BASELINE_HOURS)
+
+        a = ContentSentimentAgg
+        rows = (
+            await self._session.execute(
+                select(
+                    a.symbol,
+                    func.sum(a.mentions)
+                    .filter(a.bucket_start >= current_start)
+                    .label("current"),
+                    func.sum(a.mentions)
+                    .filter(a.bucket_start < current_start)
+                    .label("baseline"),
+                    func.count(func.distinct(a.bucket_start))
+                    .filter(a.bucket_start < current_start)
+                    .label("baseline_hours"),
+                )
+                .where(a.symbol.in_(symbols))
+                .where(a.bucket_start >= baseline_start)
+                .where(a.bucket_start < live_hour)
+                .group_by(a.symbol)
+            )
+        ).all()
+
+        out: dict[str, float] = {}
+        for symbol, current, baseline, baseline_hours in rows:
+            if not baseline_hours or not baseline:
+                continue
+            per_hour = float(baseline) / float(baseline_hours)
+            if per_hour <= 0:
+                continue
+            out[symbol] = float(current or 0) / per_hour - 1.0
+        return out
 
     async def compact_hourly_to_daily(self, *, older_than: datetime) -> int:
         """Roll hourly buckets older than ``older_than`` into daily buckets.
@@ -322,6 +394,41 @@ class FakeContentRepository:
         else:
             for k, v in inc.items():
                 cur[k] += v
+
+    async def mention_growth(
+        self, symbols: list[str], *, now: datetime | None = None
+    ) -> dict[str, float]:
+        """Same semantics as the SQL implementation, over the in-memory buckets."""
+        if not symbols:
+            return {}
+        now = now or datetime.now(tz=UTC)
+        live_hour = now.replace(minute=0, second=0, microsecond=0)
+        current_start = live_hour - timedelta(hours=1)
+        baseline_start = current_start - timedelta(
+            hours=SqlContentRepository.GROWTH_BASELINE_HOURS
+        )
+        wanted = set(symbols)
+        current: dict[str, int] = {}
+        baseline: dict[str, int] = {}
+        hours: dict[str, set[datetime]] = {}
+        for (symbol, _kind, bucket), agg in self.aggregates.items():
+            if symbol not in wanted or not (baseline_start <= bucket < live_hour):
+                continue
+            if bucket >= current_start:
+                current[symbol] = current.get(symbol, 0) + agg["mentions"]
+            else:
+                baseline[symbol] = baseline.get(symbol, 0) + agg["mentions"]
+                hours.setdefault(symbol, set()).add(bucket)
+        out: dict[str, float] = {}
+        for symbol, total in baseline.items():
+            n = len(hours.get(symbol, ()))
+            if not n or not total:
+                continue
+            per_hour = total / n
+            if per_hour <= 0:
+                continue
+            out[symbol] = current.get(symbol, 0) / per_hour - 1.0
+        return out
 
     async def compact_hourly_to_daily(self, *, older_than: datetime) -> int:
         compacted = 0

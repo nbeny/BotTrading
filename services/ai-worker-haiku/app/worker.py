@@ -139,35 +139,55 @@ class HaikuWorker:
 
     def _extract(self, event: BaseEvent):
         if isinstance(event, PriceEvent):
-            return event.symbol, {
-                "price": float(event.price_usd),
-                "price_change_pct_24h": event.price_change_pct_24h,
-                # Carried for the scorer's liquidity proxy: a CEX-listed pair
-                # gets no DexEvent, so without this its liquidity factor stays
-                # a neutral guess forever.
-                "volume_24h_usd": (
-                    float(event.volume_24h_usd)
-                    if event.volume_24h_usd is not None
-                    else None
-                ),
-                "market_cap_rank": event.market_cap_rank,
-                "is_trending": event.is_trending,
-            }, Topic.PRICE.value
+            return (
+                event.symbol,
+                {
+                    "price": float(event.price_usd),
+                    "price_change_pct_24h": event.price_change_pct_24h,
+                    # Carried for the scorer's liquidity proxy: a CEX-listed pair
+                    # gets no DexEvent, so without this its liquidity factor stays
+                    # a neutral guess forever.
+                    "volume_24h_usd": (
+                        float(event.volume_24h_usd)
+                        if event.volume_24h_usd is not None
+                        else None
+                    ),
+                    "market_cap_rank": event.market_cap_rank,
+                    "is_trending": event.is_trending,
+                },
+                Topic.PRICE.value,
+            )
         if isinstance(event, VolumeEvent):
-            return event.symbol, {
-                "volume_spike_ratio": event.volume_spike_ratio,
-            }, Topic.VOLUME.value
+            return (
+                event.symbol,
+                {
+                    "volume_spike_ratio": event.volume_spike_ratio,
+                },
+                Topic.VOLUME.value,
+            )
         if isinstance(event, DexEvent):
-            return event.symbol, {
-                "liquidity_usd": float(event.liquidity_usd or 0),
-                "price_change_pct_1h": event.price_change_pct_1h,
-                "is_new_pool": event.is_new_pool,
-            }, Topic.DEX.value
+            return (
+                event.symbol,
+                {
+                    "liquidity_usd": float(event.liquidity_usd or 0),
+                    "price_change_pct_1h": event.price_change_pct_1h,
+                    "is_new_pool": event.is_new_pool,
+                },
+                Topic.DEX.value,
+            )
         if isinstance(event, SentimentEvent):
             fields = {
                 "sentiment_score": event.sentiment_score,
                 "sentiment_confidence": event.confidence,
             }
+            # Carried straight through to the decision engine's social_score
+            # axis, which read features["social_growth"] from the day it was
+            # written and never found it: nothing computed the value, so 20% of
+            # the model weight sat at zero. sentiment-service owns the mention
+            # counts and now derives it. Only set when present -- a missing
+            # baseline must stay absent rather than become a flat 0.0.
+            if event.social_growth is not None:
+                fields["social_growth"] = event.social_growth
             # Since Plan-1, social/news reach haiku only via sentiment; derive
             # presence flags from input_kind (collectors no longer emit
             # Social/NewsEvent on Kafka).
@@ -178,9 +198,7 @@ class HaikuWorker:
             return event.symbol, fields, Topic.SENTIMENT.value
         return None, {}, ""
 
-    def _score(
-        self, symbol: str, features: dict, correlation_id: str
-    ) -> AnalysisEvent:
+    def _score(self, symbol: str, features: dict, correlation_id: str) -> AnalysisEvent:
         r = local_opportunity(features, self._cfg)
         return AnalysisEvent(
             source=Source.AI_HAIKU,
@@ -199,5 +217,9 @@ class HaikuWorker:
             block_reason=r.block_reason,
             factors_present=r.factors_present,
             liquidity_source=r.liquidity_source,
-            meta={"features": features, "factors": r.factors, "triage": "deterministic"},
+            meta={
+                "features": features,
+                "factors": r.factors,
+                "triage": "deterministic",
+            },
         )

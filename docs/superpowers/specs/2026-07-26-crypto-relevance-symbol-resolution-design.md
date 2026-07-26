@@ -421,7 +421,7 @@ then caught only by inspecting live production rows 90 minutes after deploy.
 The method that works is building a lexicon from the real universe and running
 plausible headlines through it — not reading the list.
 
-### 3. RESOLVED IN PART — the deterministic path cannot reach its own threshold
+### 3. RESOLVED — the deterministic path was starved, not too strict
 
 **Liquidity is fixed.** `engine.py` now falls back to haiku's own 24h-volume
 proxy, mirroring the substitution `ai-worker-haiku`'s scorer has made since
@@ -457,16 +457,69 @@ updated.
 With 20 of 100 points structurally unreachable, clearing 70 demands near-perfect
 scores on every remaining axis. The best real signal reaches 66.
 
-Two things to decide, neither done here:
+**`social_growth` now has a producer.** `sentiment-service` owns the mention
+counts, so it derives the ratio and carries it on `SentimentEvent`;
+`ai-worker-haiku`, a pure Kafka consumer with no database, relays it into the
+feature dict its scorer already looked for. The baseline is the symbol's own
+mean hourly mentions over the preceding 24h, so a permanently noisy coin does
+not read as permanently surging.
 
-- **Compute `social_growth`.** The data already exists:
-  `content_sentiment_agg` holds hourly mention counts per symbol, and
-  `SqlSentimentAggReader.window_stats` already aggregates them. Growth is this
-  hour's mentions against a trailing baseline. This is new work in haiku, not a
-  repair.
-- **Re-examine the threshold of 70.** It was presumably chosen when the model
-  had five live axes. Whether it still means what it meant then is worth
-  checking against a replay before tuning anything.
+The measurement caught a design flaw before it shipped: comparing the **hour in
+progress** against complete hours made the metric structurally negative. At
+21:37 in production the live bucket held 3 mentions where the previous hour held
+73, so every symbol on the board read `-1.0`. The measured window is now the
+last *complete* hour, at the cost of up to an hour of lag — the right trade for
+a buzz signal that was never meant to be tick-level.
+
+### Replay of the same 12,183 signals, with all five axes live
+
+| | before | after |
+|---|---|---|
+| score, median | 54 | 55 |
+| score, max | 66 | 66 |
+| **confidence, max** | 0.800 | **1.000** |
+| confidence, p99 | 0.800 | 1.000 |
+| crossings of 70 | 0 | 0 |
+
+Confidence reaching 1.000 is the structural result: for the first time all five
+axes can be present at once. It was capped at 0.800 because 0.20 of the weight
+belonged to an axis nothing fed.
+
+**The zero crossings are a data-coverage artefact, not a verdict.** Only 26.6%
+of the replayed signals resolve to a symbol with a mention baseline, because the
+phase-2 wipe reset that history four hours earlier. Applying the observed growth
+range to the best real signal shows what happens once the axis is actually fed:
+
+| growth on the best real signal | score | confidence |
+|---|---|---|
+| absent (most symbols today) | 66 | 0.80 |
+| −100% (the observed median) | **70** | 1.00 |
+| stable | **76** | 1.00 |
+| +100% | **82** | 1.00 |
+| +400% (observed max) | **86** | 1.00 |
+
+### Verdict on the threshold: leave it at 70
+
+The model was **starved, not too strict** — the hypothesis holds. With all five
+axes fed, 70 is cleared by the best signals even under the worst observed
+growth, and 86 is reachable. A threshold that only looked unreachable because
+35% of the weight was dead needs no recalibration; it needs the data it was
+always supposed to receive.
+
+Re-measure after 24-48h of accumulated mention history before revisiting this.
+Judging a threshold on four hours of post-wipe data would repeat the mistake
+that made the first `_norm_news` measurement worthless.
+
+### Still open
+
+- **There is no SELL path.** The engine emits `Direction.LONG` or a rejection;
+  BUY/HOLD is the entire decision space. Worth knowing before reading any
+  distribution of "decisions".
+- `_norm_social(None)` returns `0.0` while every real reading is strictly
+  above it, so an absent growth still scores worse than the worst present one —
+  the same conflation just fixed in `_norm_news`, milder because the sigmoid
+  never actually reaches zero. Left alone deliberately: one scoring change at a
+  time, each measured.
 
 Found while measuring issue 0, and larger than the issue that surfaced it.
 

@@ -12,6 +12,7 @@ from typing import Annotated, Any, Union
 
 from pydantic import Field, TypeAdapter
 
+from .account import AccountSnapshotEvent
 from .analysis import AnalysisEvent
 from .base import BaseEvent, EventType, Source
 from .control import ControlCommand, ControlCommandEvent
@@ -41,6 +42,7 @@ AnyEvent = Annotated[
         ExecutionEvent,
         ControlCommandEvent,
         JournalEntryEvent,
+        AccountSnapshotEvent,
     ],
     Field(discriminator="event_type"),
 ]
@@ -58,6 +60,7 @@ def parse_event(raw: bytes | str | dict[str, Any]) -> BaseEvent:
 
 
 __all__ = [
+    "AccountSnapshotEvent",
     "AnalysisEvent",
     "AnyEvent",
     "BaseEvent",

@@ -39,6 +39,7 @@ class EventType(str, Enum):
     EXECUTION = "ExecutionEvent"
     JOURNAL_ENTRY = "JournalEntryEvent"
     CONTROL_COMMAND = "ControlCommandEvent"
+    ACCOUNT_SNAPSHOT = "AccountSnapshotEvent"
 
 
 class Source(str, Enum):

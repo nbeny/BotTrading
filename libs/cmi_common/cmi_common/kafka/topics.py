@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from enum import Enum
 
+from ..events.account import AccountSnapshotEvent
 from ..events.analysis import AnalysisEvent
 from ..events.control import ControlCommandEvent
 from ..events.decision import DecisionEvent
@@ -29,6 +30,7 @@ class Topic(str, Enum):
     EXECUTION = "execution.events"
     CONTROL = "control.commands"
     JOURNAL = "journal.entries"
+    ACCOUNT_SNAPSHOT = "account.snapshot.events"
 
 
 # Which event type is expected on each topic (for validation / documentation).
@@ -45,6 +47,7 @@ TOPIC_EVENT = {
     Topic.EXECUTION: ExecutionEvent,
     Topic.CONTROL: ControlCommandEvent,
     Topic.JOURNAL: JournalEntryEvent,
+    Topic.ACCOUNT_SNAPSHOT: AccountSnapshotEvent,
 }
 
 # Recommended partition counts (see docs/scaling.md). High-fan-in topics get
@@ -62,4 +65,6 @@ TOPIC_PARTITIONS = {
     Topic.EXECUTION: 3,
     Topic.CONTROL: 3,
     Topic.JOURNAL: 6,
+    # One venue, one snapshot a minute: the lowest-volume topic on the bus.
+    Topic.ACCOUNT_SNAPSHOT: 1,
 }

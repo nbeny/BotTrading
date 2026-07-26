@@ -41,6 +41,7 @@ BROADCAST_TOPICS: tuple[Topic, ...] = (
     Topic.DECISION,
     Topic.RISK_APPROVED,
     Topic.EXECUTION,
+    Topic.ACCOUNT_SNAPSHOT,
 )
 
 

@@ -5,6 +5,11 @@ from __future__ import annotations
 from .cascade import CircuitBreaker, RateLimitedError
 from .lexicon import LEXICON_KEY, SEED_LEXICON, LexiconLoader, SymbolLexicon
 from .loop import AdaptivePollLoop
+from .normalize import (
+    MARKET_SYMBOL,
+    ContentNormalizer,
+    NormalizeResult,
+)
 from .provider import Provider, parse_retry_after
 from .raw import RawItem
 from .reader import (
@@ -31,14 +36,17 @@ from .runtime import (
 __all__ = [
     "KNOWN_PLATFORMS",
     "LEXICON_KEY",
+    "MARKET_SYMBOL",
     "SEED_LEXICON",
     "WINDOWS",
     "AdaptivePollLoop",
     "BucketRow",
     "CircuitBreaker",
+    "ContentNormalizer",
     "ContentRepository",
     "FakeContentRepository",
     "LexiconLoader",
+    "NormalizeResult",
     "Provider",
     "RateLimitedError",
     "RawItem",

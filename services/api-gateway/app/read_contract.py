@@ -16,8 +16,12 @@ from __future__ import annotations
 
 CONTRACT: dict[str, set[str]] = {
     # domain.ts
+    # balance_source / _fetched_at / _stale travel with kraken_balance_usd and
+    # are not optional: the amount may legitimately be null, so the UI needs the
+    # three of them to tell "not connected" from "empty account" from "stale".
     "portfolio": {
-        "total_value_usd", "cash_usd", "kraken_balance_usd", "invested_usd",
+        "total_value_usd", "cash_usd", "kraken_balance_usd", "balance_source",
+        "balance_fetched_at", "balance_stale", "invested_usd",
         "unrealized_pnl_usd", "unrealized_pnl_pct", "realized_pnl_24h_usd",
         "pnl_24h_pct", "updated_at",
     },

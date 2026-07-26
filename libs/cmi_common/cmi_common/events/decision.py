@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import Field
@@ -10,7 +10,7 @@ from pydantic import Field
 from .base import BaseEvent, EventType, Source
 
 
-class Direction(str, Enum):
+class Direction(StrEnum):
     LONG = "long"
     SHORT = "short"
     WATCH = "watch"

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 from ..events.account import AccountSnapshotEvent
 from ..events.analysis import AnalysisEvent
@@ -17,7 +17,7 @@ from ..events.sentiment import SentimentEvent
 from ..events.social import SocialEvent
 
 
-class Topic(str, Enum):
+class Topic(StrEnum):
     PRICE = "market.price.events"
     VOLUME = "market.volume.events"
     DEX = "market.dex.events"

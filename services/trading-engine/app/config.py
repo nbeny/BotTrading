@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class Mode(str, Enum):
+class Mode(StrEnum):
     DRY_RUN = "dry_run"   # log only, no network calls
     DEMO = "demo"         # demo-futures.kraken.com (testnet)
     LIVE = "live"         # futures.kraken.com (real money)

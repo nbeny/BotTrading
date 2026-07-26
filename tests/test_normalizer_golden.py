@@ -20,10 +20,17 @@ CASES = json.loads(
     )
 )
 
-# The live top-N universe holds these too. They are the tickers NewsData
-# hallucinated onto these very articles, so the fixtures only prove anything if
-# the lexicon actually knows them -- otherwise they would be rejected for being
-# out of universe rather than for being uncorroborated.
+# The tickers NewsData hallucinated onto these very articles, added so the
+# fixture universe resembles the live top-N rather than the 50-coin seed.
+#
+# They do not currently change any outcome, and it is worth being precise about
+# why: none of them occur as words in these titles, provider tags are discarded
+# before resolution rather than validated, and the cashtag path resolves through
+# `resolve_ticker(token) or token` so it does not consult the universe at all.
+# Every case below therefore passes identically without _EXTRA -- verified. It
+# stays because a realistic universe is the honest baseline for a golden file,
+# and because a future change that makes universe membership matter should be
+# exercised against these tickers, not against a lexicon that never held them.
 _EXTRA = [
     {"ticker": "JST", "name": "JUST"},
     {"ticker": "KEEP", "name": "Keep Network"},

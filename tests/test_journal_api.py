@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from service_modules import load_service_module
 
 japi = load_service_module("api-gateway", "journal_api")
@@ -21,10 +23,17 @@ class _Result:
 
 
 class FakeSession:
+    """Le résumé interroge maintenant deux tables : le journal, puis les prix
+    une fois par ligne et par horizon. Sans distinguer les deux requêtes, la
+    fausse session rendrait des lignes de journal à `price_path`."""
+
     def __init__(self, rows: list[dict] | None = None) -> None:
         self._rows = rows or []
 
-    async def execute(self, _stmt, _params=None):
+    async def execute(self, stmt, _params=None):
+        if "FROM prices" in str(stmt):
+            # Aucun prix enregistré : les horizons restent `no_data`, jamais 0.
+            return _Result([])
         return _Result(self._rows)
 
 
@@ -40,18 +49,22 @@ async def test_empty_journal_is_an_ordinary_response() -> None:
 async def test_q3_compares_within_the_escalated_population() -> None:
     """Q3 doit opposer validés et rejetés PARMI les escaladés. Comparer
     escaladés et non escaladés mesurerait le gate, pas l'analyste."""
+    now = datetime(2026, 7, 25, tzinfo=UTC)
     rows = (
         [{"symbol": "A", "escalated": True, "sonnet_called": True,
           "sonnet_validated": True, "risk_verdict": None, "dominant_factor": "momentum",
-          "dedup_trigger": None, "market_cap_rank": 10, "confidence": 0.8}] * 5
+          "dedup_trigger": None, "market_cap_rank": 10, "confidence": 0.8,
+          "time": now}] * 5
         + [{"symbol": "B", "escalated": True, "sonnet_called": True,
             "sonnet_validated": False, "risk_verdict": None,
             "dominant_factor": "volume",
-            "dedup_trigger": None, "market_cap_rank": 20, "confidence": 0.6}] * 5
+            "dedup_trigger": None, "market_cap_rank": 20, "confidence": 0.6,
+            "time": now}] * 5
         + [{"symbol": "C", "escalated": False, "sonnet_called": False,
             "sonnet_validated": None, "risk_verdict": None,
             "dominant_factor": "sentiment",
-            "dedup_trigger": None, "market_cap_rank": 300, "confidence": 0.5}] * 90
+            "dedup_trigger": None, "market_cap_rank": 300, "confidence": 0.5,
+            "time": now}] * 90
     )
     resp = await japi.journal_summary(window="30d", session=FakeSession(rows))
     assert resp["sample"]["escalated"] == 10

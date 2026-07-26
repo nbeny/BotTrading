@@ -20,4 +20,5 @@ create market.sentiment.events  6
 create market.analysis.events   6
 create decision.events          3
 create risk.approved.events     3   2592000000   # 30d retention for signals
+create journal.entries          6   15552000000  # 180d, matches the table retention
 echo "Done."

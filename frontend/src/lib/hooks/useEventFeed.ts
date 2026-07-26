@@ -63,7 +63,7 @@ export function useEventFeed(opts: { types?: string; symbol?: string } = {}) {
     return true;
   }, []);
 
-  useEventSubscription([], (event: CmiEvent) => {
+  useEventSubscription([], (event: CmiEvent, msg) => {
     const id = event.event_id;
     if (!id || !remember(id)) return;
     setLive((prev) =>
@@ -72,7 +72,11 @@ export function useEventFeed(opts: { types?: string; symbol?: string } = {}) {
           time: event.occurred_at ?? new Date().toISOString(),
           event_id: id,
           event_type: event.event_type,
-          topic: '',
+          // The socket envelope carries the Kafka topic; take it rather than
+          // leaving it blank. Otherwise the same event shows an empty topic
+          // while live and the real one once it comes back from the archive,
+          // which reads as a rendering bug in the feed.
+          topic: msg.topic,
           symbol: (event as { symbol?: string }).symbol ?? null,
           correlation_id: event.correlation_id ?? null,
           payload: event as unknown as Record<string, unknown>,

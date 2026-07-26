@@ -15,7 +15,13 @@ from typing import Any
 from sqlalchemy.dialects.postgresql import insert
 
 from cmi_common.db import Database, EventMarket, EventSignal
-from cmi_common.events import BaseEvent, DexEvent, PriceEvent, VolumeEvent
+from cmi_common.events import (
+    AnalysisEvent,
+    BaseEvent,
+    DexEvent,
+    PriceEvent,
+    VolumeEvent,
+)
 from cmi_common.events.journal import JournalEntryEvent
 from cmi_common.events.risk import RiskRejectedEvent
 from cmi_common.kafka import TOPIC_EVENT, Topic
@@ -45,18 +51,30 @@ SIGNAL = EventSignal
 # High-volume, short-retention. Everything else worth keeping goes to SIGNAL.
 _MARKET_TYPES = (PriceEvent, VolumeEvent, DexEvent)
 
+# Events that already have a dedicated table with its own retention. Archiving
+# them again duplicates the largest tables in the system for no gain:
+#
+#   JournalEntryEvent  -> decision_journal    (180 days)
+#   AnalysisEvent      -> signals             (persister._save_signal)
+#   RiskRejectedEvent  -> pipeline_rejections (persister._save_rejection)
+#
+# Measured in production 8 hours after the archive shipped: events_signal held
+# 179467 RiskRejectedEvent and 179002 AnalysisEvent against 427 sentiments and
+# 26 decisions -- 99.8% duplication, 409 MB, on a 90-day retention that would
+# have reached ~110 GB on a VPS with 4.5 GB free. The tier was designed around
+# "signal events are low-volume"; these two are not, and they were never the
+# ones worth re-reading here because they are already queryable elsewhere.
+_ALREADY_PERSISTED = (JournalEntryEvent, AnalysisEvent, RiskRejectedEvent)
+
 
 def table_for(event: BaseEvent) -> type | None:
     """Which archive table, or None when the event must not be archived.
-
-    The journal has its own table and a 180-day retention; archiving it too
-    would duplicate the largest table in the system for no gain.
 
     An unrecognised type lands in SIGNAL rather than being dropped: an event we
     did not anticipate must stay visible, and the longer retention is the
     prudent default.
     """
-    if isinstance(event, JournalEntryEvent):
+    if isinstance(event, _ALREADY_PERSISTED):
         return None
     if isinstance(event, _MARKET_TYPES):
         return MARKET

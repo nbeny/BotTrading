@@ -48,24 +48,33 @@ def test_market_events_route_to_the_market_table() -> None:
 
 
 def test_signal_events_route_to_the_signal_table() -> None:
-    """Sentiment, analyse, décision, risque, exécution : faible volume, mais ce
-    sont ceux qu'on relit."""
+    """Sentiment, décision, exécution : faible volume, et ce sont ceux qu'on
+    relit sans qu'ils existent ailleurs."""
     for ev in (
-        AnalysisEvent(symbol="BTC", opportunity_score=1, confidence=0.5, reason="r"),
+        SentimentEvent(symbol="BTC", sentiment_score=0.1, confidence=0.5,
+                       model_name="m", input_kind="news", sample_size=1),
         DecisionEvent(symbol="BTC", opportunity_score=1, confidence=0.5, rationale="r"),
-        RiskRejectedEvent(source=Source.RISK_ENGINE, symbol="BTC", reason="x"),
         ExecutionEvent(kind=ExecutionKind.FILLED, symbol="BTC", risk_event_id="r1"),
     ):
         assert arch.table_for(ev) is arch.SIGNAL, type(ev).__name__
 
 
-def test_journal_entries_are_not_archived() -> None:
-    """Le journal a déjà sa table et 180 jours de rétention ; l'archiver
-    doublerait le stockage de la table la plus volumineuse sans rien apporter."""
-    ev = JournalEntryEvent(
-        symbol="BTC", signal_event_id="s1", score=1, confidence=0.5, factors_present=1
-    )
-    assert arch.table_for(ev) is None
+def test_events_with_a_table_of_their_own_are_not_archived_twice() -> None:
+    """Mesuré 8 h après la mise en service : `events_signal` contenait 179467
+    RiskRejectedEvent et 179002 AnalysisEvent contre 427 sentiments et 26
+    décisions. 99,8 % de doublons, 409 Mo, sur une rétention de 90 jours — soit
+    ~110 Go promis sur un VPS où il restait 4,5 Go.
+
+    Les trois ont déjà leur table (`decision_journal`, `signals`,
+    `pipeline_rejections`), donc l'archive n'apportait rien qu'une requête ne
+    donne déjà."""
+    for ev in (
+        JournalEntryEvent(symbol="BTC", signal_event_id="s1", score=1,
+                          confidence=0.5, factors_present=1),
+        AnalysisEvent(symbol="BTC", opportunity_score=1, confidence=0.5, reason="r"),
+        RiskRejectedEvent(source=Source.RISK_ENGINE, symbol="BTC", reason="x"),
+    ):
+        assert arch.table_for(ev) is None, type(ev).__name__
 
 
 def test_an_unknown_event_lands_in_signal_rather_than_being_dropped() -> None:

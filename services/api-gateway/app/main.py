@@ -47,7 +47,11 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
             Topic.VOLUME,
             Topic.DEX,
             Topic.SENTIMENT,
-            Topic.ANALYSIS,
+            # Topic.ANALYSIS is absent: AnalysisEvent already lands in `signals`
+            # via the persister, so archiving it duplicated ~540k rows a day for
+            # nothing. Topic.DECISION stays -- it carries DecisionEvent, which is
+            # archived, alongside RiskRejectedEvent, which table_for drops for
+            # the same reason (it has pipeline_rejections).
             Topic.DECISION,
             Topic.RISK_APPROVED,
             Topic.EXECUTION,
@@ -61,7 +65,7 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
         # Its own group: the archive must not compete with the persister for
         # partitions, and a lagging archive must not delay business persistence.
         # Topic.JOURNAL is deliberately absent -- the journal has its own table
-        # and 180-day retention.
+        # and 180-day retention. See archiver._ALREADY_PERSISTED for the rest.
         group_id="api-gateway-archiver",
     )
     await archive_consumer.start()

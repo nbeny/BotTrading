@@ -49,7 +49,7 @@ class ScoreResult:
     # unknown (never scored) | escalated | score_below_threshold | gate_not_met
     block_reason: str = "unknown"
     factors_present: int = 0         # 0-4
-    # dex | unknown (volume_proxy reserved for a later task)
+    # dex (DexScreener) | volume_proxy (24h volume stand-in) | unknown
     liquidity_source: str = "unknown"
     factors: dict[str, float] = field(default_factory=dict)
 
@@ -75,12 +75,23 @@ def local_opportunity(f: dict, cfg: ScorerConfig | None = None) -> ScoreResult:
     has_sent = sent is not None
     has_liq = liq is not None and liq > 0
 
+    # CEX-listed pairs are not covered by DexScreener, so they used to land on
+    # the neutral 0.5 -- indistinguishable from a genuinely thin market. The
+    # 24h volume already rides on the PriceEvent and is a defensible stand-in,
+    # normalized identically below. `liquidity_source` keeps the two apart:
+    # without it, calibration would treat an estimate and a measurement as the
+    # same evidence.
+    proxy = f.get("volume_24h_usd")
+    has_proxy = not has_liq and proxy is not None and float(proxy) > 0
+    if has_proxy:
+        liq = float(proxy)
+
     # How many of the four factors were actually supplied (0-_N_FACTORS).
     # Missing momentum/volume/sentiment normalize to 0.0 and missing liquidity
     # to a neutral 0.5, so the score alone cannot say whether a low value means
     # "weak" or "unknown". factors_present is what tells the two apart.
-    factors_present = sum((has_chg, has_vol, has_sent, has_liq))
-    liquidity_source = "dex" if has_liq else "unknown"
+    factors_present = sum((has_chg, has_vol, has_sent, has_liq or has_proxy))
+    liquidity_source = "dex" if has_liq else "volume_proxy" if has_proxy else "unknown"
 
     # Normalize each factor to [0,1] (magnitude of a tradeable setup).
     mom = _clamp(abs(chg) / cfg.mom_cap_pct, 0.0, 1.0) if has_chg else 0.0
@@ -93,7 +104,7 @@ def local_opportunity(f: dict, cfg: ScorerConfig | None = None) -> ScoreResult:
     # Unknown liquidity is treated as neutral (0.5) rather than penalized to 0.
     liq_f = (
         _clamp(math.log10(max(liq, 1.0)) / math.log10(cfg.liq_cap_usd), 0.0, 1.0)
-        if has_liq
+        if (has_liq or has_proxy)
         else 0.5
     )
 
@@ -113,6 +124,9 @@ def local_opportunity(f: dict, cfg: ScorerConfig | None = None) -> ScoreResult:
         and abs(sent) > 0.2
         and (chg > 0) != (sent > 0)
     )
+    # `has_liq`, not the proxy: a thin *measured* pool is a reason to pay for
+    # an LLM look, an estimate derived from volume is not sure enough to
+    # spend on.
     thin_liq_big_move = has_liq and liq < cfg.thin_liq_usd and mom > 0.5
     ambiguous = bool(disagreement or thin_liq_big_move)
 
@@ -136,6 +150,10 @@ def local_opportunity(f: dict, cfg: ScorerConfig | None = None) -> ScoreResult:
         bits.append(f"sent {sent:+.2f}")
     if has_liq:
         bits.append(f"liq ${liq:,.0f}")
+    elif has_proxy:
+        # Marked as estimated in the operator-facing reason: the number carries
+        # the same weight in the score but not the same authority.
+        bits.append(f"liq ~${liq:,.0f} (volume)")
     if disagreement:
         bits.append("price/sentiment disagree")
     reason = "deterministic triage — " + (", ".join(bits) or "insufficient signal")

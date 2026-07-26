@@ -15,7 +15,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .lexicon import SymbolLexicon
+from ..observability import CONTENT_DROPPED
+from .lexicon import LexiconLoader, SymbolLexicon
 from .raw import RawItem
 from .vocab import CRYPTO_KEYWORDS
 
@@ -84,3 +85,22 @@ class ContentNormalizer:
             confirmed.add(symbol)
 
         return sorted(confirmed)
+
+
+class LexiconNormalizer:
+    """Async seam between the poll loop and the pure normalizer.
+
+    Owns the two things ``ContentNormalizer`` deliberately refuses: fetching the
+    current lexicon, and emitting metrics.
+    """
+
+    def __init__(self, loader: LexiconLoader, *, service: str) -> None:
+        self._loader = loader
+        self._service = service
+
+    async def normalize(self, items: list[RawItem]) -> list[RawItem]:
+        lexicon = await self._loader.get()
+        result = ContentNormalizer(lexicon).apply(items)
+        for item, reason in result.dropped:
+            CONTENT_DROPPED.labels(self._service, item.source, reason).inc()
+        return result.kept

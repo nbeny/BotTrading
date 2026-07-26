@@ -8,6 +8,7 @@ from .loop import AdaptivePollLoop
 from .normalize import (
     MARKET_SYMBOL,
     ContentNormalizer,
+    LexiconNormalizer,
     NormalizeResult,
 )
 from .provider import Provider, parse_retry_after
@@ -46,6 +47,7 @@ __all__ = [
     "ContentRepository",
     "FakeContentRepository",
     "LexiconLoader",
+    "LexiconNormalizer",
     "NormalizeResult",
     "Provider",
     "RateLimitedError",

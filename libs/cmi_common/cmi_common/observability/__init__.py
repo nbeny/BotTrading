@@ -1,5 +1,6 @@
 from .metrics import (
     AI_TOKENS,
+    CONTENT_DROPPED,
     EVENT_PROCESSING_SECONDS,
     EVENTS_CONSUMED,
     EVENTS_PRODUCED,
@@ -10,6 +11,7 @@ from .tracing import setup_tracing
 
 __all__ = [
     "AI_TOKENS",
+    "CONTENT_DROPPED",
     "EVENTS_CONSUMED",
     "EVENTS_PRODUCED",
     "EVENT_PROCESSING_SECONDS",

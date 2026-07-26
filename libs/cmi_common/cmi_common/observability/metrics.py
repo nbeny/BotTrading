@@ -26,6 +26,11 @@ UPSTREAM_REQUESTS = Counter(
     "Outbound provider API calls",
     ["service", "provider", "status"],
 )
+CONTENT_DROPPED = Counter(
+    "cmi_content_dropped_total",
+    "Ingested items rejected by the crypto relevance gate",
+    ["service", "source", "reason"],
+)
 INFLIGHT = Gauge(
     "cmi_inflight_tasks",
     "In-flight async tasks",

@@ -23,3 +23,6 @@ next-env.d.ts
 # git worktrees for isolated feature work
 .worktrees/
 .superpowers/
+
+# Playwright MCP session snapshots (local debugging artefacts)
+.playwright-mcp/

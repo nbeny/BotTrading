@@ -78,8 +78,11 @@ def _norm_news(
     sentiment: float | None,
     market_sentiment: float | None = None,
 ) -> float:
-    if impact is None and sentiment is None and market_sentiment is None:
-        return 0.0
+    # No early return for "nothing known". Absence of news is neutral, not
+    # bearish: short-circuiting to 0.0 gave a silent symbol the same news score
+    # as one everybody is panicking about, since sentiment -1.0 also lands on
+    # 0.0. Falling through with base=0 and raw=0 puts "unknown" exactly where a
+    # genuinely neutral reading sits, and leaves bearish strictly below it.
     base = impact if impact is not None else 0.0
     # Fold sentiment (-1..1) into a positive news contribution. The symbol's own
     # sentiment always wins; the market regime is a fallback for symbols that
@@ -123,9 +126,7 @@ def score(features: Features) -> ScoreResult:
     opportunity = int(round(weighted * 100))
 
     # Confidence = fraction of weight backed by a present signal.
-    present_weight = sum(
-        WEIGHTS[k] for k in WEIGHTS if _signal_present(k, features)
-    )
+    present_weight = sum(WEIGHTS[k] for k in WEIGHTS if _signal_present(k, features))
     confidence = round(present_weight, 3)
     return ScoreResult(opportunity, confidence, breakdown)
 

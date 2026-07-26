@@ -10,7 +10,10 @@ from pathlib import Path
 _spec = importlib.util.spec_from_file_location(
     "de_scoring",
     Path(__file__).resolve().parents[1]
-    / "services" / "decision-engine" / "app" / "scoring.py",
+    / "services"
+    / "decision-engine"
+    / "app"
+    / "scoring.py",
 )
 scoring = importlib.util.module_from_spec(_spec)
 assert _spec.loader
@@ -18,10 +21,22 @@ sys.modules[_spec.name] = scoring  # required for dataclass(slots=True)
 _spec.loader.exec_module(scoring)
 
 
-def test_empty_features_score_zero() -> None:
+def test_empty_features_score_near_zero_with_no_confidence() -> None:
+    # Not 0 any more: absence of news is neutral, not bearish. An unknown symbol
+    # keeps the neutral half of news_score (0.25 x 0.20 = 5 points) while every
+    # other axis stays at zero. What signals its emptiness is the confidence of
+    # 0.0, not a score that pretends the news was terrible.
     result = scoring.score(scoring.Features())
-    assert result.opportunity_score == 0
+    assert result.opportunity_score == 5
     assert result.confidence == 0.0
+
+
+def test_no_news_now_outscores_maximally_bearish_news() -> None:
+    # The conflation this replaced: both used to land on exactly 0.0, so a
+    # silent symbol scored like one everybody was panicking about.
+    silent = scoring.score(scoring.Features())
+    panicking = scoring.score(scoring.Features(sentiment_score=-1.0))
+    assert panicking.opportunity_score < silent.opportunity_score
 
 
 def test_strong_signals_score_high() -> None:

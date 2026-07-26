@@ -379,44 +379,39 @@ at 1.0.
 
 None of these block anything currently running.
 
-### 1. `_norm_news` conflates "no news" with "maximally bearish news"
+### 0. RESOLVED — `_norm_news` conflated "no news" with "maximally bearish news"
 
-`services/decision-engine/app/scoring.py`. With no information at all the
-function short-circuits to `0.0`, and `0.0` is also what a sentiment of `-1.0`
-produces. A silent symbol and a symbol everyone is panicking about therefore
-score identically on the news axis.
+Fixed by removing the early return, so absence falls through to exactly where a
+neutral reading sits. Option A of the three below was chosen.
 
-This **predates** the regime work — it was surfaced by a regime test whose
-baseline assumption it broke, not introduced by it. The test now compares
-against a neutral regime and documents the conflation rather than papering
-over it.
+**Measured before shipping**, by replaying 12,183 real production signals (every
+stored signal scoring ≥ 50) through both versions:
 
-Fixing it is a modelling decision, not a mechanical edit, which is why it is
-recorded here instead of applied:
+| | before | after |
+|---|---|---|
+| signals with neither news nor sentiment | 43.0% | — |
+| score shift on those | — | **+5 points** |
+| score shift on the rest | — | 0 |
+| decision-engine score, max | 61 | 61 |
+| decision-engine score, median | 39 | 40 |
+| **crossings of the decision threshold (70)** | — | **0** |
 
-- **Option A — absent means neutral.** Return `0.5` for the no-information case
-  so "unknown" sits between bearish and bullish. Correct in principle, but it
-  raises `news_score` for every symbol that currently has no news, which shifts
-  scores across the whole book at once. Needs a before/after run against real
-  decisions before it goes anywhere near live mode.
-- **Option B — leave the value, fix the confidence.** Keep `0.0` but stop
-  counting `news_score` as a present signal when there is genuinely nothing,
-  so the absence shows up as low confidence rather than as bearishness.
-  Smaller blast radius.
-- **Option C — accept it.** It has been the behaviour since the model was
-  tuned, so the thresholds were fitted around it.
+Safe to ship: nine points of headroom remain between the highest achievable
+score and the threshold. That headroom is itself a finding — see issue 4.
 
-Whichever is chosen, the regime damping constant should be re-examined at the
-same time: the two interact through the same normalisation.
+A first attempt at this measurement used the 30,000 *most recent* signals and
+reported reassuring numbers from an unrepresentative sample: that batch was
+deterministic triage on small caps, none of it near the threshold. Sample by
+score, not by recency, when the question is "does this change any decision".
 
-### 2. `CONTENT_DROPPED` has no denominator
+### 1. `CONTENT_DROPPED` has no denominator
 
 The counter reports items rejected, never items considered, so a rejection
 *rate* cannot be read from `/metrics`. Judging whether the gate over-filters
 means counting `raw_content` rows per source in the database. A "considered"
 counter alongside it would make the ratio directly observable.
 
-### 3. `COMMON_WORDS` needs re-auditing on universe rotation
+### 2. `COMMON_WORDS` needs re-auditing on universe rotation
 
 The ambiguous set is computed, but the word list it intersects is hand-curated,
 and a ticker missing from it is believed on sight. Three rounds audited it
@@ -425,6 +420,32 @@ universe found `ATH`, `PUMP`, `APE`, `IP`, `AI`, `LAYER` and more. `APR` was
 then caught only by inspecting live production rows 90 minutes after deploy.
 The method that works is building a lexicon from the real universe and running
 plausible headlines through it — not reading the list.
+
+### 3. The deterministic decision path cannot reach its own threshold
+
+Found while measuring issue 0, and larger than the issue that surfaced it.
+
+Replaying the 12,183 highest-scoring production signals through
+`scoring.score()` gives a **maximum of 61** against a `decision_threshold` of
+**70**. Not "rarely fires" — structurally cannot fire on the data it is fed.
+
+The direct cause: `liquidity_usd` was populated in **0 of 12,183** signals.
+`engine.py:82` reads `raw.get("liquidity_usd")` from the analysis event's
+`meta.features`, but `ai-worker-haiku` only writes that key for DEX-sourced
+events (`worker.py:162`). Everything arriving from CoinGecko — nearly the whole
+flow — has no such key, so `_norm_liquidity(None)` returns `0.0` and the
+`liquidity_score` weight of **0.15 is permanently dead**. Haiku already computes
+a volume-based proxy for exactly this case and records `liquidity_source:
+"volume_proxy"`; the decision engine simply never reads it.
+
+This corroborates the "score/floor mismatch" recorded in
+`memory/pipeline-bottleneck-measured.md` and gives it a precise mechanism.
+
+Deliberately not fixed here: it is another live scoring change and deserves the
+same before/after treatment issue 0 got. Two candidate repairs — have the engine
+fall back to haiku's volume proxy, or lower the threshold to match what the
+model can actually produce. The first is almost certainly right, since the
+second would leave 15% of the weight dead and simply move the goalposts.
 
 ## Rejected alternatives
 

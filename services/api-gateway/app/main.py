@@ -11,6 +11,7 @@ from cmi_common.db import Database
 from cmi_common.kafka import EventConsumer, Topic
 
 from . import journal_api, read_api, routers
+from .archiver import EventArchiver
 from .health_collector import HealthCollector
 from .persister import Persister
 
@@ -36,6 +37,31 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     app.state.consumer = consumer
     app.state.consumer_task = asyncio.create_task(consumer.run())
 
+    # Raw broadcast archive, so the Command Center feed survives a reload.
+    archiver = EventArchiver(db)
+    archive_consumer = EventConsumer(
+        settings.kafka,
+        [
+            Topic.PRICE,
+            Topic.VOLUME,
+            Topic.DEX,
+            Topic.SENTIMENT,
+            Topic.ANALYSIS,
+            Topic.DECISION,
+            Topic.RISK_APPROVED,
+            Topic.EXECUTION,
+        ],
+        archiver.handle,
+        # Its own group: the archive must not compete with the persister for
+        # partitions, and a lagging archive must not delay business persistence.
+        # Topic.JOURNAL is deliberately absent -- the journal has its own table
+        # and 180-day retention.
+        group_id="api-gateway-archiver",
+    )
+    await archive_consumer.start()
+    app.state.archive_consumer = archive_consumer
+    app.state.archive_task = asyncio.create_task(archive_consumer.run())
+
     # Periodic service-health prober → service_health table (feeds /systems).
     collector = HealthCollector(db)
     app.state.health_collector = collector
@@ -47,9 +73,13 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
 
 async def _shutdown(app: FastAPI, settings: Settings) -> None:
     await app.state.consumer.stop()
+    await app.state.archive_consumer.stop()
     app.state.health_collector.stop()
     await asyncio.gather(
-        app.state.consumer_task, app.state.health_task, return_exceptions=True
+        app.state.consumer_task,
+        app.state.archive_task,
+        app.state.health_task,
+        return_exceptions=True,
     )
     await app.state.db.dispose()
 

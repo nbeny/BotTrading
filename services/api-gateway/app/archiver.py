@@ -8,12 +8,31 @@ survives a page reload.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from cmi_common.db import EventMarket, EventSignal
+from sqlalchemy.dialects.postgresql import insert
+
+from cmi_common.db import Database, EventMarket, EventSignal
 from cmi_common.events import BaseEvent, DexEvent, PriceEvent, VolumeEvent
 from cmi_common.events.journal import JournalEntryEvent
+from cmi_common.events.risk import RiskRejectedEvent
+from cmi_common.kafka import TOPIC_EVENT, Topic
+from cmi_common.observability import EVENTS_CONSUMED
+
+logger = logging.getLogger(__name__)
+SERVICE = "api-gateway"
+
+# Reverse lookup so a row records which topic carried it. Built once.
+# TOPIC_EVENT is one class per topic, so the inversion is lossless.
+_TOPIC_BY_TYPE: dict[type, str] = {
+    cls: topic.value for topic, cls in TOPIC_EVENT.items()
+}
+# RiskRejectedEvent has no topic of its own: both decision-engine and risk-engine
+# publish it on the decision topic as an audit trail. Without this it would be
+# archived with an empty topic and drop out of any topic-filtered feed.
+_TOPIC_BY_TYPE[RiskRejectedEvent] = Topic.DECISION.value
 
 MARKET = EventMarket
 SIGNAL = EventSignal
@@ -74,3 +93,29 @@ def to_row(event: BaseEvent, *, topic: str) -> dict[str, Any]:
         "correlation_id": event.correlation_id,
         "payload": event.model_dump(mode="json"),
     }
+
+
+class EventArchiver:
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    async def handle(self, event: BaseEvent) -> None:
+        table = table_for(event)
+        if table is None:
+            return
+        topic = _TOPIC_BY_TYPE.get(type(event), "")
+        try:
+            async with self._db.sessionmaker() as s:
+                await s.execute(
+                    insert(table)
+                    .values(**to_row(event, topic=topic))
+                    .on_conflict_do_nothing()
+                )
+                await s.commit()
+            EVENTS_CONSUMED.labels(SERVICE, topic, event_type_of(event)).inc()
+        except Exception:
+            # The archive is observability. A write failure must not kill the
+            # shared Kafka consumer and lose business events with it.
+            logger.warning(
+                "archive write failed for %s", event_type_of(event), exc_info=True
+            )

@@ -187,7 +187,7 @@ class ClaudeClient:
                 },
                 ttl_seconds=max(60, resume_at - int(time.time()) + 60),
             )
-        except Exception:  # noqa: BLE001 - status is best-effort, never fatal
+        except Exception:
             logger.debug("failed to write quota status", exc_info=True)
 
     async def _clear_quota_status(self, service: str) -> None:
@@ -199,7 +199,7 @@ class ClaudeClient:
                 {"paused": False, "service": service, "resumed_at": int(time.time())},
                 ttl_seconds=300,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug("failed to clear quota status", exc_info=True)
 
 
@@ -312,7 +312,7 @@ class CliTransport(_Transport):
                     proc.communicate(prompt.encode()),
                     timeout=self._opts.timeout_ms / 1000,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 proc.kill()
                 await proc.wait()
                 AI_CLI_CALLS.labels(service, self._model, "timeout").inc()

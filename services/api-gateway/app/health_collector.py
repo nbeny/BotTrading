@@ -13,7 +13,7 @@ import asyncio
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy.dialects.postgresql import insert
 
@@ -114,8 +114,8 @@ class HealthCollector:
         self._samples: dict[str, dict[str, float]] = {}  # per-service last cumulative sample
 
     async def _upsert(self, name: str, status: str, healthy: bool, latency_ms: float, detail: dict) -> None:
-        async with self._db._sessionmaker() as s:  # noqa: SLF001
-            now = datetime.now(tz=timezone.utc)
+        async with self._db._sessionmaker() as s:
+            now = datetime.now(tz=UTC)
             stmt = insert(ServiceHealth).values(
                 service=name, status=status, healthy=healthy, latency_ms=latency_ms, detail=detail, checked_at=now
             )
@@ -169,7 +169,7 @@ class HealthCollector:
                 logger.exception("health probe cycle failed")
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=self._interval)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
     def stop(self) -> None:

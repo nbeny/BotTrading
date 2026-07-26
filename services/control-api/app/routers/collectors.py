@@ -79,7 +79,7 @@ async def coverage(
     """How much of the pipeline is fully processed: sentiment scoring of raw
     content, and senior (Sonnet) decisions on escalated opportunities."""
     db = request.app.state.db
-    async with db._sessionmaker() as s:  # noqa: SLF001
+    async with db._sessionmaker() as s:
         sent = (
             await s.execute(
                 text(
@@ -111,7 +111,7 @@ async def backfill(
     cooldown). Catches opportunities missed during a quota or source outage."""
     db = request.app.state.db
     producer = request.app.state.producer
-    async with db._sessionmaker() as s:  # noqa: SLF001
+    async with db._sessionmaker() as s:
         rows = (
             await s.execute(
                 text(
@@ -125,7 +125,7 @@ async def backfill(
     for (payload,) in rows:
         try:
             evt = AnalysisEvent(**payload)
-        except Exception:  # noqa: BLE001 - skip a malformed stored payload
+        except Exception:
             continue
         await producer.publish(Topic.ANALYSIS, evt)
         requeued += 1

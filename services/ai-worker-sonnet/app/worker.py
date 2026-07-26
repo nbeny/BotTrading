@@ -131,7 +131,7 @@ class SonnetWorker:
         resp = await self._claude.complete(system=SYSTEM, prompt=prompt, service=SERVICE)
         try:
             data = resp.json()
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning("sonnet response parse failed for %s", event.symbol)
             return None
         if not data.get("validated", False):

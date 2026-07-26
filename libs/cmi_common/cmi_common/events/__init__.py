@@ -8,7 +8,7 @@ correct concrete model.
 from __future__ import annotations
 
 import json
-from typing import Annotated, Any, Union
+from typing import Annotated, Any
 
 from pydantic import Field, TypeAdapter
 
@@ -27,23 +27,28 @@ from .social import SocialEvent
 
 # Discriminated union over the ``event_type`` literal field. Pydantic picks the
 # right subclass automatically, giving us O(1) typed decoding.
+#
+# One member per line on purpose. An event missing from this union publishes
+# perfectly and fails on *consumption* -- parse_event raises on the
+# discriminator -- which is how JournalEntryEvent shipped broken. A single long
+# line makes the one thing you have to check here uncheckable at a glance.
 AnyEvent = Annotated[
-    Union[
-        PriceEvent,
-        VolumeEvent,
-        DexEvent,
-        NewsEvent,
-        SocialEvent,
-        SentimentEvent,
-        AnalysisEvent,
-        DecisionEvent,
-        RiskApprovedEvent,
-        RiskRejectedEvent,
-        ExecutionEvent,
-        ControlCommandEvent,
-        JournalEntryEvent,
-        AccountSnapshotEvent,
-    ],
+    (
+        PriceEvent
+        | VolumeEvent
+        | DexEvent
+        | NewsEvent
+        | SocialEvent
+        | SentimentEvent
+        | AnalysisEvent
+        | DecisionEvent
+        | RiskApprovedEvent
+        | RiskRejectedEvent
+        | ExecutionEvent
+        | ControlCommandEvent
+        | JournalEntryEvent
+        | AccountSnapshotEvent
+    ),
     Field(discriminator="event_type"),
 ]
 

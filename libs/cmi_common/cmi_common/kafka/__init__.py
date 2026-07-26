@@ -5,10 +5,10 @@ from .producer import EventProducer
 from .topics import TOPIC_EVENT, TOPIC_PARTITIONS, Topic
 
 __all__ = [
+    "TOPIC_EVENT",
+    "TOPIC_PARTITIONS",
     "EventConsumer",
     "EventProducer",
     "Handler",
-    "TOPIC_EVENT",
-    "TOPIC_PARTITIONS",
     "Topic",
 ]

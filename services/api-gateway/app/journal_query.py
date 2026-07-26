@@ -8,7 +8,7 @@ action -- so below the floor every comparison returns null instead.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
@@ -27,7 +27,7 @@ def utcnow() -> datetime:
     """Aware UTC. ``decision_journal.time`` is timestamptz, so comparisons and
     timestamps here must carry a zone -- unlike the naive-UTC helper the
     persister uses on the write side."""
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 def _mean(values: list[float]) -> float | None:

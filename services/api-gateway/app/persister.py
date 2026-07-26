@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import update
@@ -50,7 +50,7 @@ def _naive_utc(dt: datetime) -> datetime:
     tz-aware value into `TIMESTAMP WITHOUT TIME ZONE` ("can't subtract offset-naive
     and offset-aware datetimes"). Mirrors the read-side naive-UTC handling."""
     if dt.tzinfo is not None:
-        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        dt = dt.astimezone(UTC).replace(tzinfo=None)
     return dt
 
 
@@ -103,7 +103,7 @@ class Persister:
 
     async def _save_price(self, e: PriceEvent) -> None:
         EVENTS_CONSUMED.labels(SERVICE, Topic.PRICE.value, event_type_of(e)).inc()
-        async with self._db._sessionmaker() as s:  # noqa: SLF001
+        async with self._db._sessionmaker() as s:
             stmt = insert(Price).values(
                 time=_naive_utc(e.occurred_at),
                 symbol=e.symbol,
@@ -118,7 +118,7 @@ class Persister:
 
     async def _save_signal(self, e: AnalysisEvent) -> None:
         EVENTS_CONSUMED.labels(SERVICE, Topic.ANALYSIS.value, event_type_of(e)).inc()
-        async with self._db._sessionmaker() as s:  # noqa: SLF001
+        async with self._db._sessionmaker() as s:
             stmt = insert(Signal).values(
                 time=_naive_utc(e.occurred_at),
                 symbol=e.symbol,
@@ -142,7 +142,7 @@ class Persister:
             exclude={"event_type", "schema_version", "source", "occurred_at", "meta"},
         )
         payload["time"] = _naive_utc(e.occurred_at)
-        async with self._db._sessionmaker() as s:  # noqa: SLF001
+        async with self._db._sessionmaker() as s:
             await s.execute(
                 insert(DecisionJournal).values(**payload).on_conflict_do_nothing()
             )
@@ -153,13 +153,13 @@ class Persister:
     ) -> None:
         """Enrich the existing journal row rather than inserting a second one --
         a duplicate would double-count that decision in every later cohort."""
-        async with self._db._sessionmaker() as s:  # noqa: SLF001
+        async with self._db._sessionmaker() as s:
             await s.execute(update(DecisionJournal).where(where).values(**values))
             await s.commit()
 
     async def _save_rejection(self, e: RiskRejectedEvent) -> None:
         EVENTS_CONSUMED.labels(SERVICE, Topic.DECISION.value, event_type_of(e)).inc()
-        async with self._db._sessionmaker() as s:  # noqa: SLF001
+        async with self._db._sessionmaker() as s:
             stmt = insert(PipelineRejection).values(
                 time=_naive_utc(e.occurred_at),
                 event_id=e.event_id,
@@ -179,7 +179,7 @@ class Persister:
 
     async def _save_decision(self, e: DecisionEvent) -> None:
         EVENTS_CONSUMED.labels(SERVICE, Topic.DECISION.value, event_type_of(e)).inc()
-        async with self._db._sessionmaker() as s:  # noqa: SLF001
+        async with self._db._sessionmaker() as s:
             stmt = insert(Decision).values(
                 event_id=e.event_id,
                 correlation_id=e.correlation_id,
@@ -198,7 +198,7 @@ class Persister:
         EVENTS_CONSUMED.labels(
             SERVICE, Topic.RISK_APPROVED.value, event_type_of(e)
         ).inc()
-        async with self._db._sessionmaker() as s:  # noqa: SLF001
+        async with self._db._sessionmaker() as s:
             stmt = insert(Trade).values(
                 event_id=e.event_id,
                 correlation_id=e.correlation_id,
@@ -246,7 +246,7 @@ class Persister:
 
     async def _update_trade(self, e: ExecutionEvent) -> None:
         EVENTS_CONSUMED.labels(SERVICE, Topic.EXECUTION.value, event_type_of(e)).inc()
-        async with self._db._sessionmaker() as s:  # noqa: SLF001
+        async with self._db._sessionmaker() as s:
             stmt = (
                 update(Trade)
                 .where(Trade.event_id == e.risk_event_id)

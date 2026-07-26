@@ -12,7 +12,7 @@ queries live in ``read_api.systems_funnel``.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 STAGE_ORDER = ["analyses", "escalated", "decisions", "approved", "executed"]
 SCORE_BUCKET_WIDTH = 10
@@ -64,7 +64,7 @@ def build_funnel(
     window: str = "24h",
     now: datetime | None = None,
 ) -> dict:
-    now = now or datetime.now(tz=timezone.utc)
+    now = now or datetime.now(tz=UTC)
     counts = [analyses, escalated, decisions, approved, executed]
     stages = [
         {

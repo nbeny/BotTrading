@@ -42,7 +42,7 @@ class RiskApprovedEvent(BaseEvent):
     decision_event_id: str | None = None
 
     @model_validator(mode="after")
-    def _validate_levels(self) -> "RiskApprovedEvent":
+    def _validate_levels(self) -> RiskApprovedEvent:
         if self.direction == Direction.LONG:
             if not (self.stop_loss < self.entry_price < self.take_profit):
                 raise ValueError(

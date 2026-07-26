@@ -28,7 +28,7 @@ async def run_periodic(
                 await coro_factory()
             except asyncio.CancelledError:
                 raise
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception("periodic task '%s' tick failed", name)
             elapsed = asyncio.get_event_loop().time() - started
             await asyncio.sleep(max(0.0, interval_seconds - elapsed))

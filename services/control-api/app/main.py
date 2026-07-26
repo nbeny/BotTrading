@@ -9,13 +9,13 @@ from cmi_common.db import Database
 from cmi_common.kafka import EventProducer
 
 from .commands import CommandPublisher
-from .state import StateReader
 from .routers import auth as auth_router
 from .routers import collectors as collectors_router
 from .routers import opportunities as opportunities_router
 from .routers import orders as orders_router
 from .routers import positions as positions_router
 from .routers import settings as settings_router
+from .state import StateReader
 
 
 async def _startup(app: FastAPI, settings: Settings) -> None:

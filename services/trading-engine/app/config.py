@@ -39,7 +39,7 @@ class TradingConfig:
     account_poll_s: int = 60
 
     @classmethod
-    def from_env(cls) -> "TradingConfig":
+    def from_env(cls) -> TradingConfig:
         return cls(
             mode=Mode(os.getenv("TRADING_MODE", "dry_run")),
             api_key=os.getenv("KRAKEN_API_KEY", ""),

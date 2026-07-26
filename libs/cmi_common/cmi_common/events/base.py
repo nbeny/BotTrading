@@ -8,7 +8,7 @@ consumers can route, deduplicate and trace events without parsing the payload.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 def _utcnow() -> datetime:
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 def _new_id() -> str:

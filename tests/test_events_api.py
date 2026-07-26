@@ -23,9 +23,11 @@ class FakeSession:
     def __init__(self, rows: list[dict] | None = None) -> None:
         self.rows = rows or []
         self.params: dict | None = None
+        self.stmt = None
 
     async def execute(self, _stmt, params=None):
         self.params = params
+        self.stmt = _stmt
 
         class R:
             def __init__(self, rows):
@@ -146,3 +148,19 @@ async def test_aware_row_times_survive_the_round_trip_unchanged() -> None:
         session=FakeSession([_row(i) for i in range(2)]),
     )
     assert cursor.decode(resp["next_cursor"])[0] == T
+
+
+async def test_each_union_branch_is_bounded_by_its_own_limit() -> None:
+    """Sans LIMIT dans chaque branche, le LIMIT externe ne s'applique qu'après
+    l'union : Postgres devrait lire et trier *toutes* les lignes des deux
+    hypertables d'abord — soit, sur `events_market`, les 7 jours entiers de
+    prix, volumes et dex pour une requête sans filtre.
+
+    Vérifié contre la production : le plan devient
+    `Limit -> Merge Append -> Limit -> Index Scan Backward using
+    events_market_pkey`, sans tri.
+    """
+    s = FakeSession()
+    await api.list_events(limit=10, types=None, symbol=None, before=None, session=s)
+    sql = " ".join(str(s.stmt).split())
+    assert sql.count("ORDER BY time DESC, event_id DESC LIMIT :limit") == 3, sql

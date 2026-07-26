@@ -81,10 +81,22 @@ async def list_events(
     clause = " AND ".join(where)
     # UNION ALL across the two retention tiers, ordered by the same composite key
     # the cursor uses, then one extra row to detect whether a next page exists.
+    #
+    # Each branch carries its own ORDER BY + LIMIT. Without them the outer LIMIT
+    # applies only after the union, so Postgres would fetch and sort *every*
+    # matching row in both hypertables first -- on events_market that is the
+    # whole 7-day retention window of price, volume and dex traffic for an
+    # unfiltered request. Bounding each branch is exact, not an approximation:
+    # the global top N is necessarily contained in the union of the two per-table
+    # top N, because both are ordered on the same key as the outer sort.
+    branch = (
+        f"(SELECT {_COLUMNS} FROM {{table}} WHERE {clause} "
+        f"ORDER BY time DESC, event_id DESC LIMIT :limit)"
+    )
     stmt = text(
-        f"SELECT {_COLUMNS} FROM events_market WHERE {clause} "
+        f"{branch.format(table='events_market')} "
         f"UNION ALL "
-        f"SELECT {_COLUMNS} FROM events_signal WHERE {clause} "
+        f"{branch.format(table='events_signal')} "
         f"ORDER BY time DESC, event_id DESC LIMIT :limit"
     )
     if expanding:

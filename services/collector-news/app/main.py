@@ -52,7 +52,9 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     ]
     if os.getenv("NEWSDATA_API_KEY"):
         providers.append(NewsDataProvider(os.getenv("NEWSDATA_API_KEY")))
-    normalizer = LexiconNormalizer(LexiconLoader(cache), service="collector-news")
+    normalizer = LexiconNormalizer(
+        LexiconLoader(cache, service="collector-news"), service="collector-news"
+    )
     loops = [
         # _RepoFactory implements the only method the loop uses (insert_items).
         AdaptivePollLoop(

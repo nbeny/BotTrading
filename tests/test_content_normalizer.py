@@ -59,8 +59,17 @@ def test_ambiguous_ticker_with_full_name_is_accepted() -> None:
 def test_out_of_universe_token_needs_a_cashtag() -> None:
     result = _norm().apply([_item(title="WIF season", text="crypto is back")])
     assert result.kept[0].symbols == ["MARKET"]
-    result2 = _norm().apply([_item(title="$WIF season")])
+    result2 = _norm().apply([_item(title="$WIF season", text="crypto is back")])
     assert result2.kept[0].symbols == ["WIF"]
+
+
+def test_an_out_of_universe_cashtag_alone_is_not_enough() -> None:
+    # This is how a brand-new token gets in, so the channel has to stay open --
+    # but a bare $-prefixed word is not evidence of anything crypto. Without it,
+    # "$TSLA and $NVDA are leading the rally" booked two equities as crypto
+    # symbols, and StockTwits (a wholly $-tagged equities stream) is coming.
+    result = _norm().apply([_item(title="$TSLA and $NVDA are leading the rally")])
+    assert result.kept == []
 
 
 def test_provider_supplied_symbols_are_discarded() -> None:
@@ -231,3 +240,45 @@ def test_a_ticker_that_is_crypto_jargon_needs_corroboration() -> None:
 
     named = _review_norm().apply([_item(title="Aethir ATH node sale opens")])
     assert named.kept[0].symbols == ["ATH"]
+
+
+def test_lowercase_tickers_resolve_when_the_ticker_is_not_a_word() -> None:
+    # Social copy is routinely all-lowercase. These items used to be dropped
+    # outright -- not booked as MARKET, lost -- and the drop counter conflated
+    # them with football articles, so the loss was invisible.
+    assert _norm().apply([_item(title="btc is ripping right now")]).kept[0].symbols == [
+        "BTC"
+    ]
+    assert _norm().apply([_item(title="eth looking strong today, might buy")]).kept[
+        0
+    ].symbols == ["ETH"]
+
+
+def test_a_lowercase_english_word_is_still_not_a_ticker() -> None:
+    # The relaxation must not reopen the homograph hole: "one" and "keep"
+    # stay disbelieved in lowercase, where they are simply words.
+    result = _norm().apply([_item(title="one more day, keep stacking, halving soon")])
+    assert result.kept[0].symbols == ["MARKET"]
+
+
+def test_a_single_generic_term_no_longer_admits_general_news() -> None:
+    # Each of these hit exactly one weak keyword and entered as MARKET -- the
+    # regional-general-news shape the gate exists to reject.
+    for title in (
+        "Gas prices drop across the Midwest",
+        "Whale watching season opens in Monterey",
+        "Bridge collapse closes the interstate",
+        "Custody battle ends in family court",
+        "New York Stock Exchange halts trading briefly",
+    ):
+        assert _norm().apply([_item(title=title)]).kept == [], title
+
+
+def test_two_generic_terms_or_one_specific_term_still_admit() -> None:
+    two_weak = _norm().apply(
+        [_item(title="Wallet custody rules tighten for exchanges")]
+    )
+    assert two_weak.kept[0].symbols == ["MARKET"]
+
+    one_strong = _norm().apply([_item(title="A new stablecoin launches this week")])
+    assert one_strong.kept[0].symbols == ["MARKET"]

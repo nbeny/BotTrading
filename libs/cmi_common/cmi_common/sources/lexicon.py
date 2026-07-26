@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from ..observability import LEXICON_COINS
 from .vocab import COMMON_WORDS, SEED_COINS
 
 # A coin name shorter than this matches far too much ordinary prose to index.
@@ -147,11 +148,13 @@ class LexiconLoader:
         self,
         cache: _CacheLike,
         *,
+        service: str = "unknown",
         refresh_seconds: float = 900.0,
         seed_retry_seconds: float = 60.0,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._cache = cache
+        self._service = service
         self._refresh = refresh_seconds
         self._seed_retry = seed_retry_seconds
         self._clock = clock
@@ -169,9 +172,21 @@ class LexiconLoader:
             logger.warning("lexicon read failed; keeping previous", exc_info=True)
             coins = None
         if coins:
+            if self._lexicon is SEED_LEXICON:
+                logger.info("lexicon loaded from redis; leaving the bundled seed")
             self._lexicon = SymbolLexicon.from_coins(coins)
         elif self._lexicon is None:
             self._lexicon = SEED_LEXICON
+        if self._lexicon is SEED_LEXICON:
+            # Silent degradation is the failure mode that hurts: resolving
+            # against 50 coins instead of the live 200 books genuine symbols as
+            # MARKET, and nothing downstream can tell. Paced by the retry window.
+            logger.warning(
+                "%s missing; resolving against the %d-coin bundled seed",
+                LEXICON_KEY,
+                len(self._lexicon.by_ticker),
+            )
+        LEXICON_COINS.labels(self._service).set(len(self._lexicon.by_ticker))
         # Stamped on every probe, successful or not, so a persistently empty
         # Redis is re-read on the window rather than on every single call.
         self._loaded_at = now

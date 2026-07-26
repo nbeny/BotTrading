@@ -57,15 +57,29 @@ COMMON_WORDS: frozenset[str] = frozenset("""
 
 # Vocabulary that makes an item crypto-relevant even with no ticker in sight.
 # Lowercase; matched on word boundaries against title + body.
-CRYPTO_KEYWORDS: frozenset[str] = frozenset("""
-    airdrop altcoin bitcoin blockchain bridge cbdc cex coinbase crypto
-    cryptocurrency custody dao defi depeg derivatives dex etf exchange
-    futures gas halving hodl kraken layer2 ledger leverage liquidation
-    liquidity mempool mining nft onchain perpetual rollup rugpull sec
-    seedphrase selfcustody smartcontract solidity stablecoin
-    staking stakers tokenomics tvl validator wallet web3 whale zk zkproof
-    binance tether ethereum
-    """.split())  # noqa: SIM905 -- readable columns beat a 50-item list literal
+#
+# Split by specificity, because a single generic term admits far too much. "Gas
+# prices drop across the Midwest", "whale watching season opens" and "custody
+# battle ends in family court" all used to enter as MARKET -- the regional
+# general-news shape the relevance gate exists to reject. One STRONG term is
+# enough on its own; the WEAK ones only count in pairs.
+STRONG_CRYPTO_KEYWORDS: frozenset[str] = frozenset("""
+    airdrop altcoin binance bitcoin blockchain cbdc cex coinbase crypto
+    cryptocurrency dao defi depeg dex ethereum halving hodl kraken layer2
+    memecoin mempool nft onchain rollup rugpull seedphrase selfcustody
+    smartcontract solidity stablecoin staking stakers tether tokenomics tvl
+    validator web3 zk zkproof
+    """.split())  # noqa: SIM905 -- readable columns beat a 40-item list literal
+
+# Individually ambiguous with ordinary finance or general news. Two distinct
+# hits are required before they carry an item on their own.
+WEAK_CRYPTO_KEYWORDS: frozenset[str] = frozenset("""
+    bridge custody derivatives etf exchange futures gas ledger leverage
+    liquidation liquidity mining perpetual sec wallet whale
+    """.split())  # noqa: SIM905 -- readable columns beat a 16-item list literal
+
+#: Every term the gate knows, strong and weak alike.
+CRYPTO_KEYWORDS: frozenset[str] = STRONG_CRYPTO_KEYWORDS | WEAK_CRYPTO_KEYWORDS
 
 # Cold-start fallback: an unreachable or empty Redis must degrade recall, not
 # blank the lexicon and drop every item. (ticker, name) pairs.

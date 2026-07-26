@@ -83,7 +83,9 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     db = Database(settings.db)
     repo = _RepoFactory(db)
     providers = _build_providers()
-    normalizer = LexiconNormalizer(LexiconLoader(cache), service="collector-social")
+    normalizer = LexiconNormalizer(
+        LexiconLoader(cache, service="collector-social"), service="collector-social"
+    )
     loops = [
         # _RepoFactory implements the only method the loop uses (insert_items).
         AdaptivePollLoop(

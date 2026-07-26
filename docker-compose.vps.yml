@@ -103,6 +103,22 @@ services:
   postgres:
     image: timescale/timescaledb:2.15.3-pg16
     restart: unless-stopped
+    # synchronous_commit=off: the persister opens one transaction per Kafka
+    # message, so every message costs an fsync. Measured on this host: 55.7%
+    # iowait with the CPU largely idle, and the consumer falling ~770 messages a
+    # minute further behind. Off means a commit returns before its WAL record is
+    # flushed, trading a ~200 ms window of committed-but-unflushed writes on an
+    # unclean shutdown for a large drop in fsync pressure.
+    #
+    # That window is recoverable rather than lost: this database is fed entirely
+    # by Kafka, whose raw topics keep 30 days, and every persister write is
+    # ON CONFLICT DO NOTHING on the event id -- so replaying is idempotent. It
+    # is *not* full_page_writes=off or fsync=off; the database still cannot
+    # corrupt itself, it can only lose the tail.
+    command:
+      - postgres
+      - -c
+      - synchronous_commit=off
     environment:
       POSTGRES_USER: ${DB_USER:-cmi}
       POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}

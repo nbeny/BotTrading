@@ -347,6 +347,8 @@ services:
       JWT_SECRET: ${JWT_SECRET:-}
       CONTROL_ADMIN_USER: ${CONTROL_ADMIN_USER:-admin}
       CONTROL_ADMIN_PASSWORD: ${CONTROL_ADMIN_PASSWORD:-admin}
+      # Cloudflare Turnstile: unset locally -> /auth/login skips the captcha.
+      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
     # Direct host port so the Next.js terminal (or `npm run dev`) can reach the
     # control plane at http://localhost:8001 without going through Traefik/TLS.
     ports:
@@ -393,6 +395,10 @@ services:
         NEXT_PUBLIC_WS_URL: ${WEB_WS_URL:-wss://ws.cmi.localhost/ws}
         NEXT_PUBLIC_API_BASE: /api/gateway
         NEXT_PUBLIC_CONTROL_BASE: /api/control
+        # Site key (public half). Set it together with TURNSTILE_SECRET_KEY
+        # above — one without the other either locks login out or leaves it
+        # unguarded. Keep both empty for local work.
+        NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
     environment:
       # Server-side rewrite target for /api/gateway/* -> FastAPI api-gateway.
       API_GATEWAY_URL: http://api-gateway:8000

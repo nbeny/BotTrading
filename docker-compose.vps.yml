@@ -349,6 +349,9 @@ services:
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       CONTROL_ADMIN_USER: ${CONTROL_ADMIN_USER:-admin}
       CONTROL_ADMIN_PASSWORD: ${CONTROL_ADMIN_PASSWORD:?set CONTROL_ADMIN_PASSWORD in .env}
+      # Cloudflare Turnstile secret (server half). Empty = captcha disabled;
+      # set it in .env so /auth/login refuses tokenless (bot) logins.
+      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
     # Internal only — reached by the Next.js server over the `cmi` network.
 
   websocket-gateway:

@@ -15,6 +15,7 @@ import { pnlColor } from '@/theme/theme';
 import { fmtPct, scoreColor } from '@/lib/format';
 
 export { krakenBalanceView, type KrakenBalanceView } from './KrakenBalance';
+export { TurnstileWidget, type TurnstileHandle } from './TurnstileWidget';
 
 /** Page title + optional actions row. */
 export function PageHeader({

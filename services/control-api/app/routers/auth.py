@@ -9,6 +9,8 @@ from pydantic import BaseModel
 
 from cmi_common.auth import encode_token
 
+from .. import turnstile
+
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
@@ -19,6 +21,10 @@ class AuthError(Exception):
 class LoginInput(BaseModel):
     username: str
     password: str
+    # Cloudflare Turnstile proof. Optional in the schema because the captcha is
+    # off whenever TURNSTILE_SECRET_KEY is unset (dev/mock); when it is set, a
+    # missing token is a straight rejection.
+    turnstile_token: str | None = None
 
 
 async def issue_token(username: str, password: str) -> str:
@@ -36,6 +42,11 @@ async def issue_token(username: str, password: str) -> str:
 
 @router.post("/login")
 async def login(body: LoginInput) -> dict[str, str]:
+    # Captcha first: a bot that can't clear Turnstile never gets to spend our
+    # credential-check budget, and password guesses cost one solved challenge
+    # each instead of one HTTP request each.
+    if not await turnstile.verify(body.turnstile_token):
+        raise HTTPException(status_code=403, detail="captcha verification failed")
     try:
         token = await issue_token(body.username, body.password)
     except AuthError as exc:

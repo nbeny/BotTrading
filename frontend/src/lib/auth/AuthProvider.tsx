@@ -9,7 +9,7 @@ import { hasPermission } from './rbac';
 import type { AuthState, AuthTokens, JwtClaims, Permission, User } from './types';
 
 interface AuthContextValue extends AuthState {
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string, turnstileToken?: string | null) => Promise<void>;
   logout: () => void;
   can: (permission: Permission) => boolean;
 }
@@ -65,22 +65,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener('cmi:unauthorized', handler);
   }, [logout]);
 
-  const login = useCallback(async (email: string, password: string) => {
-    // control-api expects `username`; the mock BFF reads `email`. Send both so
-    // the same call works against either backend.
-    const { data } = await control.post<AuthTokens>('/auth/login', {
-      username: email,
-      email,
-      password,
-    });
-    const user = userFromToken(data.access_token);
-    if (!user) throw new Error('Token invalide reçu du serveur');
-    window.localStorage.setItem(ACCESS_TOKEN_KEY, data.access_token);
-    if (data.refresh_token) {
-      window.localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token);
-    }
-    setState({ user, accessToken: data.access_token, status: 'authenticated' });
-  }, []);
+  const login = useCallback(
+    async (email: string, password: string, turnstileToken?: string | null) => {
+      // control-api expects `username`; the mock BFF reads `email`. Send both so
+      // the same call works against either backend. `turnstile_token` is the
+      // captcha proof — omitted when the widget is disabled, in which case
+      // control-api (having no secret key either) doesn't ask for it.
+      const { data } = await control.post<AuthTokens>('/auth/login', {
+        username: email,
+        email,
+        password,
+        turnstile_token: turnstileToken ?? undefined,
+      });
+      const user = userFromToken(data.access_token);
+      if (!user) throw new Error('Token invalide reçu du serveur');
+      window.localStorage.setItem(ACCESS_TOKEN_KEY, data.access_token);
+      if (data.refresh_token) {
+        window.localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token);
+      }
+      setState({ user, accessToken: data.access_token, status: 'authenticated' });
+    },
+    [],
+  );
 
   const can = useCallback(
     (permission: Permission) => hasPermission(state.user?.role, permission),

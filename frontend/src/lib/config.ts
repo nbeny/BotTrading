@@ -23,5 +23,14 @@ export const CONTROL_BASE = USE_MOCK
 
 export const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8080/ws';
 
+/**
+ * Cloudflare Turnstile site key (public half). Empty string = captcha disabled,
+ * which is the local-dev / mock default: the login form then renders without a
+ * widget and control-api skips verification (it only gates when its own
+ * `TURNSTILE_SECRET_KEY` is set). The two halves are configured together —
+ * setting only one of them locks login out or leaves it unguarded.
+ */
+export const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || '';
+
 export const ACCESS_TOKEN_KEY = 'cmi.access_token';
 export const REFRESH_TOKEN_KEY = 'cmi.refresh_token';

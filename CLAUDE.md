@@ -68,8 +68,15 @@ Runtime state lives in Redis under `trading:runtime` (mode/kill/auto/caps),
 - WS: `NEXT_PUBLIC_WS_URL`, default `ws://localhost:8080/ws` (dev) / `wss://ws.cmi.localhost/ws`.
 
 **Control plane is wired for live** (control endpoints → control-api). Contract notes: login sends
-`{ username: email, email, password }` (control-api reads `username`, mock reads `email`); the
-hardcoded admin account mints the **`admin`** role so RBAC allows mode-switch/settings.
+`{ username: email, email, password, turnstile_token? }` (control-api reads `username`, mock reads
+`email`); the hardcoded admin account mints the **`admin`** role so RBAC allows mode-switch/settings.
+
+**Login is captcha-gated (Cloudflare Turnstile).** Two independent keys, both optional:
+`NEXT_PUBLIC_TURNSTILE_SITE_KEY` (build-time, baked into the bundle by `deploy.yml` → renders the
+widget) and `TURNSTILE_SECRET_KEY` (control-api env → `POST /auth/login` verifies the token against
+siteverify and **403**s otherwise). Unset = off, which is the local/mock default; the gate fails
+**closed** once the secret is set, so an unreachable Cloudflare denies logins rather than waving
+them through. Verification lives in `services/control-api/app/turnstile.py`.
 
 ✅ **Read plane — built & contract-verified.** api-gateway now also serves the full frontend read
 plane from `app/read_api.py` (mounted at root): `/portfolio*`, `/market/*`, `/risk/*`, `/data/*`,

@@ -12,9 +12,14 @@ COPY . .
 ARG NEXT_PUBLIC_USE_MOCK=1
 ARG NEXT_PUBLIC_WS_URL=ws://localhost:8080/ws
 ARG NEXT_PUBLIC_API_BASE=/api/gateway
+ARG NEXT_PUBLIC_CONTROL_BASE=/api/control
+# Cloudflare Turnstile site key (public half; empty = captcha off on the form).
+ARG NEXT_PUBLIC_TURNSTILE_SITE_KEY=
 ENV NEXT_PUBLIC_USE_MOCK=$NEXT_PUBLIC_USE_MOCK
 ENV NEXT_PUBLIC_WS_URL=$NEXT_PUBLIC_WS_URL
 ENV NEXT_PUBLIC_API_BASE=$NEXT_PUBLIC_API_BASE
+ENV NEXT_PUBLIC_CONTROL_BASE=$NEXT_PUBLIC_CONTROL_BASE
+ENV NEXT_PUBLIC_TURNSTILE_SITE_KEY=$NEXT_PUBLIC_TURNSTILE_SITE_KEY
 # next.config.mjs bakes the rewrite() destinations into the routes manifest at
 # BUILD time, so the api-gateway / control-api targets must be provided here —
 # a runtime env is ignored for rewrites. Point them at the compose service names.

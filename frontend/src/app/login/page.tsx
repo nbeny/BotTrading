@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Alert,
@@ -17,7 +17,8 @@ import {
 import BoltIcon from '@mui/icons-material/Bolt';
 import { useAuth } from '@/lib/auth/AuthProvider';
 import { apiErrorMessage } from '@/lib/api/client';
-import { USE_MOCK } from '@/lib/config';
+import { TurnstileWidget, type TurnstileHandle } from '@/components/common';
+import { TURNSTILE_SITE_KEY, USE_MOCK } from '@/lib/config';
 
 const DEMO_ACCOUNTS = [
   { role: 'Admin', email: 'admin@cmi.io' },
@@ -32,6 +33,13 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const captchaRef = useRef<TurnstileHandle | null>(null);
+  // Set when Cloudflare's script itself never loads: the operator would
+  // otherwise stare at a disabled button with no explanation.
+  const [captchaBlocked, setCaptchaBlocked] = useState(false);
+
+  const captchaRequired = Boolean(TURNSTILE_SITE_KEY);
 
   useEffect(() => {
     if (status === 'authenticated') router.replace('/command');
@@ -42,10 +50,13 @@ export default function LoginPage() {
     setError(null);
     setBusy(true);
     try {
-      await login(email, password);
+      await login(email, password, captchaToken);
       router.replace('/command');
     } catch (err) {
       setError(apiErrorMessage(err, 'Identifiants invalides'));
+      // A Turnstile token is single-use — whatever failed, the one we just
+      // sent is spent, so re-challenge before the operator retries.
+      captchaRef.current?.reset();
     } finally {
       setBusy(false);
     }
@@ -95,7 +106,27 @@ export default function LoginPage() {
                 fullWidth
                 required
               />
-              <Button type="submit" variant="contained" size="large" disabled={busy} fullWidth>
+              <TurnstileWidget
+                ref={captchaRef}
+                onToken={(t) => {
+                  setCaptchaToken(t);
+                  if (t) setCaptchaBlocked(false);
+                }}
+                onScriptError={() => setCaptchaBlocked(true)}
+              />
+              {captchaBlocked && (
+                <Alert severity="warning">
+                  Vérification anti-bot indisponible (script Cloudflare bloqué). Désactivez le
+                  bloqueur de contenu puis rechargez la page.
+                </Alert>
+              )}
+              <Button
+                type="submit"
+                variant="contained"
+                size="large"
+                disabled={busy || (captchaRequired && !captchaToken)}
+                fullWidth
+              >
                 {busy ? 'Connexion…' : 'Se connecter'}
               </Button>
             </Stack>

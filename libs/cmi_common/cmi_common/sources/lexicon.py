@@ -8,9 +8,12 @@ which coin names appear in this text, and is this ticker one of the homographs
 
 from __future__ import annotations
 
+import logging
 import re
-from collections.abc import Iterable, Mapping
+import time
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from typing import Any, Protocol
 
 from .vocab import COMMON_WORDS, SEED_COINS
 
@@ -67,3 +70,52 @@ class SymbolLexicon:
 SEED_LEXICON = SymbolLexicon.from_coins(
     [{"ticker": t, "name": n} for t, n in SEED_COINS]
 )
+
+logger = logging.getLogger(__name__)
+
+#: Redis key written by collector-coingecko, read by every content collector.
+LEXICON_KEY = "lexicon:coins"
+
+
+class _CacheLike(Protocol):
+    async def get_json(self, key: str) -> Any: ...
+
+
+class LexiconLoader:
+    """Serves the current lexicon, re-reading Redis at most every N seconds.
+
+    Failure policy is deliberate: never raise. A cold or broken Redis yields the
+    bundled seed lexicon, and a refresh that fails keeps the last good snapshot.
+    Losing the lexicon would make the relevance gate drop everything, so
+    degrading recall always beats propagating the error.
+    """
+
+    def __init__(
+        self,
+        cache: _CacheLike,
+        *,
+        refresh_seconds: float = 900.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._cache = cache
+        self._refresh = refresh_seconds
+        self._clock = clock
+        self._lexicon: SymbolLexicon | None = None
+        self._loaded_at = 0.0
+
+    async def get(self) -> SymbolLexicon:
+        now = self._clock()
+        if self._lexicon is not None and now - self._loaded_at < self._refresh:
+            return self._lexicon
+        try:
+            coins = await self._cache.get_json(LEXICON_KEY)
+        except Exception:
+            logger.warning("lexicon read failed; keeping previous", exc_info=True)
+            coins = None
+        if coins:
+            self._lexicon = SymbolLexicon.from_coins(coins)
+            self._loaded_at = now
+        elif self._lexicon is None:
+            self._lexicon = SEED_LEXICON
+            self._loaded_at = now
+        return self._lexicon

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .cascade import CircuitBreaker, RateLimitedError
-from .lexicon import SEED_LEXICON, SymbolLexicon
+from .lexicon import LEXICON_KEY, SEED_LEXICON, LexiconLoader, SymbolLexicon
 from .loop import AdaptivePollLoop
 from .provider import Provider, parse_retry_after
 from .raw import RawItem
@@ -30,6 +30,7 @@ from .runtime import (
 
 __all__ = [
     "KNOWN_PLATFORMS",
+    "LEXICON_KEY",
     "SEED_LEXICON",
     "WINDOWS",
     "AdaptivePollLoop",
@@ -37,6 +38,7 @@ __all__ = [
     "CircuitBreaker",
     "ContentRepository",
     "FakeContentRepository",
+    "LexiconLoader",
     "Provider",
     "RateLimitedError",
     "RawItem",

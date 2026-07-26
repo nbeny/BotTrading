@@ -327,7 +327,21 @@ divergence, le volume :
 | Table | Contenu | Rétention | Volume |
 |---|---|---|---|
 | `events_market` | Price, Volume, Dex | 7 j (`CMI_EVENTS_RETENTION_MARKET_D`) | élevé |
-| `events_signal` | Sentiment, Analysis, Decision, RiskApproved, Execution, AccountSnapshot | 90 j (`CMI_EVENTS_RETENTION_SIGNAL_D`) | faible |
+| `events_signal` | Sentiment, Decision, RiskApproved, Execution, AccountSnapshot | 90 j (`CMI_EVENTS_RETENTION_SIGNAL_D`) | faible |
+
+> **Corrigé le 2026-07-26, après mise en production.** Le tableau ci-dessus
+> comptait `Analysis` parmi les événements « faible volume » du palier long, et
+> le routage y envoyait aussi `RiskRejected`. Les deux prémisses étaient fausses.
+> Mesuré 8 h après la mise en service : `events_signal` contenait **179 467
+> RiskRejectedEvent et 179 002 AnalysisEvent** contre 427 sentiments et 26
+> décisions — 99,8 % de doublons, 409 Mo, sur une rétention de 90 jours, soit
+> ~110 Go promis sur un VPS où il restait 4,5 Go.
+>
+> Ce sont les deux événements les plus volumineux du système, **et** ils sont
+> déjà interrogeables ailleurs : le persister écrit `AnalysisEvent` dans
+> `signals` et `RiskRejectedEvent` dans `pipeline_rejections`. Ils rejoignent
+> donc `journal.entries` dans les exclusions, au lieu de contredire la règle qui
+> les motivait.
 
 Schéma commun, aligné sur les conventions du projet (timestamps UTC naïfs via
 `_naive_utc`, payload JSONB) :

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .cascade import CircuitBreaker, RateLimitedError
+from .lexicon import SEED_LEXICON, SymbolLexicon
 from .loop import AdaptivePollLoop
 from .provider import Provider, parse_retry_after
 from .raw import RawItem
@@ -29,6 +30,7 @@ from .runtime import (
 
 __all__ = [
     "KNOWN_PLATFORMS",
+    "SEED_LEXICON",
     "WINDOWS",
     "AdaptivePollLoop",
     "BucketRow",
@@ -40,6 +42,7 @@ __all__ = [
     "RawItem",
     "SqlContentRepository",
     "SqlSentimentAggReader",
+    "SymbolLexicon",
     "aggregate_buckets",
     "default_runtime",
     "get_runtime",

@@ -1,0 +1,62 @@
+[
+  {
+    "case": "newsdata tags a Hyperliquid article with six unrelated coins",
+    "source": "newsdata",
+    "kind": "news",
+    "title": "Hyperliquid Price Prediction Today: Key Breakout Levels for HYPE",
+    "text": "",
+    "provider_symbols": ["JST", "FLOW", "KEEP", "BTC", "ONE", "USDT", "NEAR"],
+    "expect_kept": true,
+    "expect_symbols": ["HYPE"]
+  },
+  {
+    "case": "newsdata tags a Bitcoin article with coins absent from the text",
+    "source": "newsdata",
+    "kind": "news",
+    "title": "Bitcoin (BTC) Slides Under $64K Amid Rising Treasury Yields and Weak Stablecoin Activity",
+    "text": "",
+    "provider_symbols": ["ETH", "BTC", "ONE", "USDT", "REKT", "BAND", "USDC"],
+    "expect_kept": true,
+    "expect_symbols": ["BTC"]
+  },
+  {
+    "case": "gdelt returns a football article for the cryptocurrency query",
+    "source": "gdelt",
+    "kind": "news",
+    "title": "Chelsea eye January move for defender as talks progress",
+    "text": "",
+    "provider_symbols": [],
+    "expect_kept": false,
+    "expect_symbols": []
+  },
+  {
+    "case": "regulatory news naming no coin becomes the market regime signal",
+    "source": "rss",
+    "kind": "news",
+    "title": "SEC approves a new regulatory framework for crypto exchanges",
+    "text": "",
+    "provider_symbols": [],
+    "expect_kept": true,
+    "expect_symbols": ["MARKET"]
+  },
+  {
+    "case": "an explicit cashtag confirms an otherwise ambiguous ticker",
+    "source": "bluesky",
+    "kind": "social",
+    "title": null,
+    "text": "$ONE looking strong today",
+    "provider_symbols": [],
+    "expect_kept": true,
+    "expect_symbols": ["ONE"]
+  },
+  {
+    "case": "the bare English word must not become the Harmony token",
+    "source": "bluesky",
+    "kind": "social",
+    "title": null,
+    "text": "ONE more day until the halving",
+    "provider_symbols": [],
+    "expect_kept": true,
+    "expect_symbols": ["MARKET"]
+  }
+]

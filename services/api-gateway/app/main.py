@@ -28,7 +28,6 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
             Topic.RISK_APPROVED,
             Topic.EXECUTION,
             Topic.JOURNAL,
-            Topic.ACCOUNT_SNAPSHOT,
         ],
         persister.handle,
         group_id="api-gateway-persister",
@@ -37,6 +36,23 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     app.state.db = db
     app.state.consumer = consumer
     app.state.consumer_task = asyncio.create_task(consumer.run())
+
+    # Account snapshots get their own consumer group. Measured in production:
+    # the persister runs a growing backlog on the high-volume topics -- 13910
+    # messages behind, gaining ~800 a minute -- so one snapshot a minute sat
+    # behind thousands of price and analysis events and never landed, while the
+    # balance was already sitting correct in Redis. A trickle of operator-facing
+    # state must not queue behind the firehose. Same reasoning as the archiver's
+    # separate group.
+    account_consumer = EventConsumer(
+        settings.kafka,
+        [Topic.ACCOUNT_SNAPSHOT],
+        persister.handle,
+        group_id="api-gateway-account",
+    )
+    await account_consumer.start()
+    app.state.account_consumer = account_consumer
+    app.state.account_task = asyncio.create_task(account_consumer.run())
 
     # Raw broadcast archive, so the Command Center feed survives a reload.
     archiver = EventArchiver(db)
@@ -83,10 +99,12 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
 
 async def _shutdown(app: FastAPI, settings: Settings) -> None:
     await app.state.consumer.stop()
+    await app.state.account_consumer.stop()
     await app.state.archive_consumer.stop()
     app.state.health_collector.stop()
     await asyncio.gather(
         app.state.consumer_task,
+        app.state.account_task,
         app.state.archive_task,
         app.state.health_task,
         return_exceptions=True,

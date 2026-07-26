@@ -318,11 +318,31 @@ class JournalEntryEvent(BaseEvent):
         return self.symbol
 ```
 
-- [ ] **Step 5: Export it**
+- [ ] **Step 5: Export it — and register it in the union**
 
-In `libs/cmi_common/cmi_common/events/__init__.py`, add `JournalEntryEvent` to
-the `from .journal import ...` line (create the import) and to `__all__`, in the
-existing alphabetical position.
+In `libs/cmi_common/cmi_common/events/__init__.py`:
+
+1. add `from .journal import JournalEntryEvent` alongside the other event imports;
+2. add `"JournalEntryEvent"` to `__all__`;
+3. **add `JournalEntryEvent` to the `AnyEvent` union** (after `ControlCommandEvent`).
+
+Step 3 is not optional and not cosmetic. `kafka/consumer.py` decodes every
+message through `parse_event`, which validates against that discriminated union.
+An event missing from it **publishes without error and is rejected on
+consumption** — a silent failure on the side that matters, which would only
+surface once the persister is wired up in Task 7.
+
+Pin it with a round-trip test rather than trusting the export list:
+
+```python
+def test_round_trips_through_parse_event() -> None:
+    from cmi_common.events import parse_event
+
+    ev = _minimal(escalated=True, sonnet_called=True, sonnet_validated=False)
+    decoded = parse_event(ev.as_kafka_value())
+    assert isinstance(decoded, JournalEntryEvent)
+    assert decoded.event_id == ev.event_id
+```
 
 - [ ] **Step 6: Run tests**
 

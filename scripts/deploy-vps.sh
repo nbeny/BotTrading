@@ -45,8 +45,14 @@ $COMPOSE up -d --remove-orphans || {
   $COMPOSE up -d --remove-orphans
 }
 
-echo "==> pruning dangling images"
-docker image prune -f >/dev/null 2>&1 || true
+echo "==> pruning images no longer in use"
+# `-a`, not just dangling. Every deploy pulls images tagged with the commit SHA,
+# so the previous deploy's images stay *tagged* and are therefore never
+# dangling: a dangling-only prune reclaimed nothing and 196 images had piled up
+# to 71 GB, taking the disk to 96% full with 4.5 GB left. `until=48h` keeps the
+# last two days of tags so a rollback still has something to roll back to.
+docker image prune -af --filter "until=48h" >/dev/null 2>&1 || true
+df -h / | awk 'NR==2 {print "==> disk after prune: " $4 " free (" $5 " used)"}'
 
 echo "==> deployed. Running services:"
 $COMPOSE ps

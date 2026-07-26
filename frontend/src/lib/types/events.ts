@@ -168,6 +168,30 @@ export type CmiEvent =
   | PositionChangedEvent
   | PortfolioChangedEvent;
 
+/**
+ * A row of the server-side event archive (`GET /events`). The api-gateway
+ * persists the raw broadcast stream into TimescaleDB, so the feed survives a
+ * page reload — unlike the rolling in-memory buffer of the WebSocket provider.
+ *
+ * `event_type` is a plain `string` (not `EventType`): the archive stores
+ * whatever the bus carried, including event types this client does not know.
+ */
+export interface ArchivedEvent {
+  time: string;
+  event_id: string;
+  event_type: string;
+  topic: string;
+  symbol: string | null;
+  correlation_id: string | null;
+  payload: Record<string, unknown>;
+}
+
+/** Cursor-paginated archive page. `next_cursor` is opaque — round-trip it as-is. */
+export interface EventPage {
+  items: ArchivedEvent[];
+  next_cursor: string | null;
+}
+
 /** Wrapper the WebSocket gateway pushes: `{ topic, event }`. */
 export interface WsMessage<T extends CmiEvent = CmiEvent> {
   topic: string;

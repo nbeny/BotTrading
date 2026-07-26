@@ -16,7 +16,13 @@ import type {
   TradingStatus,
   WorkerDecision,
 } from '@/lib/types/domain';
-import type { AnalysisEvent, DecisionEvent, PriceEvent, SentimentEvent } from '@/lib/types/events';
+import type {
+  AnalysisEvent,
+  DecisionEvent,
+  EventPage,
+  PriceEvent,
+  SentimentEvent,
+} from '@/lib/types/events';
 import type { FunnelStats, SystemsSnapshot } from '@/lib/types/systems';
 
 // ── Portfolio ───────────────────────────────────────────────────────────────
@@ -48,6 +54,24 @@ export const marketApi = {
     api
       .get<(PriceEvent | AnalysisEvent | SentimentEvent | DecisionEvent)[]>('/market/signals', {
         params: { limit },
+      })
+      .then((r) => r.data),
+};
+
+// ── Event archive ─────────────────────────────────────────────────────────────
+// Cursor-paginated history of the raw broadcast stream (api-gateway persists
+// every WS frame into TimescaleDB). `before` is the opaque `next_cursor` of the
+// previous page; `types` is a comma-separated list of event types.
+export const eventsApi = {
+  page: (params: { limit?: number; before?: string | null; types?: string; symbol?: string }) =>
+    api
+      .get<EventPage>('/events', {
+        params: {
+          limit: params.limit ?? 100,
+          ...(params.before ? { before: params.before } : {}),
+          ...(params.types ? { types: params.types } : {}),
+          ...(params.symbol ? { symbol: params.symbol } : {}),
+        },
       })
       .then((r) => r.data),
 };

@@ -37,6 +37,10 @@ class Features:
     sentiment_score: float | None = None  # [-1, 1]
     social_growth: float | None = None  # ratio, e.g. 0.5 == +50%
     news_impact: float | None = None  # [0, 1]
+    #: Market-wide regime read [-1, 1], from crypto content naming no coin
+    #: (regulation, macro, exchange incidents). Used only when the symbol has no
+    #: sentiment of its own — see _norm_news.
+    market_sentiment: float | None = None
     present: set[str] = field(default_factory=set)
 
 
@@ -64,13 +68,29 @@ def _norm_social(growth: float | None) -> float:
     return max(0.0, min(1.0, _sigmoid(growth, k=1.5)))
 
 
-def _norm_news(impact: float | None, sentiment: float | None) -> float:
-    if impact is None and sentiment is None:
+#: A market-wide read is real but not about this symbol, so it is pulled halfway
+#: to neutral before use: it nudges a score, it never decides one.
+_MARKET_DAMPING = 0.5
+
+
+def _norm_news(
+    impact: float | None,
+    sentiment: float | None,
+    market_sentiment: float | None = None,
+) -> float:
+    if impact is None and sentiment is None and market_sentiment is None:
         return 0.0
     base = impact if impact is not None else 0.0
-    # Fold sentiment (-1..1) into a positive news contribution.
-    sent = ((sentiment + 1) / 2) if sentiment is not None else 0.5
-    return max(0.0, min(1.0, 0.5 * base + 0.5 * sent))
+    # Fold sentiment (-1..1) into a positive news contribution. The symbol's own
+    # sentiment always wins; the market regime is a fallback for symbols that
+    # have none, which is most of them most of the time.
+    if sentiment is not None:
+        raw = sentiment
+    elif market_sentiment is not None:
+        raw = market_sentiment * _MARKET_DAMPING
+    else:
+        raw = 0.0
+    return max(0.0, min(1.0, 0.5 * base + 0.5 * ((raw + 1) / 2)))
 
 
 def _norm_trend(change_24h: float | None) -> float:
@@ -91,7 +111,11 @@ def score(features: Features) -> ScoreResult:
     breakdown = {
         "volume_growth": _norm_volume(features.volume_spike_ratio),
         "social_score": _norm_social(features.social_growth),
-        "news_score": _norm_news(features.news_impact, features.sentiment_score),
+        "news_score": _norm_news(
+            features.news_impact,
+            features.sentiment_score,
+            features.market_sentiment,
+        ),
         "market_trend": _norm_trend(features.price_change_pct_24h),
         "liquidity_score": _norm_liquidity(features.liquidity_usd),
     }
@@ -107,6 +131,10 @@ def score(features: Features) -> ScoreResult:
 
 
 def _signal_present(key: str, f: Features) -> bool:
+    # market_sentiment is deliberately absent here. Confidence measures how much
+    # symbol-specific evidence backs the score, and a market-wide read is the
+    # same number for every symbol -- counting it would lift confidence across
+    # the whole book at once, which is precisely what confidence should not do.
     return {
         "volume_growth": f.volume_spike_ratio is not None,
         "social_score": f.social_growth is not None,

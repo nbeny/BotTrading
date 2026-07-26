@@ -267,13 +267,20 @@ pre-existing credentials turn up, the provider only needs two env vars.
 
 ### Added
 
-| Source | Access | Risk |
-|---|---|---|
-| CryptoPanic | Free tier, rate-limited | Items carry currency tags and a community bullish/bearish vote — the best free symbol attribution available. |
-| StockTwits | Public endpoint | Native `$cashtag` stream. **Much of the public API was closed in 2024.** Implement, verify against the live endpoint; if it refuses, ship it disabled rather than working around the closure. |
-| Telegram | Bot API, free | Channel list from env, empty = off. The bot only reads channels it has joined, so channel selection is an operator action. High signal, high spam. |
+All three were probed **from inside a collector container on the VPS**, not from
+a laptop — The Block taught us that lesson by answering 200 at home and 403 in
+production.
 
-All three are added to `KNOWN_PLATFORMS` (`runtime.py:18`) so they appear in the
+| Source | Probe result | Status |
+|---|---|---|
+| CryptoPanic | `403` without a token (Cloudflare); the `developer/v2` endpoint is `404` | **Blocked on an operator action.** A free token at cryptopanic.com/developers unblocks it. Not written yet: without a token the response shape cannot be verified, and guessing at field names is how the NewsData tag bug happened in the first place. |
+| StockTwits | `403 Just a moment...` — a Cloudflare challenge on every endpoint tried | **Shelved.** The spec said to ship it disabled rather than work around the closure if it refused. It refuses. Getting through means impersonating a browser, which is both a terms violation and the kind of evasion this project will not do. |
+| Telegram | not probed | **Blocked on an operator action.** The Bot API only reads channels the bot has joined, and joining a public channel as a reader still requires being added by an admin. Channel selection is a human decision either way. |
+
+The two blocked sources are recorded here rather than half-built: an untested
+provider written against an unverified schema is worse than no provider.
+
+Live sources are added to `KNOWN_PLATFORMS` (`runtime.py:18`) so they appear in the
 terminal's operator toggles and can be muted without a redeploy.
 
 ## Data migration

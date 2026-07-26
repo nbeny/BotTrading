@@ -9,6 +9,8 @@ the non-AI, always-on path that complements the Sonnet analyst.
 from __future__ import annotations
 
 import logging
+import time
+from collections.abc import Callable
 
 from cmi_common.events import AnalysisEvent, BaseEvent, SentimentEvent
 from cmi_common.events.base import Source
@@ -23,12 +25,26 @@ logger = logging.getLogger(__name__)
 SERVICE = "decision-engine"
 
 
+#: Symbol the collectors assign to crypto-relevant content that names no coin --
+#: regulation, macro, exchange incidents. It moves the whole market, not one book.
+MARKET_SYMBOL = "MARKET"
+
+
 class DecisionEngine:
     def __init__(
-        self, producer: EventProducer, *, decision_threshold: int = 70
+        self,
+        producer: EventProducer,
+        *,
+        decision_threshold: int = 70,
+        market_ttl_seconds: float = 3600.0,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._producer = producer
         self._threshold = decision_threshold
+        self._market_ttl = market_ttl_seconds
+        self._clock = clock
+        #: (score, observed_at) of the most recent market-wide read.
+        self._market: tuple[float, float] | None = None
 
     async def handle(self, event: BaseEvent) -> None:
         if isinstance(event, AnalysisEvent):
@@ -37,7 +53,25 @@ class DecisionEngine:
             EVENTS_CONSUMED.labels(
                 SERVICE, Topic.SENTIMENT.value, event.event_type
             ).inc()
-            # Sentiment is folded in via the analysis features; nothing to emit.
+            # Per-symbol sentiment is already folded in via the analysis
+            # features. The market-wide read is not carried by anything else, so
+            # it is held here and applied to symbols that have none of their own.
+            if event.symbol == MARKET_SYMBOL:
+                self._market = (event.sentiment_score, self._clock())
+
+    def _market_sentiment(self) -> float | None:
+        """The current regime read, or None once it is too old to mean anything.
+
+        Without the expiry a quiet weekend would keep applying Friday's mood to
+        Monday's decisions, and a collector outage would freeze the last value
+        in place indefinitely.
+        """
+        if self._market is None:
+            return None
+        value, observed_at = self._market
+        if self._clock() - observed_at > self._market_ttl:
+            return None
+        return value
 
     async def _on_analysis(self, event: AnalysisEvent) -> None:
         EVENTS_CONSUMED.labels(SERVICE, Topic.ANALYSIS.value, event.event_type).inc()
@@ -49,6 +83,7 @@ class DecisionEngine:
             sentiment_score=event.sentiment_score,
             social_growth=event.social_growth,
             news_impact=1.0 if raw.get("has_news") else None,
+            market_sentiment=self._market_sentiment(),
         )
         result = score(features)
         if result.opportunity_score < self._threshold:

@@ -64,7 +64,10 @@ class SentimentDbWorker:
                 confidence=result.confidence,
                 model=result.model_name,
             )
-            symbols = row.symbols or ["MARKET"]
+            # Every stored row carries at least one symbol: the collectors'
+            # normalizer assigns MARKET to symbol-less crypto content and drops
+            # everything else. A fallback here would mask a broken invariant.
+            symbols = row.symbols
             bucket_start = _floor_hour(row.published_at)
             engagement = float(row.engagement or 0.0)
             for symbol in symbols:

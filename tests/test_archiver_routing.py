@@ -95,6 +95,10 @@ def test_row_carries_the_full_payload_and_the_indexed_columns() -> None:
     row = arch.to_row(ev, topic="market.price.events")
     assert row["event_id"] == ev.event_id
     assert row["event_type"] == "PriceEvent"
+    # `==` seule ne suffit pas : EventType hérite de str, donc le membre d'enum
+    # passerait ce test tout en s'affichant « EventType.PRICE » dès qu'un f-string
+    # ou une étiquette Prometheus le formate. C'est le type qu'on vérifie.
+    assert type(row["event_type"]) is str
     assert row["symbol"] == "BTC"
     assert row["topic"] == "market.price.events"
     assert row["correlation_id"] == ev.correlation_id

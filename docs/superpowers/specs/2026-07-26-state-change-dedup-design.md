@@ -59,6 +59,36 @@ apprendre.
 
 ---
 
+## 1 bis. Ce que la déduplication n'est pas
+
+La déduplication décide **quand redemander un avis**, jamais **si un signal est
+intéressant**. Ces deux questions doivent rester séparées, et la séparation est
+structurelle, pas conventionnelle.
+
+Le flux reste :
+
+```
+market data → features → opportunité détectée (gate escalate)
+            → dédup : un nouvel avis est-il nécessaire ?
+            → Sonnet → risk-engine → trading-engine
+```
+
+Vérifié dans le code : `ai-worker-sonnet/app/worker.py:55` teste `event.escalate`
+**avant** d'appeler `_may_call` ligne 59. La déduplication ne reçoit que des
+événements ayant déjà franchi le gate d'opportunité — elle ne peut donc pas, par
+construction, promouvoir un signal au rang d'opportunité.
+
+Conséquence pratique : un symbole devenu éligible pour la première fois n'a pas
+d'ancre et déclenche T1. C'est le *gate* qui a changé d'avis, pas la
+déduplication. Les deux mécanismes ne se recouvrent jamais.
+
+Un déclencheur mérite une précision à ce titre : **T4 (franchissement de seuil)
+ne juge pas de l'opportunité.** Le gate a déjà dit oui ; T4 constate seulement que
+l'issue en aval a changé et que le verdict précédent de l'analyste ne s'applique
+donc plus.
+
+---
+
 ## 2. Pourquoi pas un simple hash
 
 La consigne demandait « hash du vecteur de features ». Un hash pur, même sur les
@@ -99,9 +129,34 @@ explicitement, pas par Redis — voir §3.4) :
   "chg_sign": 1,
   "sent_sign": 1,
   "regime": "r7",
-  "called_at": 1785801600
+  "called_at": 1785801600,
+
+  "dedup_version": "2026-07-26.1",
+  "quantile": 0.99,
+  "deltas": {"momentum": 0.114, "volume": 0.049, "sentiment": 0.370, "liquidity": null},
+  "calibrated_at": "2026-07-26T00:00:00Z"
 }
 ```
+
+### Provenance de calibration
+
+Les quatre derniers champs ne servent pas à la décision — ils servent à
+**l'expliquer après coup**.
+
+Sans eux, une ancre posée sous un jeu de seuils puis comparée sous un autre
+produit un verdict inexplicable : on ne peut plus dire si un appel a été déclenché
+par un vrai changement d'état ou par une recalibration entre-temps. Avec le
+journal contrefactuel, cette ambiguïté fausserait l'analyse elle-même.
+
+Règle : **le verdict est calculé avec les seuils de l'ancre, pas avec les seuils
+courants.** Une recalibration ne réécrit pas rétroactivement l'interprétation des
+ancres existantes ; chaque ancre porte le contrat sous lequel elle a été posée.
+La bascule vers de nouveaux seuils se fait naturellement au prochain appel, qui
+repose une ancre avec la calibration en vigueur.
+
+`dedup_version` est un identifiant versionné (`AAAA-MM-JJ.n`) émis par le script
+de recalibration et journalisé à chaque changement. Une ancre dont la version est
+inconnue du registre est traitée comme T1 — échec ouvert, cohérent avec §7.
 
 ### 3.1 Déclencheurs — l'un d'eux suffit
 

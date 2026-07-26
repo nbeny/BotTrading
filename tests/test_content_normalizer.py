@@ -282,3 +282,28 @@ def test_two_generic_terms_or_one_specific_term_still_admit() -> None:
 
     one_strong = _norm().apply([_item(title="A new stablecoin launches this week")])
     assert one_strong.kept[0].symbols == ["MARKET"]
+
+
+def test_finance_acronyms_are_not_tickers() -> None:
+    # Observed in production 90 minutes after phase 1 shipped: "XRP Rewards
+    # Program Launches with 22.25% APR on Binance" booked APR, which here means
+    # annual percentage rate. Same class as ATH -- crypto jargon that is also
+    # somebody's ticker -- and it hit twice in the first 39 rows.
+    lex = SymbolLexicon.from_coins(
+        [
+            {"ticker": "XRP", "name": "XRP"},
+            {"ticker": "APR", "name": "April"},
+            {"ticker": "USD1", "name": "World Liberty USD1"},
+        ]
+    )
+    norm = ContentNormalizer(lex)
+
+    result = norm.apply(
+        [_item(title="XRP Rewards Program Launches with 22.25% APR on Binance")]
+    )
+    assert result.kept[0].symbols == ["XRP"]
+
+    second = norm.apply(
+        [_item(title="Binance New USD1 Campaign Offers Up to 8.5% APR for Users")]
+    )
+    assert second.kept[0].symbols == ["USD1"]

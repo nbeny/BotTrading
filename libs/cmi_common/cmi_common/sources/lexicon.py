@@ -88,6 +88,14 @@ class LexiconLoader:
     bundled seed lexicon, and a refresh that fails keeps the last good snapshot.
     Losing the lexicon would make the relevance gate drop everything, so
     degrading recall always beats propagating the error.
+
+    The seed is a stopgap, not a resting state: while it is what we are serving,
+    Redis is re-probed on ``seed_retry_seconds`` instead of the full refresh
+    window. On a cold stack the content collectors start alongside
+    collector-coingecko, so ``lexicon:coins`` is reliably absent for the first
+    few seconds — without the short retry they would spend a quarter of an hour
+    resolving against 50 coins instead of the top 200, silently booking real
+    symbols as MARKET.
     """
 
     def __init__(
@@ -95,17 +103,20 @@ class LexiconLoader:
         cache: _CacheLike,
         *,
         refresh_seconds: float = 900.0,
+        seed_retry_seconds: float = 60.0,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._cache = cache
         self._refresh = refresh_seconds
+        self._seed_retry = seed_retry_seconds
         self._clock = clock
         self._lexicon: SymbolLexicon | None = None
         self._loaded_at = 0.0
 
     async def get(self) -> SymbolLexicon:
         now = self._clock()
-        if self._lexicon is not None and now - self._loaded_at < self._refresh:
+        window = self._seed_retry if self._lexicon is SEED_LEXICON else self._refresh
+        if self._lexicon is not None and now - self._loaded_at < window:
             return self._lexicon
         try:
             coins = await self._cache.get_json(LEXICON_KEY)
@@ -114,8 +125,9 @@ class LexiconLoader:
             coins = None
         if coins:
             self._lexicon = SymbolLexicon.from_coins(coins)
-            self._loaded_at = now
         elif self._lexicon is None:
             self._lexicon = SEED_LEXICON
-            self._loaded_at = now
+        # Stamped on every probe, successful or not, so a persistently empty
+        # Redis is re-read on the window rather than on every single call.
+        self._loaded_at = now
         return self._lexicon

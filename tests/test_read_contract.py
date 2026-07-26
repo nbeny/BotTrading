@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from service_modules import load_service_module
 
 read_api = load_service_module("api-gateway", "read_api")
+journal_api = load_service_module("api-gateway", "journal_api")
 
 compute_exposure = read_api.compute_exposure
 compute_portfolio = read_api.compute_portfolio
@@ -86,7 +87,9 @@ class _FakeSession:
     def __init__(self, n):
         self._n = n
 
-    async def execute(self, _stmt):
+    async def execute(self, _stmt, _params=None):
+        """``_params`` is optional: most endpoints bind parameters into the
+        statement, the journal summary passes them as a second argument."""
         if self._n <= 0:
             return _Result()
         self._n -= 1
@@ -189,6 +192,11 @@ async def test_trace_contract() -> None:
 async def test_systems_funnel_contract() -> None:
     resp = await read_api.systems_funnel(window="24h", session=_FakeSession(40))
     _assert_keys("systems/funnel", resp)
+
+
+async def test_systems_journal_summary_contract() -> None:
+    resp = await journal_api.journal_summary(window="30d", session=_FakeSession(40))
+    _assert_keys("systems/journal/summary", resp)
 
 
 # ── manifest coverage ─────────────────────────────────────────────────────────

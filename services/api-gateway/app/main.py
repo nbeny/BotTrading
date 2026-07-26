@@ -10,7 +10,7 @@ from cmi_common import Settings, create_app
 from cmi_common.db import Database
 from cmi_common.kafka import EventConsumer, Topic
 
-from . import read_api, routers
+from . import journal_api, read_api, routers
 from .health_collector import HealthCollector
 from .persister import Persister
 
@@ -58,3 +58,5 @@ app = create_app("api-gateway", on_startup=_startup, on_shutdown=_shutdown)
 app.include_router(routers.router)
 # Live-mode read API backing the web terminal (market + data explorer).
 app.include_router(read_api.router)
+# Counterfactual-journal summary (own router: read_api is already ~1000 lines).
+app.include_router(journal_api.router)

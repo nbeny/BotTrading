@@ -125,3 +125,50 @@ def test_a_shouted_non_crypto_headline_yields_no_symbol() -> None:
     result = _norm().apply([_item(title="ALL THE HYPE IS ABOUT NOTHING")])
     assert result.kept == []
     assert result.dropped[0][1] == "not_relevant"
+
+
+PROSE_LEX = SymbolLexicon.from_coins(
+    [
+        {"ticker": "MKR", "name": "Maker"},
+        {"ticker": "FLOW", "name": "Flow"},
+        {"ticker": "DASH", "name": "Dash"},
+        {"ticker": "CRV", "name": "Curve"},
+        {"ticker": "BTC", "name": "Bitcoin"},
+    ]
+)
+
+
+def _prose_norm() -> ContentNormalizer:
+    return ContentNormalizer(PROSE_LEX)
+
+
+def test_a_coin_name_that_reads_as_prose_proves_nothing_alone() -> None:
+    # The ambiguity guard covered tickers but not names, so "the market maker"
+    # booked MKR and "cash flow analysis" booked FLOW. Worse, a name match is
+    # what unlocks an ambiguous ticker, so one stray noun opened both channels.
+    for title in (
+        "The market maker adjusted his quotes",
+        "Cash flow analysis for the quarter",
+        "The yield curve steepened after the Fed meeting",
+    ):
+        result = _prose_norm().apply([_item(title=title)])
+        assert result.kept == [], title
+        assert result.dropped[0][1] == "not_relevant", title
+
+
+def test_a_prose_name_corroborates_its_own_ticker() -> None:
+    # Without this, coins whose ticker AND name are both English words would be
+    # unreachable: each channel would be waiting on the other.
+    result = _prose_norm().apply([_item(title="Dash (DASH) surges after the upgrade")])
+    assert result.kept[0].symbols == ["DASH"]
+
+
+def test_a_prose_name_does_not_corroborate_a_different_ticker() -> None:
+    result = _prose_norm().apply([_item(title="Cash flow into Bitcoin accelerates")])
+    assert result.kept[0].symbols == ["BTC"]
+
+
+def test_a_multiword_name_is_still_trusted_on_its_own() -> None:
+    lex = SymbolLexicon.from_coins([{"ticker": "BCH", "name": "Bitcoin Cash"}])
+    result = ContentNormalizer(lex).apply([_item(title="Bitcoin Cash hard fork lands")])
+    assert result.kept[0].symbols == ["BCH"]

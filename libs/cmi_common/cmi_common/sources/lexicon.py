@@ -21,18 +21,46 @@ from .vocab import COMMON_WORDS, SEED_COINS
 _MIN_NAME_LEN = 4
 
 
+def _is_prose(name: str) -> bool:
+    """True for a one-word coin name that is also an ordinary English word.
+
+    The homograph guard protects the *ticker* channel: bare ``FLOW`` is
+    disbelieved unless corroborated. Coin *names* had no such guard, so "cash
+    flow analysis" resolved to FLOW and "the market maker" to MKR — and worse, a
+    name match is itself what corroborates an ambiguous ticker, so one stray
+    noun unlocked both channels at once.
+
+    Multi-word names ("Keep Network", "Bitcoin Cash") are safe: prose does not
+    produce them by accident. Only single-word names need this test.
+    """
+    return " " not in name and name.upper() in COMMON_WORDS
+
+
+def _alternation(names: Iterable[str]) -> re.Pattern[str] | None:
+    """One word-bounded alternation, longest first so "bitcoin cash" beats "bitcoin"."""
+    ordered = sorted(names, key=len, reverse=True)
+    if not ordered:
+        return None
+    return re.compile(r"\b(" + "|".join(re.escape(n) for n in ordered) + r")\b")
+
+
 @dataclass(frozen=True, slots=True)
 class SymbolLexicon:
     by_ticker: Mapping[str, str]
     by_name: Mapping[str, str]
+    #: Single-word names that are also ordinary English ("Flow", "Maker"). Kept
+    #: apart because seeing one proves nothing on its own — see prose_names_in.
+    prose_names: Mapping[str, str]
     ambiguous: frozenset[str]
     _name_re: re.Pattern[str] | None
+    _prose_re: re.Pattern[str] | None
 
     @classmethod
     def from_coins(cls, coins: Iterable[Mapping[str, str]]) -> SymbolLexicon:
         """Build a snapshot from ``[{"ticker": "BTC", "name": "Bitcoin"}, ...]``."""
         by_ticker: dict[str, str] = {}
         by_name: dict[str, str] = {}
+        prose_names: dict[str, str] = {}
         for coin in coins:
             ticker = (coin.get("ticker") or "").strip().upper()
             name = (coin.get("name") or "").strip().lower()
@@ -40,27 +68,40 @@ class SymbolLexicon:
                 continue
             by_ticker[ticker] = ticker
             if len(name) >= _MIN_NAME_LEN:
-                by_name[name] = ticker
+                target = prose_names if _is_prose(name) else by_name
+                target[name] = ticker
         ambiguous = frozenset(t for t in by_ticker if t in COMMON_WORDS)
-        # One alternation over all names beats N searches per item. Longest
-        # first so "bitcoin cash" wins over "bitcoin".
-        names = sorted(by_name, key=len, reverse=True)
-        pattern = (
-            re.compile(r"\b(" + "|".join(re.escape(n) for n in names) + r")\b")
-            if names
-            else None
+        return cls(
+            by_ticker,
+            by_name,
+            prose_names,
+            ambiguous,
+            _alternation(by_name),
+            _alternation(prose_names),
         )
-        return cls(by_ticker, by_name, ambiguous, pattern)
 
     def resolve_ticker(self, token: str) -> str | None:
         """Canonical symbol for a ticker-shaped token, or None if out of universe."""
         return self.by_ticker.get(token.strip().upper())
 
     def names_in(self, lowered_text: str) -> set[str]:
-        """Symbols whose full coin name appears in `lowered_text`."""
+        """Symbols whose full coin name appears in `lowered_text`, and is trusted.
+
+        Excludes prose names — "cash flow analysis" must not mean the FLOW token.
+        """
         if self._name_re is None:
             return set()
         return {self.by_name[m] for m in self._name_re.findall(lowered_text)}
+
+    def prose_names_in(self, lowered_text: str) -> set[str]:
+        """Symbols whose name appeared but reads as ordinary English.
+
+        Not evidence by itself. It corroborates the coin's own ticker, so
+        "Dash (DASH) surges" resolves while "a dash of salt" does not.
+        """
+        if self._prose_re is None:
+            return set()
+        return {self.prose_names[m] for m in self._prose_re.findall(lowered_text)}
 
     def is_ambiguous(self, symbol: str) -> bool:
         """True when the ticker is also an ordinary English word."""

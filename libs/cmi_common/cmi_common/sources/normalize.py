@@ -66,6 +66,9 @@ class ContentNormalizer:
     def _resolve(self, text: str) -> list[str]:
         lowered = text.lower()
         named = self._lex.names_in(lowered)
+        # A name that reads as ordinary English ("Flow", "Maker") is not evidence
+        # on its own, but it does corroborate its own ticker.
+        prose = self._lex.prose_names_in(lowered)
         confirmed: set[str] = set(named)
 
         # A cashtag is an explicit claim by the author, so it confirms an
@@ -79,7 +82,9 @@ class ContentNormalizer:
         for token in _UPPER_TOKEN.findall(text):
             symbol = self._lex.resolve_ticker(token)
             if symbol is None or (
-                self._lex.is_ambiguous(symbol) and symbol not in named
+                self._lex.is_ambiguous(symbol)
+                and symbol not in named
+                and symbol not in prose
             ):
                 continue
             confirmed.add(symbol)

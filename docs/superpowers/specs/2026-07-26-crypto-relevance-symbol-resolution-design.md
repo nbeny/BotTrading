@@ -1,7 +1,8 @@
 # Crypto Relevance & Symbol Resolution — Design
 
 **Date:** 2026-07-26
-**Status:** Approved (design), pending implementation plan
+**Status:** Phase 1 implemented and merged. Phases 2-4 pending — phase 2 (the
+data wipe) must not run until phase 1 is observed behaving in production.
 **Services touched:** `libs/cmi_common`, `collector-social`, `collector-news`,
 `collector-coingecko`, `sentiment-service`, `decision-engine`, `scripts/`
 
@@ -124,10 +125,11 @@ list against the live universe, not the seed, whenever the universe rotates.**
 There is a recall cost, accepted deliberately: a homograph ticker now needs its
 coin name or a cashtag, so `ARB unlock schedule tomorrow` resolves to nothing
 unless "Arbitrum" appears. Crypto coverage almost always names the project, and
-precision is the stated priority. Today that yields
-`ONE, CORE, FORM, PEOPLE, KEEP, FLOW, NEAR, BAND, LINK, UNI, GAS, TIME, WIN,
-MASK, …` — i.e. exactly the observed false positives. As the universe rotates,
-the set updates itself.
+precision is the stated priority.
+
+Against the seed universe the computed set is `ONE, CORE, FORM, PEOPLE, KEEP,
+FLOW, NEAR, BAND, LINK, UNI, GAS, TIME, WIN, MASK, …` — exactly the false
+positives observed in production.
 
 **Cold-start fallback:** a seed list of ~50 major coins is bundled in the package.
 An empty or unreachable Redis falls back to the seed rather than to an empty

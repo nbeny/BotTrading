@@ -17,6 +17,7 @@ from .base import BaseEvent, EventType, Source
 from .control import ControlCommand, ControlCommandEvent
 from .decision import DecisionEvent, Direction
 from .execution import ExecutionEvent, ExecutionKind
+from .journal import JournalEntryEvent
 from .market import DexEvent, PriceEvent, VolumeEvent
 from .news import NewsEvent
 from .risk import RiskApprovedEvent, RiskRejectedEvent
@@ -67,6 +68,7 @@ __all__ = [
     "EventType",
     "ExecutionEvent",
     "ExecutionKind",
+    "JournalEntryEvent",
     "NewsEvent",
     "PriceEvent",
     "RiskApprovedEvent",

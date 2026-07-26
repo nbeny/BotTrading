@@ -37,6 +37,7 @@ class EventType(str, Enum):
     RISK_APPROVED = "RiskApprovedEvent"
     RISK_REJECTED = "RiskRejectedEvent"
     EXECUTION = "ExecutionEvent"
+    JOURNAL_ENTRY = "JournalEntryEvent"
     CONTROL_COMMAND = "ControlCommandEvent"
 
 

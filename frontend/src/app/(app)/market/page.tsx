@@ -5,7 +5,7 @@ import { Box, Card, CardContent, Skeleton, Typography } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
 import { marketApi } from '@/lib/api/endpoints';
 import { PageHeader } from '@/components/common';
-import { LiveFeed } from '@/components/realtime/LiveFeed';
+import { LiveEventStream } from '@/components/command/LiveEventStream';
 import { TokensTable } from '@/components/market/TokensTable';
 import { TokenPricePanel } from '@/components/market/TokenPricePanel';
 import { WorkerDecisionsPanel } from '@/components/market/WorkerDecisionsPanel';
@@ -98,15 +98,30 @@ export default function MarketPage() {
       </Box>
 
       {/* ── Bottom row: news | live feed ─────────────────────────────────── */}
+      {/* `alignItems: start` so the feed keeps its own height: the news column
+          is far taller, and a stretched feed card would be mostly empty space
+          below the pagination control. */}
       <Box
         sx={{
           display: 'grid',
           gap: 3,
           gridTemplateColumns: { xs: '1fr', lg: '1fr 1fr' },
+          alignItems: 'start',
         }}
       >
         <NewsPanel news={news} loading={newsLoading} now={now} />
-        <LiveFeed height={420} title="Analyses IA en direct" />
+        {/* Wrapped: SectionCard sets `height: 100%`, which resolves against the
+            grid area and would stretch the feed to the height of the news
+            column. The intermediate Box is auto-height, so the card keeps its
+            own size. No trace drawer here, so no `onSelect` — rows stay
+            read-only. */}
+        <Box>
+          <LiveEventStream
+            height={420}
+            title="Analyses IA en direct"
+            subtitle="Historique archivé + flux temps réel"
+          />
+        </Box>
       </Box>
     </Box>
   );

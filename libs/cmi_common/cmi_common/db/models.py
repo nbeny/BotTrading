@@ -192,6 +192,33 @@ class DecisionJournal(Base):
     realized_pnl: Mapped[Decimal | None] = mapped_column(Numeric(38, 12), default=None)
 
 
+class _EventArchiveMixin:
+    """Raw broadcast-stream archive. Two tables share this shape and differ only
+    in retention: TimescaleDB drops whole chunks by time and cannot filter by
+    event type, so differentiated retention requires separate hypertables."""
+
+    time: Mapped[datetime] = mapped_column(primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(32))
+    topic: Mapped[str] = mapped_column(String(64))
+    symbol: Mapped[str | None] = mapped_column(String(32), default=None)
+    correlation_id: Mapped[str | None] = mapped_column(String(64), default=None)
+    payload: Mapped[dict] = mapped_column(JSONB, default=dict)
+
+
+class EventMarket(Base, _EventArchiveMixin):
+    """Price, volume and dex events -- high volume, 7-day retention."""
+
+    __tablename__ = "events_market"
+
+
+class EventSignal(Base, _EventArchiveMixin):
+    """Sentiment, analysis, decision, risk and execution events -- low volume,
+    90-day retention, because these are the ones worth looking back at."""
+
+    __tablename__ = "events_signal"
+
+
 class Decision(Base, TimestampMixin):
     __tablename__ = "decisions"
 
@@ -343,4 +370,6 @@ HYPERTABLES = {
     "signals": "time",
     "pipeline_rejections": "time",
     "decision_journal": "time",
+    "events_market": "time",
+    "events_signal": "time",
 }

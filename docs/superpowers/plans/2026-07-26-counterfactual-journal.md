@@ -590,7 +590,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("SELECT remove_retention_policy('decision_journal', if_not_exists => TRUE)")
+    # `if_exists`, not `if_not_exists`: the latter belongs to
+    # add_retention_policy. The wrong keyword raises an unknown-argument error
+    # *before* the DROP TABLE, leaving the downgrade unable to complete.
+    op.execute("SELECT remove_retention_policy('decision_journal', if_exists => TRUE)")
     op.drop_table("decision_journal")
 ```
 

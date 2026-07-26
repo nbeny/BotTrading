@@ -121,11 +121,10 @@ lexicon, so a restart degrades recall instead of silently dropping all content.
 
 `ContentNormalizer.apply` runs each item through, in order:
 
-**Gate 1 — symbol resolution.** Candidates are gathered from four channels:
-explicit `$CASHTAG` matches; uppercase ticker tokens on word boundaries; full coin
-names from `by_name`; and provider-supplied tags (NewsData `coin`, CryptoCompare
-`categories`, CryptoPanic `currencies`). Every candidate — **including
-provider-supplied ones** — is then confirmed against the same rules:
+**Gate 1 — symbol resolution.** Candidates are derived **from the item's own text
+only** (title + body), through three channels: explicit `$CASHTAG` matches;
+uppercase ticker tokens on word boundaries; and full coin names from `by_name`.
+Each candidate is then confirmed:
 
 | Candidate | Rule |
 |---|---|
@@ -133,8 +132,18 @@ provider-supplied ones** — is then confirmed against the same rules:
 | In universe, ticker in `ambiguous` | accept **only** if it arrived as an explicit cashtag, or the coin's full name appears in the text |
 | Not in universe | accept **only** if it arrived as an explicit cashtag |
 
-Routing provider tags through the validator is what removes the `ONE`/`JST`
-pollution: NewsData's tags survive only where they are corroborated by the text.
+**Provider-supplied tags (NewsData `coin`, CryptoCompare `categories`, CryptoPanic
+`currencies`) are discarded, not validated.** Validating a tag can only mean
+"the ticker or the coin name appears in the text" — which is exactly what text
+extraction already computes, so a validated-tag channel adds nothing and only
+adds a way to be wrong. This is the change that removes the `ONE`/`JST`
+pollution at its source: NewsData tagged the Bitcoin article `USDT, USDC, ETH,
+ONE, REKT, BAND`, and none of those strings, nor their coin names, occur in the
+article. Only `BTC` survives, via the word "Bitcoin".
+
+Per-provider trusted-tag opt-in (plausible for StockTwits' user-declared
+cashtags or CryptoPanic's editorial currencies) is a deliberate later extension,
+to be justified by measurement rather than assumed now.
 
 **Gate 2 — crypto relevance.** The item is kept if it has at least one confirmed
 symbol, **or** matches at least one term from a bundled crypto vocabulary
@@ -148,8 +157,10 @@ the fact explicitly instead of the worker inventing it later. The
 becomes "every stored row has at least one symbol".
 
 **Observability:** a `CONTENT_DROPPED{source, reason}` Prometheus counter, with
-`reason` in `{not_relevant, no_confirmed_symbol}`, exposed on the existing
-`/metrics` endpoint. The filter's behaviour is measured, not assumed.
+`reason` in `{not_relevant, empty_text}`, exposed on the existing `/metrics`
+endpoint. The filter's behaviour is measured, not assumed. (There is no
+`no_confirmed_symbol` reason: an item with no confirmed symbol but with crypto
+vocabulary is kept as `MARKET` by Gate 3 rather than dropped.)
 
 ### Wiring MARKET into decisions
 

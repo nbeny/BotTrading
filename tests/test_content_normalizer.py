@@ -172,3 +172,62 @@ def test_a_multiword_name_is_still_trusted_on_its_own() -> None:
     lex = SymbolLexicon.from_coins([{"ticker": "BCH", "name": "Bitcoin Cash"}])
     result = ContentNormalizer(lex).apply([_item(title="Bitcoin Cash hard fork lands")])
     assert result.kept[0].symbols == ["BCH"]
+
+
+REVIEW_LEX = SymbolLexicon.from_coins(
+    [
+        {"ticker": "ONE", "name": "Harmony"},
+        {"ticker": "GRT", "name": "The Graph"},
+        {"ticker": "SAND", "name": "The Sandbox"},
+        {"ticker": "ATH", "name": "Aethir"},
+        {"ticker": "BTC", "name": "Bitcoin"},
+    ]
+)
+
+
+def _review_norm() -> ContentNormalizer:
+    return ContentNormalizer(REVIEW_LEX)
+
+
+def test_a_spelled_out_dollar_amount_is_not_a_cashtag() -> None:
+    # "$one million" resurrected ONE -- the single worst false positive in
+    # production -- through the cashtag channel, which also satisfies the
+    # relevance gate, so the row skipped every other check on its way in.
+    for title in (
+        "The fund is worth $one million after the raise",
+        "Analysts see a $trillion opportunity",
+        "Revenue up to $ten billion this year",
+    ):
+        result = _review_norm().apply([_item(title=title)])
+        assert result.kept == [], title
+
+
+def test_an_uppercase_cashtag_still_works() -> None:
+    result = _review_norm().apply([_item(title="$ONE is pumping")])
+    assert result.kept[0].symbols == ["ONE"]
+
+
+def test_a_multiword_name_of_ordinary_words_proves_nothing_alone() -> None:
+    # "The Graph" ships in the seed universe, so this fired on day one:
+    # an inflation article booked GRT, and a devops one booked SAND.
+    for title in (
+        "As the graph shows, inflation cooled in June",
+        "The sandbox environment was misconfigured, engineers say",
+    ):
+        result = _review_norm().apply([_item(title=title)])
+        assert result.kept == [], title
+
+
+def test_a_multiword_prose_name_corroborates_its_own_ticker() -> None:
+    result = _review_norm().apply([_item(title="The Graph GRT indexer rewards rise")])
+    assert result.kept[0].symbols == ["GRT"]
+
+
+def test_a_ticker_that_is_crypto_jargon_needs_corroboration() -> None:
+    # ATH means "all-time high" in most crypto copy and is also Aethir's ticker.
+    # Uncorroborated it would have climbed the aggregate table exactly as ONE did.
+    result = _review_norm().apply([_item(title="BTC ATH incoming, says analyst")])
+    assert result.kept[0].symbols == ["BTC"]
+
+    named = _review_norm().apply([_item(title="Aethir ATH node sale opens")])
+    assert named.kept[0].symbols == ["ATH"]

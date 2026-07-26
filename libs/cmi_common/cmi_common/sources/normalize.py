@@ -26,7 +26,11 @@ MARKET_SYMBOL = "MARKET"
 DROP_NOT_RELEVANT = "not_relevant"
 DROP_EMPTY_TEXT = "empty_text"
 
-_CASHTAG = re.compile(r"\$([A-Za-z][A-Za-z0-9]{1,9})\b")
+# Uppercase body only. A lowercase one is a spelled-out amount, not a ticker:
+# "$one million" and "$trillion" otherwise resolved to ONE and to an invented
+# TRILLION -- and because a cashtag also satisfies the relevance gate, the item
+# skipped every other check on its way into the database.
+_CASHTAG = re.compile(r"\$([A-Z][A-Z0-9]{1,9})\b")
 _UPPER_TOKEN = re.compile(r"\b([A-Z][A-Z0-9]{1,9})\b")
 _KEYWORD = re.compile(
     r"\b("

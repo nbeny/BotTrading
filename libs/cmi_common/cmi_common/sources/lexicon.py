@@ -22,7 +22,7 @@ _MIN_NAME_LEN = 4
 
 
 def _is_prose(name: str) -> bool:
-    """True for a one-word coin name that is also an ordinary English word.
+    """True for a coin name an ordinary sentence can produce by accident.
 
     The homograph guard protects the *ticker* channel: bare ``FLOW`` is
     disbelieved unless corroborated. Coin *names* had no such guard, so "cash
@@ -30,10 +30,14 @@ def _is_prose(name: str) -> bool:
     name match is itself what corroborates an ambiguous ticker, so one stray
     noun unlocked both channels at once.
 
-    Multi-word names ("Keep Network", "Bitcoin Cash") are safe: prose does not
-    produce them by accident. Only single-word names need this test.
+    Word count is not the test. An earlier version exempted multi-word names on
+    the theory that prose does not produce them by accident, and "The Graph"
+    (GRT, in the seed) disproved it immediately: "as the graph shows, inflation
+    cooled" booked GRT. A name is prose when *every* word in it is ordinary
+    English, so "The Graph" and "The Sandbox" qualify while "Bitcoin Cash" and
+    "Keep Network" do not.
     """
-    return " " not in name and name.upper() in COMMON_WORDS
+    return all(word.upper() in COMMON_WORDS for word in name.split())
 
 
 def _alternation(names: Iterable[str]) -> re.Pattern[str] | None:

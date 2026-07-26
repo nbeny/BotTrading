@@ -138,7 +138,9 @@ async def test_normalizer_runs_between_fetch_and_persist() -> None:
 async def test_loop_without_a_normalizer_persists_unchanged() -> None:
     # The hook is optional so existing wiring keeps working untouched.
     repo = FakeContentRepository()
-    provider = StubProvider(items=[RawItem(source="stub", kind="social", external_id="1")])
+    provider = StubProvider(
+        items=[RawItem(source="stub", kind="social", external_id="1")]
+    )
     sleeps = Sleeps(stop_after=1)
     loop = AdaptivePollLoop(provider, repo, FakeCache(), poll_interval=300,
                             service="collector-social", sleep=sleeps)
@@ -157,7 +159,9 @@ async def test_normalizer_error_backs_off_and_does_not_persist() -> None:
     # A normalizer failure must be treated exactly like a DB failure: back off,
     # do not persist, and do not kill the loop.
     repo = FakeContentRepository()
-    provider = StubProvider(items=[RawItem(source="stub", kind="social", external_id="1")])
+    provider = StubProvider(
+        items=[RawItem(source="stub", kind="social", external_id="1")]
+    )
     sleeps = Sleeps(stop_after=1)
     loop = AdaptivePollLoop(provider, repo, FakeCache(), poll_interval=300,
                             service="collector-social", error_backoff=120, sleep=sleeps,

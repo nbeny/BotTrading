@@ -15,12 +15,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .journal_query import MIN_SAMPLE, by_cohort, compare_groups, matured
-
-# `decision_journal.time` is timestamptz, so the aware helper is the right one;
-# shared with read_api rather than re-derived, and read_api imports nothing from
-# here, so there is no cycle.
-from .read_api import _utcnow
+from .journal_query import MIN_SAMPLE, by_cohort, compare_groups, matured, utcnow
 from .routers import get_session_dep
 
 router = APIRouter(tags=["journal"])
@@ -38,7 +33,7 @@ async def journal_summary(
     window: str = Query("30d", pattern="^(7d|30d|90d)$"),
     session: AsyncSession = Depends(get_session_dep),
 ) -> dict[str, Any]:
-    since = _utcnow() - timedelta(days=_WINDOWS[window])
+    since = utcnow() - timedelta(days=_WINDOWS[window])
     result = await session.execute(
         text(
             "SELECT symbol, escalated, sonnet_called, sonnet_validated, "
@@ -88,5 +83,5 @@ async def journal_summary(
             "by_dedup_trigger": by_cohort(rows, key="dedup_trigger"),
             "by_symbol": by_cohort(rows, key="symbol"),
         },
-        "updated_at": _utcnow().isoformat(),
+        "updated_at": utcnow().isoformat(),
     }

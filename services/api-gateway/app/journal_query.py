@@ -8,7 +8,7 @@ action -- so below the floor every comparison returns null instead.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import text
@@ -21,6 +21,13 @@ MIN_SAMPLE = 30
 # absence instead of an approximation.
 PRICE_TOLERANCE = timedelta(minutes=10)
 DEFAULT_HORIZONS = ("1h", "4h", "24h")
+
+
+def utcnow() -> datetime:
+    """Aware UTC. ``decision_journal.time`` is timestamptz, so comparisons and
+    timestamps here must carry a zone -- unlike the naive-UTC helper the
+    persister uses on the write side."""
+    return datetime.now(tz=timezone.utc)
 
 
 def _mean(values: list[float]) -> float | None:

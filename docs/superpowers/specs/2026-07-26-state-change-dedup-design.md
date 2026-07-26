@@ -291,13 +291,251 @@ temporel masquait.
 
 ---
 
-## 9. Questions ouvertes pour l'opérateur
+## 9. Calibration de DELTA — mesurée, pas postulée
 
-1. **`DELTA = 0,15`** est dérivé de la dérive horaire du sentiment d'**un seul
-   symbole**. Il est raisonné, pas validé. Le journal contrefactuel le recalibrera
-   ; d'ici là c'est un point de départ défendable, pas un optimum.
-2. **T6 (régime) désactivé au départ** — recommandé, parce qu'il est dangereux
-   sans priorisation. Confirmer que reporter la sensibilité macro est acceptable.
-3. **`MAX_AGE = 4 h`** est un jugement, sans donnée pour l'étayer : la question
-   « un état stable depuis 4 h mérite-t-il un nouvel avis ? » relève de la
-   stratégie de trading, pas de la mesure.
+> Cette section **corrige le §3.3**. Le `DELTA = 0,15` uniforme qui y était
+> proposé est erroné ; il est conservé plus haut pour la traçabilité du
+> raisonnement, mais ne doit pas être implémenté.
+
+### 9.1 L'erreur
+
+`DELTA = 0,15` était dérivé de la dérive horaire du sentiment de DEXE, puis
+généralisé aux quatre facteurs. La distribution réelle montre que c'est faux.
+
+Mesure sur les 7 735 analyses en base, **1 639 transitions de 5 minutes, 52
+symboles** (base de temps normalisée à 5 min pour que DEXE, analysé toutes les
+30 s, soit comparable à un symbole calme) :
+
+| Facteur | p50 | p90 | p95 | **p99** | max |
+|---|---|---|---|---|---|
+| `momentum` | 0 | 0,017 | 0,040 | **0,114** | 0,307 |
+| `sentiment` | 0 | 0 | 0,077 | **0,370** | 0,798 |
+| `volume` | 0 | 0 | 0 | **0,049** | 0,343 |
+| `liquidity` | 0 | 0 | 0 | **0** | 0 |
+
+Trois enseignements :
+
+1. **La médiane est nulle pour les quatre facteurs.** La majorité des transitions
+   de 5 minutes ne produisent aucun changement. C'est le régime dominant, et il
+   valide le principe même de la déduplication.
+2. **Les quatre distributions n'ont rien de commun.** Le momentum bouge souvent et
+   faiblement ; le sentiment bouge rarement mais par sauts (queue lourde, max
+   0,798) ; le volume ne bouge presque jamais.
+3. **`DELTA = 0,15` est au-dessus du p99 du momentum (0,114) et du volume
+   (0,049).** Un seuil uniforme à 0,15 aurait rendu la dérive de ces deux facteurs
+   **structurellement indétectable** — il ne se serait déclenché que sur le
+   sentiment. Vérifié : 79 déclenchements sur 24 h, tous d'origine sentiment.
+
+**Un seuil par facteur n'est pas un raffinement, c'est une nécessité.**
+
+### 9.2 La distribution n'est pas dominée par un actif
+
+C'était la crainte explicite de l'opérateur. Vérification :
+
+| | Transitions non nulles | Symboles concernés | dont DEXE |
+|---|---|---|---|
+| `momentum` | 311 | **48** | **2** (0,6 %) |
+| `sentiment` | 99 | **25** | 4 (4 %) |
+
+La base est large. DEXE, qui domine pourtant le compte d'escalades, ne contribue
+presque rien à la distribution des dérives — précisément parce que ses facteurs
+sont saturés et donc constants. La calibration groupée est saine.
+
+### 9.3 Méthode : l'opérateur choisit un taux, le système en dérive le seuil
+
+`DELTA` n'est pas un nombre à deviner. C'est **un quantile de la distribution
+observée des dérives**, calculé par facteur et groupé sur tous les symboles.
+
+Le quantile est le bon estimateur ici, et une alternative courante ne marcherait
+pas : la médiane des dérives étant nulle, un écart médian absolu (MAD) vaudrait
+zéro lui aussi et serait inutilisable. Les distributions sont trop asymétriques
+pour un écart-type. Les quantiles absorbent les deux.
+
+Taux de déclenchement mesurés pour plusieurs choix :
+
+| Jeu de seuils (mom/vol/sen) | Déclenchements/24 h | Symboles distincts |
+|---|---|---|
+| p95 — 0,040 / 0,001 / 0,077 | 246 | 41 |
+| **p99 — 0,114 / 0,049 / 0,370** | **51** | **19** |
+| p99,5 — 0,150 / 0,080 / 0,500 | 28 | 11 |
+
+**Recommandation : p99.** 51 déclenchements/jour représentent 18 % du budget de
+288 — confortable — et chacun correspond à un événement au centile 99 de sa propre
+distribution, c'est-à-dire réellement anormal.
+
+**Nuance importante à ne pas surinterpréter :** ces 51 déclenchements portent sur
+tous les symboles analysés, mais seuls ceux qui franchissent le gate d'escalade
+atteignent Sonnet — aujourd'hui **2**. La déduplication ne peut donc pas, seule,
+élargir la couverture ; elle remplace un critère d'horloge par un critère d'état
+sur les symboles déjà éligibles. Les 19 symboles ne deviennent atteignables
+qu'une fois le vivier élargi (levier S3). Effet à court terme sur DEXE et BANK :
+quelques appels par jour au lieu de 11.
+
+### 9.4 Facteur `liquidity` : déclencheur désactivé
+
+Variance **strictement nulle** sur les 1 639 transitions. Cause connue :
+`liquidity_usd` est presque toujours absent, donc `liq_f` retombe sur son neutre
+constant de 0,5 (voir le levier S3). Un quantile calculé sur une constante n'a pas
+de sens.
+
+`DELTA_liquidity` est donc **désactivé**, pas fixé à une valeur arbitraire. Il
+sera calibré comme les autres dès que la liquidité sera réellement alimentée. Un
+déclencheur qui ne peut pas se déclencher doit le dire, pas faire semblant.
+
+### 9.5 Recalibration
+
+Script `scripts/calibrate_dedup_thresholds.py` : rejoue la requête de
+distribution sur une fenêtre glissante et émet le jeu de seuils au quantile
+choisi.
+
+- **Cadence** : hebdomadaire au départ, manuel et versionné — un seuil qui change
+  tout seul est un seuil qu'on ne peut pas corréler à un changement de
+  comportement.
+- **Fenêtre** : 14 jours glissants, plancher de 500 transitions par facteur
+  faute de quoi le facteur conserve son seuil précédent.
+- **Garde-fou** : une variation de plus de 50 % d'un seuil entre deux calibrations
+  est signalée et non appliquée automatiquement — c'est le signe d'un changement
+  de régime ou d'un collecteur en panne, pas d'une dérive normale.
+- L'automatisation complète relève de la priorité 4 (calibration automatique), pas
+  de ce chantier.
+
+### 9.6 Configuration résultante
+
+```
+SONNET_DEDUP_DELTA_MOMENTUM=0.114     # p99 mesuré
+SONNET_DEDUP_DELTA_VOLUME=0.049       # p99 mesuré
+SONNET_DEDUP_DELTA_SENTIMENT=0.370    # p99 mesuré
+SONNET_DEDUP_DELTA_LIQUIDITY=         # vide = désactivé (variance nulle)
+SONNET_DEDUP_QUANTILE=0.99            # trace la provenance des valeurs ci-dessus
+```
+
+---
+
+## 10. `MAX_AGE` — configurable et différencié
+
+Le principe du garde-fou est retenu ; la valeur unique de 4 h ne l'est pas.
+
+### 10.1 Différenciation par classe d'actif
+
+`market_cap_rank` est déjà présent dans les features (mesuré : DEXE est au rang
+150). Il sert d'axe naturel : une majeure dérive lentement et un état stable y est
+informatif ; un petit actif peut se transformer en une heure.
+
+| Classe | `market_cap_rank` | `MAX_AGE` par défaut | Raison |
+|---|---|---|---|
+| Majeures | ≤ 20 | **8 h** | régime lent, un état stable a du sens |
+| Établies | 21 – 200 | **4 h** | cas médian, valeur d'origine |
+| Petites | > 200 ou inconnu | **2 h** | volatiles, un état stable vieillit vite |
+
+Les bornes et les durées sont exposées en configuration
+(`SONNET_DEDUP_MAX_AGE_MAJOR` / `_MID` / `_SMALL`, `SONNET_DEDUP_RANK_MAJOR` /
+`_MID`). Rang inconnu → classe la plus prudente.
+
+**Ces trois durées sont des jugements, pas des mesures** — contrairement aux
+`DELTA`, aucune donnée actuelle ne les étaye. La question « un état stable depuis
+N heures mérite-t-il un nouvel avis ? » ne se tranche que par le rendement
+constaté, donc par le journal contrefactuel. Elles sont configurables précisément
+pour être révisées à ce moment-là.
+
+### 10.2 Signal pour la révision future
+
+Chaque appel déclenché par T7 est étiqueté comme tel. Le journal contrefactuel
+pourra alors répondre : **les appels T7 produisent-ils des validations Sonnet, ou
+seulement des rejets ?** S'ils ne produisent que des rejets, `MAX_AGE` est trop
+court et coûte du budget pour rien.
+
+---
+
+## 11. T6 — report confirmé, extension conservée
+
+Le report est validé. La conception reste au dossier et ne doit pas être perdue :
+
+- T6 **reviendra** avec la file de priorité (§5), pas avant.
+- La contrainte structurante est explicite : **un changement macro ne doit jamais
+  provoquer un flot d'appels Sonnet.** Le mécanisme est déjà spécifié — le
+  changement de régime *marque* les ancres comme périmées et les rend éligibles ;
+  c'est la file de priorité qui décide de l'ordre et le budget qui décide du
+  volume. À aucun moment une transition de marché ne doit court-circuiter le seau
+  de jetons.
+- Le code livré porte le champ `regime` dans l'ancre et le compare, mais le
+  déclencheur est inerte tant que `SONNET_DEDUP_REGIME_ENABLED=false`. Le champ
+  est écrit dès maintenant pour que l'historique soit exploitable le jour où T6
+  s'active.
+
+---
+
+## 12. Mode ombre : mesurer avant de remplacer
+
+**Le cooldown n'est pas retiré à la livraison.** Il reste l'autorité ; la
+déduplication tourne à côté et journalise ce qu'elle *aurait* décidé. C'est ce qui
+permet de démontrer le gain au lieu de l'affirmer.
+
+### 12.1 Dispositif
+
+À chaque évaluation d'escalade, les deux mécanismes sont interrogés. Seul le
+cooldown décide. Une ligne est écrite dans `dedup_shadow` :
+
+```
+time, symbol, cooldown_verdict, dedup_verdict, dedup_trigger (T1..T7),
+factors, anchor_factors, max_drift, score,
+seconds_since_last_call, sonnet_outcome  -- validated | rejected | not_called
+```
+
+`sonnet_outcome` n'est renseigné que lorsque le cooldown a autorisé l'appel : il
+est la vérité terrain disponible.
+
+### 12.2 Les quatre cellules
+
+|  | dédup : **appeler** | dédup : **ignorer** |
+|---|---|---|
+| **cooldown : appeler** | accord — aucun effet | **① Appels évités** |
+| **cooldown : ignorer** | **② Détection plus précoce** | accord — aucun effet |
+
+**① Appels évités** — le cooldown a payé, la déduplication non. Croisé avec
+`sonnet_outcome` :
+- verdict `rejected` → **économie légitime**, l'appel n'apportait rien ;
+- verdict `validated` → **signal manqué**. C'est la métrique de sûreté critique.
+
+**② Détection plus précoce** — la déduplication aurait appelé pendant que le
+cooldown bloquait. On enregistre `seconds_since_last_call`, ce qui donne
+directement le gain de latence. C'est le bénéfice principal attendu, et il est
+invisible dans un compteur d'appels.
+
+### 12.3 Critères de bascule
+
+Le cooldown n'est retiré que si, sur **au moins 7 jours** :
+
+| Critère | Seuil | Ce qu'il protège |
+|---|---|---|
+| Signaux manqués (① + `validated`) | **0** | non-régression — critère bloquant |
+| Économie légitime (① + `rejected`) | > 30 % des appels | le gain en gaspillage est réel |
+| Détections plus précoces (②) | > 0, gain médian mesuré | le gain de réactivité est réel |
+| Déclenchements par cause | T1…T7 tous représentés ou expliqués | aucun déclencheur n'est mort |
+
+**Un seul signal manqué bloque la bascule** et renvoie à la calibration des
+seuils. Le coût d'un appel superflu est de quelques centimes ; celui d'une
+inversion ratée est une position.
+
+### 12.4 Machinerie partagée avec le journal contrefactuel
+
+Ce dispositif est un cas particulier du journal contrefactuel : enregistrer ce
+qu'un mécanisme *aurait* décidé, puis le confronter à l'issue réelle. Les deux
+partagent le même schéma de base et le même principe.
+
+Le journal contrefactuel doit donc être conçu en connaissant ce besoin, pour
+éviter d'écrire deux fois la même chose. C'est le chantier suivant, et cette
+section en est une contrainte d'entrée.
+
+---
+
+## 13. Questions ouvertes pour l'opérateur
+
+1. **Quantile p99** (51 déclenchements/jour, 18 % du budget) — recommandé.
+   p99,5 est plus conservateur (28/jour) si tu préfères démarrer serré ; p95
+   (246/jour) dépasserait le budget quotidien et n'est pas retenu.
+2. **`MAX_AGE` par classe (8 h / 4 h / 2 h)** — ce sont des jugements, pas des
+   mesures. À réviser dès que le journal dira si les appels T7 produisent des
+   validations ou seulement des rejets.
+3. **Durée du mode ombre : 7 jours minimum.** Plus long donne une meilleure
+   confiance sur le critère bloquant « zéro signal manqué », qui est le seul à ne
+   tolérer aucune exception.

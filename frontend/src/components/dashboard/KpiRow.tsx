@@ -5,7 +5,7 @@ import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
 import CurrencyExchangeIcon from '@mui/icons-material/CurrencyExchange';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
-import { StatCard } from '@/components/common';
+import { StatCard, krakenBalanceView } from '@/components/common';
 import { fmtUsd, fmtPct } from '@/lib/format';
 import type { Portfolio, Position } from '@/lib/types/domain';
 
@@ -33,6 +33,9 @@ export function KpiRow({ portfolio, positions, isLoading }: KpiRowProps) {
   }
 
   const openCount = positions?.length ?? 0;
+  // Portfolio refetches every 6–15 s, so a per-render clock is never more than
+  // one poll behind — no extra interval needed just to age a timestamp.
+  const kraken = portfolio ? krakenBalanceView(portfolio, Date.now()) : null;
 
   return (
     <Box
@@ -51,11 +54,23 @@ export function KpiRow({ portfolio, positions, isLoading }: KpiRowProps) {
         footnote="24h"
         accent="#5b8def"
       />
+      {/*
+        Three distinct readings, none of which may be confused with another:
+        no portfolio at all (`—`, the pre-data case), no Kraken snapshot
+        (`— · non connecté`), and an actual balance. `0 $` is never one of them.
+      */}
       <StatCard
         label="Balance Kraken"
-        value={portfolio ? fmtUsd(portfolio.kraken_balance_usd) : '—'}
+        value={kraken ? kraken.value : '—'}
         icon={<CurrencyExchangeIcon />}
-        footnote={portfolio ? `Investi : ${fmtUsd(portfolio.invested_usd)}` : undefined}
+        footnote={
+          portfolio ? (
+            <>
+              Investi : {fmtUsd(portfolio.invested_usd)}
+              {kraken?.note ? <> · {kraken.note}</> : null}
+            </>
+          ) : undefined
+        }
         accent="#8b5cf6"
       />
       <StatCard

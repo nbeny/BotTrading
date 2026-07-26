@@ -8,8 +8,9 @@ from typing import Any
 from cmi_common.events.base import Source
 from cmi_common.events.market import PriceEvent, VolumeEvent
 
-# A volume surge is flagged when 24h volume exceeds this multiple of market cap
-# turnover heuristic; tuned conservatively for the collector's cheap pre-filter.
+# Kept for reference: the turnover multiple that used to gate emission. It no
+# longer filters anything -- see to_volume_event. Downstream consumers that want
+# a "spike" threshold should apply their own, where the scoring lives.
 VOLUME_SPIKE_MIN_RATIO = 3.0
 
 
@@ -36,14 +37,23 @@ def to_price_event(row: dict[str, Any], trending_ids: set[str]) -> PriceEvent:
 
 
 def to_volume_event(row: dict[str, Any]) -> VolumeEvent | None:
-    """Emit a VolumeEvent only when volume/market-cap turnover looks abnormal."""
+    """Emit a VolumeEvent whenever turnover can be computed at all.
+
+    It used to fire only above ``VOLUME_SPIKE_MIN_RATIO``, i.e. a 24h volume
+    worth 30% of market cap. No large-cap ever reaches that, so the volume
+    factor was not weak for majors — it was structurally absent, and the scorer
+    could not tell the two apart. Measured in production: 12174 analyses, and
+    only two symbols ever escalated.
+
+    Whether a turnover of 0.2 is interesting is the scorer's call, not the
+    collector's. None is still returned when there is nothing to measure: an
+    invented ratio would be counted as a supplied factor.
+    """
     volume = _dec(row.get("total_volume"))
     mcap = _dec(row.get("market_cap"))
     if not volume or not mcap or mcap == 0:
         return None
     ratio = float(volume / mcap) * 10  # scale turnover into a spike-like ratio
-    if ratio < VOLUME_SPIKE_MIN_RATIO:
-        return None
     return VolumeEvent(
         source=Source.COINGECKO,
         symbol=str(row["symbol"]).upper(),

@@ -192,6 +192,39 @@ class DecisionJournal(Base):
     realized_pnl: Mapped[Decimal | None] = mapped_column(Numeric(38, 12), default=None)
 
 
+class _EventArchiveMixin:
+    """Raw broadcast-stream archive. Two tables share this shape and differ only
+    in retention: TimescaleDB drops whole chunks by time and cannot filter by
+    event type, so differentiated retention requires separate hypertables."""
+
+    # timezone=True to match what migrations 0010/0011 actually create. Without
+    # it the ORM believes the column is TIMESTAMP WITHOUT TIME ZONE, so the
+    # create_all in tests/test_sentiment_reader_sql.py would build a table that
+    # disagrees with production. Several older models in this file still carry
+    # that mismatch; it is not fixed here because changing them is a separate
+    # change with its own blast radius.
+    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(32))
+    topic: Mapped[str] = mapped_column(String(64))
+    symbol: Mapped[str | None] = mapped_column(String(32), default=None)
+    correlation_id: Mapped[str | None] = mapped_column(String(64), default=None)
+    payload: Mapped[dict] = mapped_column(JSONB, default=dict)
+
+
+class EventMarket(Base, _EventArchiveMixin):
+    """Price, volume and dex events -- high volume, 7-day retention."""
+
+    __tablename__ = "events_market"
+
+
+class EventSignal(Base, _EventArchiveMixin):
+    """Sentiment, analysis, decision, risk and execution events -- low volume,
+    90-day retention, because these are the ones worth looking back at."""
+
+    __tablename__ = "events_signal"
+
+
 class Decision(Base, TimestampMixin):
     __tablename__ = "decisions"
 
@@ -282,6 +315,34 @@ class ServiceHealth(Base):
     )
 
 
+class AccountSnapshot(Base):
+    """One venue's balance at one instant, as published by trading-engine.
+
+    Deliberately not a hypertable: one row per venue per minute is 1440 rows a
+    day for one venue, and the only query is "the newest snapshot", which time
+    partitioning would complicate rather than help. Migration 0012 indexes
+    ``fetched_at DESC`` for exactly that query -- see the note there on why it
+    is not a (venue, fetched_at) composite yet.
+    """
+
+    __tablename__ = "account_snapshots"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    # Unique because ON CONFLICT DO NOTHING infers on it: Kafka is at-least-once
+    # and a redelivered message carries an identical event.
+    event_id: Mapped[str] = mapped_column(String(64), unique=True)
+    venue: Mapped[str] = mapped_column(String(32))
+    equity_usd: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    cash_usd: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    balances: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
+    # timezone=True to match what migration 0012 creates.
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        Index("ix_account_snapshots_venue_time", "venue", sa_text("fetched_at DESC")),
+    )
+
+
 class ContentSentimentAgg(Base):
     """Per-symbol hourly rollup derived from scored raw_content.
 
@@ -343,4 +404,6 @@ HYPERTABLES = {
     "signals": "time",
     "pipeline_rejections": "time",
     "decision_journal": "time",
+    "events_market": "time",
+    "events_signal": "time",
 }

@@ -22,8 +22,26 @@ from types import ModuleType
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+def _load_package(name: str, directory: Path) -> None:
+    """Register ``directory`` as the package ``name``, if it is not already."""
+    if name in sys.modules:
+        return
+    spec = importlib.util.spec_from_file_location(
+        name, directory / "__init__.py", submodule_search_locations=[str(directory)]
+    )
+    assert spec and spec.loader
+    pkg = importlib.util.module_from_spec(spec)
+    sys.modules[name] = pkg
+    spec.loader.exec_module(pkg)
+
+
 def load_service_module(service: str, module: str) -> ModuleType:
     """Import ``services/<service>/app/<module>.py`` as ``<alias>.<module>``.
+
+    ``module`` may be dotted (``"domain.mapper"``); each intervening directory is
+    registered as a package first, so a relative import inside the module
+    resolves against its real parent rather than failing or — worse — binding to
+    a same-named package from another service.
 
     The alias is derived from ``service`` rather than passed in, so uniqueness
     holds by construction. A caller-supplied alias could collide silently: the
@@ -32,23 +50,21 @@ def load_service_module(service: str, module: str) -> ModuleType:
     """
     alias = service.replace("-", "_") + "_app"
     app_dir = _REPO_ROOT / "services" / service / "app"
+    _load_package(alias, app_dir)
 
-    if alias not in sys.modules:
-        pkg_spec = importlib.util.spec_from_file_location(
-            alias,
-            app_dir / "__init__.py",
-            submodule_search_locations=[str(app_dir)],
-        )
-        assert pkg_spec and pkg_spec.loader
-        pkg = importlib.util.module_from_spec(pkg_spec)
-        sys.modules[alias] = pkg
-        pkg_spec.loader.exec_module(pkg)
+    *packages, leaf = module.split(".")
+    directory = app_dir
+    name = alias
+    for part in packages:
+        directory = directory / part
+        name = f"{name}.{part}"
+        _load_package(name, directory)
 
-    qualified = f"{alias}.{module}"
+    qualified = f"{name}.{leaf}"
     if qualified in sys.modules:
         return sys.modules[qualified]
 
-    spec = importlib.util.spec_from_file_location(qualified, app_dir / f"{module}.py")
+    spec = importlib.util.spec_from_file_location(qualified, directory / f"{leaf}.py")
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     # Registered before exec: dataclasses resolves ClassVar via sys.modules[__module__].

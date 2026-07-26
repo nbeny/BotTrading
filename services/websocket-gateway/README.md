@@ -34,11 +34,14 @@ JSON text frame:
 
 ## Consumed topics
 
-`market.price.events`, `market.volume.events`, `market.dex.events`,
-`market.news.events`, `market.social.events`, `market.sentiment.events`,
-`market.analysis.events`, `decision.events`, `risk.approved.events`
-(the `Topic` enum values: PRICE, VOLUME, DEX, NEWS, SOCIAL, SENTIMENT,
-ANALYSIS, DECISION, RISK_APPROVED).
+The authoritative list is `BROADCAST_TOPICS` in `app/consumer.py`; this prose
+had already drifted from it once. As of 2026-07-26 it holds eleven `Topic`
+values: PRICE, VOLUME, DEX, NEWS, SOCIAL, SENTIMENT, ANALYSIS, DECISION,
+RISK_APPROVED, EXECUTION, ACCOUNT_SNAPSHOT.
+
+Not broadcast: CONTROL (operator commands, an input to the trading-engine
+rather than something a browser should watch) and JOURNAL (an audit trail with
+its own table and read endpoint).
 
 The consumer uses `group_id=websocket-gateway` and `auto_offset_reset=latest`,
 so clients only receive events produced while the gateway is running.

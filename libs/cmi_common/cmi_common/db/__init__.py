@@ -3,8 +3,11 @@
 from .base import Base, TimestampMixin
 from .models import (
     HYPERTABLES,
+    AccountSnapshot,
     Decision,
     DecisionJournal,
+    EventMarket,
+    EventSignal,
     News,
     PipelineRejection,
     Price,
@@ -17,10 +20,13 @@ from .models import (
 from .session import Database
 
 __all__ = [
+    "AccountSnapshot",
     "Base",
     "Database",
     "Decision",
     "DecisionJournal",
+    "EventMarket",
+    "EventSignal",
     "HYPERTABLES",
     "News",
     "PipelineRejection",

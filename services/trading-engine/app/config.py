@@ -31,6 +31,12 @@ class TradingConfig:
     max_orders_per_hour: int = 10
     entry_timeout_s: int = 30
     reconcile_interval_s: int = 10
+    # Read-only spot key (api.kraken.com). Distinct from the Futures trading key
+    # above: different host, different signing scheme, and read paths are never
+    # simulated by the trading mode.
+    read_api_key: str = ""
+    read_api_secret: str = ""
+    account_poll_s: int = 60
 
     @classmethod
     def from_env(cls) -> "TradingConfig":
@@ -45,4 +51,7 @@ class TradingConfig:
             max_orders_per_hour=int(os.getenv("MAX_ORDERS_PER_HOUR", "10")),
             entry_timeout_s=int(os.getenv("ENTRY_TIMEOUT_S", "30")),
             reconcile_interval_s=int(os.getenv("RECONCILE_INTERVAL_S", "10")),
+            read_api_key=os.getenv("KRAKEN_READ_API_KEY", ""),
+            read_api_secret=os.getenv("KRAKEN_READ_API_SECRET", ""),
+            account_poll_s=int(os.getenv("CMI_ACCOUNT_POLL_S", "60")),
         )

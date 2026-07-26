@@ -420,13 +420,16 @@ Quatre, dans la numérotation existante (dernière : `0007_sentiment_agg_daily`)
 
 - `0008_signal_diagnostics` — colonnes `ambiguous`, `block_reason`,
   `factors_present` sur `signals` + table `pipeline_rejections`
-- `0010_account_snapshots` — dernier état de solde par venue
-- `0011_events_market` — hypertable + politique de rétention
-- `0012_events_signal` — hypertable + politique de rétention
+- `0010_events_market` — hypertable + politique de rétention (phase 3)
+- `0011_events_signal` — hypertable + politique de rétention (phase 3)
+- `0012_account_snapshots` — dernier état de solde par venue (phase 2)
 
-> **Renumérotés le 2026-07-26.** `0009` a été pris par `0009_decision_journal`
-> (journal contrefactuel), livré entre-temps. Deux migrations portant le même
-> numéro produisent deux têtes Alembic et bloquent le déploiement.
+> **Renumérotés deux fois le 2026-07-26.** D'abord parce que `0009` a été pris
+> par `0009_decision_journal` (journal contrefactuel), livré entre-temps. Puis
+> parce que l'opérateur a choisi de livrer la phase 3 avant la phase 2 : les
+> numéros suivent l'ordre de livraison réel, pas l'ordre de rédaction. Deux
+> migrations portant le même numéro produisent deux têtes Alembic et bloquent le
+> déploiement.
 
 Chaque migration est additive : aucune colonne supprimée, aucun type modifié. Le
 rollback se limite à un `DROP`, et un ancien conteneur encore en vol pendant le

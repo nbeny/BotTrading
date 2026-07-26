@@ -352,13 +352,22 @@ def test_compute_exposure_and_limits_and_alerts() -> None:
 def test_endpoint_portfolio_wiring() -> None:
     trade = _trade(entry_price=100.0, position_size_pct=0.10)
     price = SimpleNamespace(symbol="BTC", price_usd=110.0)
-    # /portfolio: open trades, latest prices, closed(24h)
-    client = _client([_Result(rows=[trade]), _Result(rows=[price]), _Result(rows=[])])
+    # /portfolio: account snapshot, open trades, latest prices, closed(24h).
+    # The snapshot query comes first because it decides the reference capital
+    # the positions are then sized against; an empty result is the production
+    # state today, with no exchange key configured.
+    client = _client(
+        [_Result(rows=[]), _Result(rows=[trade]), _Result(rows=[price]), _Result(rows=[])]
+    )
     r = client.get("/portfolio")
     assert r.status_code == 200
     body = r.json()
     assert body["invested_usd"] == 11000.0
     assert body["total_value_usd"] == 100000.0 + 1000.0  # base + unrealized (cash+invested)
+    # No snapshot: a declared absence, never a number.
+    assert body["kraken_balance_usd"] is None
+    assert body["balance_source"] == "unavailable"
+    assert body["balance_stale"] is False
 
 
 def test_assemble_systems_snapshot() -> None:

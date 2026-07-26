@@ -17,7 +17,6 @@ import type {
   CmiEvent,
   DecisionEvent,
   OrderExecutedEvent,
-  PortfolioChangedEvent,
   PriceEvent,
   RiskApprovedEvent,
   SentimentEvent,
@@ -141,15 +140,14 @@ function emitDecision(atMs: number) {
   push(e, 'decision.events', atMs);
 }
 
-function emitPortfolio(atMs: number) {
+/**
+ * Drifts the mock portfolio value the Capital page reads. It used to also push
+ * a `PortfolioChangedEvent` on the socket; no backend service publishes that
+ * event and no component subscribes to it, so the only thing the push did was
+ * put a row in the feed that production can never show.
+ */
+function emitPortfolio(_atMs: number) {
   portfolioValue = round(portfolioValue * (1 + rand(-0.004, 0.005)), 2);
-  const e: PortfolioChangedEvent = {
-    ...base('PortfolioChangedEvent', 'portfolio-service', 'PORTFOLIO', atMs),
-    total_value_usd: portfolioValue,
-    cash_usd: round(portfolioValue * 0.32, 2),
-    pnl_24h_pct: round(rand(-3, 5), 2),
-  };
-  push(e, 'portfolio.events', atMs);
 }
 
 /**

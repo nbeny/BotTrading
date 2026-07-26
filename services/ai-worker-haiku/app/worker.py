@@ -71,6 +71,14 @@ class HaikuWorker:
             return event.symbol, {
                 "price": float(event.price_usd),
                 "price_change_pct_24h": event.price_change_pct_24h,
+                # Carried for the scorer's liquidity proxy: a CEX-listed pair
+                # gets no DexEvent, so without this its liquidity factor stays
+                # a neutral guess forever.
+                "volume_24h_usd": (
+                    float(event.volume_24h_usd)
+                    if event.volume_24h_usd is not None
+                    else None
+                ),
                 "market_cap_rank": event.market_cap_rank,
                 "is_trending": event.is_trending,
             }, Topic.PRICE.value

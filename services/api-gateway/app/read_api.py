@@ -26,7 +26,9 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cmi_common.db import Decision, News, Price, Sentiment, ServiceHealth, Signal, Token, Trade
+from cmi_common.db import (
+    AccountSnapshot, Decision, News, Price, Sentiment, ServiceHealth, Signal, Token, Trade,
+)
 from cmi_common.db.models import PipelineRejection, RawContent
 from cmi_common.sources import SqlSentimentAggReader
 
@@ -580,8 +582,64 @@ def map_portfolio_trade(trade: Any, base_capital: float = BASE_CAPITAL) -> dict:
     }
 
 
-def compute_portfolio(positions: list[dict], realized_24h: float, base_capital: float = BASE_CAPITAL, *, now: datetime | None = None) -> dict:
+# Past this age a snapshot is served greyed rather than as a current balance.
+STALE_AFTER_S = 300
+
+
+def reference_capital(snapshot: dict | None) -> float:
+    """The exchange's real equity when we have one, the configured constant
+    otherwise.
+
+    Without this, a real Kraken balance would be displayed beside positions
+    sized against an imaginary 100k. A *stale* snapshot still governs: a balance
+    from ten minutes ago approximates the real capital far better than a
+    configuration constant does. An equity of exactly zero is an answer, not an
+    absence, so it must not fall back either.
+    """
+    if snapshot is None or snapshot.get("equity_usd") is None:
+        return BASE_CAPITAL
+    return float(snapshot["equity_usd"])
+
+
+def _balance_fields(snapshot: dict | None, now: datetime) -> dict:
+    """What the balance is, and what it is worth trusting.
+
+    `cash * 0.8` used to stand here. It was not a balance, and the operator had
+    no way to tell it from one. The rule now: a real number or `null`, plus
+    enough context that the UI never has to guess which it got.
+    """
+    if snapshot is None or snapshot.get("equity_usd") is None:
+        return {
+            "kraken_balance_usd": None,
+            "balance_source": "unavailable",
+            "balance_fetched_at": None,
+            "balance_stale": False,
+        }
+    fetched = snapshot.get("fetched_at")
+    # The persister writes naive UTC; comparing that to an aware `now` raises,
+    # and swallowing the error would present a stale balance as a current one.
+    if isinstance(fetched, datetime) and fetched.tzinfo is None:
+        fetched = fetched.replace(tzinfo=timezone.utc)
+    age = (now - fetched).total_seconds() if isinstance(fetched, datetime) else None
+    return {
+        "kraken_balance_usd": round(float(snapshot["equity_usd"]), 2),
+        "balance_source": snapshot.get("venue") or "unavailable",
+        "balance_fetched_at": _iso(fetched),
+        "balance_stale": age is not None and age > STALE_AFTER_S,
+    }
+
+
+def compute_portfolio(
+    positions: list[dict],
+    realized_24h: float,
+    base_capital: float | None = None,
+    *,
+    snapshot: dict | None = None,
+    now: datetime | None = None,
+) -> dict:
     now = now or datetime.now(tz=timezone.utc)
+    if base_capital is None:
+        base_capital = reference_capital(snapshot)
     invested = round(sum(p["value_usd"] for p in positions), 2)
     cost_basis = sum(p["quantity"] * p["entry_price"] for p in positions)
     unrealized = round(sum(p["unrealized_pnl_usd"] for p in positions), 2)
@@ -590,7 +648,7 @@ def compute_portfolio(positions: list[dict], realized_24h: float, base_capital: 
     return {
         "total_value_usd": total,
         "cash_usd": cash,
-        "kraken_balance_usd": round(cash * 0.8, 2),
+        **_balance_fields(snapshot, now),
         "invested_usd": invested,
         "unrealized_pnl_usd": unrealized,
         "unrealized_pnl_pct": round(unrealized / total * 100, 2) if total else 0.0,
@@ -663,11 +721,50 @@ def compute_risk_alerts(exposure: dict, *, now: datetime | None = None) -> list[
     return alerts
 
 
-async def _open_positions(session: AsyncSession) -> list[dict]:
+async def _account_snapshot(session: AsyncSession) -> dict | None:
+    """The most recent balance reading, or None when no venue has reported one.
+
+    None is the honest answer, not a failure: with no exchange key configured
+    the poller does not run at all, which is the production state today.
+    """
+    row = (
+        await session.execute(
+            select(AccountSnapshot).order_by(AccountSnapshot.fetched_at.desc()).limit(1)
+        )
+    ).scalars().first()
+    if row is None:
+        return None
+    return {
+        "venue": row.venue,
+        "equity_usd": _num(row.equity_usd),
+        "cash_usd": _num(row.cash_usd),
+        "fetched_at": row.fetched_at,
+    }
+
+
+async def _portfolio_basis(
+    session: AsyncSession,
+) -> tuple[list[dict], dict | None, float]:
+    """Positions, snapshot and reference capital — always resolved together.
+
+    They have to be: `map_position` turns a size *fraction* into a quantity
+    using the reference capital, so sizing positions against the configured
+    constant while heading the page with a real exchange balance would make the
+    total disagree with its own header.
+    """
+    snapshot = await _account_snapshot(session)
+    capital = reference_capital(snapshot)
+    return await _open_positions(session, capital), snapshot, capital
+
+
+async def _open_positions(
+    session: AsyncSession, base_capital: float | None = None
+) -> list[dict]:
     trades = (await session.execute(select(Trade).where(Trade.status.in_(OPEN_STATUSES)))).scalars().all()
     prices = (await session.execute(_latest_per_symbol(Price, Price.price_usd, Price.time))).scalars().all()
     pmap = {p.symbol: p for p in prices}
-    return [map_position(t, pmap.get(t.symbol)) for t in trades]
+    capital = BASE_CAPITAL if base_capital is None else base_capital
+    return [map_position(t, pmap.get(t.symbol), capital) for t in trades]
 
 
 async def _realized_24h(session: AsyncSession) -> tuple[float, float]:
@@ -682,22 +779,33 @@ async def _realized_24h(session: AsyncSession) -> tuple[float, float]:
 
 @router.get("/portfolio")
 async def portfolio(session: AsyncSession = Depends(get_session_dep)) -> dict:
-    positions = await _open_positions(session)
+    positions, snapshot, capital = await _portfolio_basis(session)
     realized, _ = await _realized_24h(session)
-    return compute_portfolio(positions, realized)
+    return compute_portfolio(positions, realized, capital, snapshot=snapshot)
 
 
 @router.get("/portfolio/positions")
-async def portfolio_positions(session: AsyncSession = Depends(get_session_dep)) -> list[dict]:
-    return await _open_positions(session)
+async def portfolio_positions(
+    session: AsyncSession = Depends(get_session_dep),
+) -> list[dict]:
+    # Same reference capital as /portfolio: sizing the rows against the config
+    # constant while the header shows a real exchange balance would make the
+    # page disagree with itself.
+    positions, _snapshot, _capital = await _portfolio_basis(session)
+    return positions
 
 
 @router.get("/portfolio/trades")
 async def portfolio_trades(
     limit: int = Query(50, ge=1, le=500), session: AsyncSession = Depends(get_session_dep)
 ) -> list[dict]:
-    rows = (await session.execute(select(Trade).order_by(Trade.created_at.desc()).limit(limit))).scalars().all()
-    return [map_portfolio_trade(t) for t in rows]
+    capital = reference_capital(await _account_snapshot(session))
+    rows = (
+        await session.execute(
+            select(Trade).order_by(Trade.created_at.desc()).limit(limit)
+        )
+    ).scalars().all()
+    return [map_portfolio_trade(t, capital) for t in rows]
 
 
 @router.get("/portfolio/history")
@@ -712,8 +820,11 @@ async def portfolio_history(
             .order_by(Trade.created_at.asc())
         )
     ).scalars().all()
-    # Reconstruct equity curve: base capital + cumulative realized PnL at each close.
-    equity = BASE_CAPITAL
+    # Reconstruct equity curve: reference capital + cumulative realized PnL at
+    # each close. Same basis as every other portfolio figure -- a curve starting
+    # at the config constant while the header shows a real exchange balance
+    # would put the two on different scales in the same page.
+    equity = reference_capital(await _account_snapshot(session))
     points = [{"t": since.isoformat(), "price": round(equity, 2)}]
     for t in closed:
         equity += _num(t.pnl)
@@ -723,17 +834,17 @@ async def portfolio_history(
 
 @router.get("/risk/exposure")
 async def risk_exposure(session: AsyncSession = Depends(get_session_dep)) -> dict:
-    positions = await _open_positions(session)
+    positions, snapshot, capital = await _portfolio_basis(session)
     realized, daily_loss = await _realized_24h(session)
-    total = compute_portfolio(positions, realized)["total_value_usd"]
+    total = compute_portfolio(positions, realized, capital, snapshot=snapshot)["total_value_usd"]
     return compute_exposure(positions, total, daily_loss)
 
 
 @router.get("/risk/limits")
 async def risk_limits(session: AsyncSession = Depends(get_session_dep)) -> list[dict]:
-    positions = await _open_positions(session)
+    positions, snapshot, capital = await _portfolio_basis(session)
     realized, daily_loss = await _realized_24h(session)
-    pf = compute_portfolio(positions, realized)
+    pf = compute_portfolio(positions, realized, capital, snapshot=snapshot)
     exposure = compute_exposure(positions, pf["total_value_usd"], daily_loss)
     cash_pct = (pf["cash_usd"] / pf["total_value_usd"] * 100) if pf["total_value_usd"] else 0.0
     return compute_risk_limits(exposure, cash_pct)
@@ -743,9 +854,9 @@ async def risk_limits(session: AsyncSession = Depends(get_session_dep)) -> list[
 async def risk_alerts(
     limit: int = Query(30, ge=1, le=100), session: AsyncSession = Depends(get_session_dep)
 ) -> list[dict]:
-    positions = await _open_positions(session)
+    positions, snapshot, capital = await _portfolio_basis(session)
     realized, daily_loss = await _realized_24h(session)
-    total = compute_portfolio(positions, realized)["total_value_usd"]
+    total = compute_portfolio(positions, realized, capital, snapshot=snapshot)["total_value_usd"]
     exposure = compute_exposure(positions, total, daily_loss)
     return compute_risk_alerts(exposure)[:limit]
 

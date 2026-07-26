@@ -12,7 +12,7 @@ import sys
 from cmi_common import Settings
 from cmi_common.db import Database
 
-from app import read_api
+from app import events_api, read_api
 from app.read_contract import CONTRACT
 
 settings = Settings()
@@ -49,6 +49,13 @@ async def main() -> int:
                 limit=50, offset=0, session=s)),
             ("data/stats", read_api.data_stats(session=s)),
             ("systems/overview", read_api.systems_overview(session=s)),
+            # Every filter branch at once: the offline tests can only prove this
+            # query *compiles*, and its two riskiest parts -- the expanding IN
+            # and the CAST that works around text()'s bind-parameter regex --
+            # fail at execution, not at compile time.
+            ("events", events_api.list_events(
+                limit=5, types="PriceEvent,DecisionEvent", symbol="BTC",
+                before=None, session=s)),
         ]
         for name, coro in calls:
             try:

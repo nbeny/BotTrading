@@ -14,9 +14,10 @@
   three new sources are blocked on operator actions and one is shelved; see the
   Added table for the probe evidence.
 
-**Outstanding, none blocking:** Reddit (registration closed, see below),
-CryptoPanic and Telegram (operator actions), and the drop counter still has no
-denominator, so judging over-filtering means counting rows per source in the DB.
+**Outstanding, none blocking:** see *Known issues / corrections to make*. Three
+of the planned sources are out for reasons outside our control — Reddit closed
+registration, CryptoPanic went paid-only, StockTwits blocks programmatic access
+— leaving Telegram, which waits on channel selection.
 **Services touched:** `libs/cmi_common`, `collector-social`, `collector-news`,
 `collector-coingecko`, `sentiment-service`, `decision-engine`, `scripts/`
 
@@ -287,12 +288,18 @@ production.
 
 | Source | Probe result | Status |
 |---|---|---|
-| CryptoPanic | `403` without a token (Cloudflare); the `developer/v2` endpoint is `404` | **Blocked on an operator action.** A free token at cryptopanic.com/developers unblocks it. Not written yet: without a token the response shape cannot be verified, and guessing at field names is how the NewsData tag bug happened in the first place. |
+| CryptoPanic | `403` without a token (Cloudflare); the `developer/v2` endpoint is `404` | **Dropped — no free tier.** The plan assumed a rate-limited free plan; the operator checked and cryptopanic.com/developers is now paid-only. Out of scope under the free-tier-only constraint. Revisit only if that constraint changes. |
 | StockTwits | `403 Just a moment...` — a Cloudflare challenge on every endpoint tried | **Shelved.** The spec said to ship it disabled rather than work around the closure if it refused. It refuses. Getting through means impersonating a browser, which is both a terms violation and the kind of evasion this project will not do. |
 | Telegram | not probed | **Blocked on an operator action.** The Bot API only reads channels the bot has joined, and joining a public channel as a reader still requires being added by an admin. Channel selection is a human decision either way. |
 
-The two blocked sources are recorded here rather than half-built: an untested
-provider written against an unverified schema is worse than no provider.
+Nothing here was half-built: an untested provider written against an unverified
+schema is worse than no provider, and guessing at field names is exactly how the
+NewsData mis-tagging this whole spec exists to fix got in.
+
+**Net effect on phase 4:** of the three sources planned, two are now unreachable
+under a free-tier-only constraint and one waits on channel selection. The
+phase's real deliverable turned out to be the `MARKET` regime wiring, which
+needed no third party at all.
 
 Live sources are added to `KNOWN_PLATFORMS` (`runtime.py:18`) so they appear in the
 terminal's operator toggles and can be muted without a redeploy.
@@ -344,6 +351,80 @@ cache. Everything offline — no network, no DB.
 
 Integration: the existing collector tests are extended to assert that the loop
 calls the normalizer between `fetch` and `insert_items`.
+
+## How the MARKET regime signal is wired
+
+`MARKET` reaches `Features.market_sentiment` and is folded into `news_score`.
+Three constraints are deliberate and should survive any future edit:
+
+- **The symbol's own sentiment always wins.** The regime is a fallback for
+  symbols that have none — which is most of them, most of the time — never an
+  override of a direct reading.
+- **It is damped halfway to neutral** (`_MARKET_DAMPING = 0.5`). A market-wide
+  read is real but is not about this token: it nudges a score, it does not
+  decide one.
+- **It does not count toward confidence.** Confidence measures symbol-specific
+  evidence. A market read is identical for every symbol, so counting it would
+  lift the entire book at once — precisely what a confidence measure must not do.
+
+The read **expires after an hour**. Without that, a quiet weekend would keep
+applying Friday's mood to Monday's decisions, and a collector outage would
+freeze the last value in place indefinitely.
+
+The five scoring weights are untouched: the regime rides inside `news_score`
+specifically so the tuned model needs no retuning, and a test pins their sum
+at 1.0.
+
+## Known issues / corrections to make
+
+None of these block anything currently running.
+
+### 1. `_norm_news` conflates "no news" with "maximally bearish news"
+
+`services/decision-engine/app/scoring.py`. With no information at all the
+function short-circuits to `0.0`, and `0.0` is also what a sentiment of `-1.0`
+produces. A silent symbol and a symbol everyone is panicking about therefore
+score identically on the news axis.
+
+This **predates** the regime work — it was surfaced by a regime test whose
+baseline assumption it broke, not introduced by it. The test now compares
+against a neutral regime and documents the conflation rather than papering
+over it.
+
+Fixing it is a modelling decision, not a mechanical edit, which is why it is
+recorded here instead of applied:
+
+- **Option A — absent means neutral.** Return `0.5` for the no-information case
+  so "unknown" sits between bearish and bullish. Correct in principle, but it
+  raises `news_score` for every symbol that currently has no news, which shifts
+  scores across the whole book at once. Needs a before/after run against real
+  decisions before it goes anywhere near live mode.
+- **Option B — leave the value, fix the confidence.** Keep `0.0` but stop
+  counting `news_score` as a present signal when there is genuinely nothing,
+  so the absence shows up as low confidence rather than as bearishness.
+  Smaller blast radius.
+- **Option C — accept it.** It has been the behaviour since the model was
+  tuned, so the thresholds were fitted around it.
+
+Whichever is chosen, the regime damping constant should be re-examined at the
+same time: the two interact through the same normalisation.
+
+### 2. `CONTENT_DROPPED` has no denominator
+
+The counter reports items rejected, never items considered, so a rejection
+*rate* cannot be read from `/metrics`. Judging whether the gate over-filters
+means counting `raw_content` rows per source in the database. A "considered"
+counter alongside it would make the ratio directly observable.
+
+### 3. `COMMON_WORDS` needs re-auditing on universe rotation
+
+The ambiguous set is computed, but the word list it intersects is hand-curated,
+and a ticker missing from it is believed on sight. Three rounds audited it
+against the 50-coin seed and passed; the first audit against a top-200-shaped
+universe found `ATH`, `PUMP`, `APE`, `IP`, `AI`, `LAYER` and more. `APR` was
+then caught only by inspecting live production rows 90 minutes after deploy.
+The method that works is building a lexicon from the real universe and running
+plausible headlines through it — not reading the list.
 
 ## Rejected alternatives
 

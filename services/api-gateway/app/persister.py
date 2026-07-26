@@ -4,11 +4,21 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.sql.elements import ColumnElement
 
-from cmi_common.db import Database, Decision, PipelineRejection, Price, Signal, Trade
+from cmi_common.db import (
+    Database,
+    Decision,
+    DecisionJournal,
+    PipelineRejection,
+    Price,
+    Signal,
+    Trade,
+)
 from cmi_common.events import (
     AnalysisEvent,
     BaseEvent,
@@ -18,6 +28,7 @@ from cmi_common.events import (
 )
 from cmi_common.events.base import Source
 from cmi_common.events.execution import ExecutionEvent
+from cmi_common.events.journal import JournalEntryEvent
 from cmi_common.events.risk import RiskRejectedEvent
 from cmi_common.kafka import Topic
 from cmi_common.observability import EVENTS_CONSUMED
@@ -63,6 +74,8 @@ class Persister:
             await self._save_price(event)
         elif isinstance(event, AnalysisEvent):
             await self._save_signal(event)
+        elif isinstance(event, JournalEntryEvent):
+            await self._save_journal(event)
         elif isinstance(event, RiskRejectedEvent):
             # RiskRejectedEvent and DecisionEvent both arrive on the decision
             # topic. Checked here, ahead of DecisionEvent: they are independent
@@ -112,6 +125,28 @@ class Persister:
             await s.execute(stmt)
             await s.commit()
 
+    async def _save_journal(self, e: JournalEntryEvent) -> None:
+        EVENTS_CONSUMED.labels(SERVICE, Topic.JOURNAL.value, e.event_type).inc()
+        payload = e.model_dump(
+            mode="json",
+            exclude={"event_type", "schema_version", "source", "occurred_at", "meta"},
+        )
+        payload["time"] = _naive_utc(e.occurred_at)
+        async with self._db._sessionmaker() as s:  # noqa: SLF001
+            await s.execute(
+                insert(DecisionJournal).values(**payload).on_conflict_do_nothing()
+            )
+            await s.commit()
+
+    async def _complete_journal(
+        self, where: ColumnElement[bool], **values: Any
+    ) -> None:
+        """Enrich the existing journal row rather than inserting a second one --
+        a duplicate would double-count that decision in every later cohort."""
+        async with self._db._sessionmaker() as s:  # noqa: SLF001
+            await s.execute(update(DecisionJournal).where(where).values(**values))
+            await s.commit()
+
     async def _save_rejection(self, e: RiskRejectedEvent) -> None:
         EVENTS_CONSUMED.labels(SERVICE, Topic.DECISION.value, e.event_type).inc()
         async with self._db._sessionmaker() as s:  # noqa: SLF001
@@ -125,6 +160,12 @@ class Persister:
             ).on_conflict_do_nothing()
             await s.execute(stmt)
             await s.commit()
+        if e.decision_event_id:
+            await self._complete_journal(
+                DecisionJournal.decision_event_id == e.decision_event_id,
+                risk_verdict="rejected",
+                risk_reason=e.reason,
+            )
 
     async def _save_decision(self, e: DecisionEvent) -> None:
         EVENTS_CONSUMED.labels(SERVICE, Topic.DECISION.value, e.event_type).inc()
@@ -161,6 +202,16 @@ class Persister:
             ).on_conflict_do_nothing(index_elements=["event_id"])
             await s.execute(stmt)
             await s.commit()
+        if e.decision_event_id:
+            await self._complete_journal(
+                DecisionJournal.decision_event_id == e.decision_event_id,
+                risk_verdict="approved",
+                risk_event_id=e.event_id,
+                entry_price=e.entry_price,
+                stop_loss=e.stop_loss,
+                take_profit=e.take_profit,
+                risk_reward_ratio=e.risk_reward_ratio,
+            )
         logger.info("persisted trade %s @ %s", e.symbol, e.entry_price)
 
     async def _update_trade(self, e: ExecutionEvent) -> None:
@@ -178,4 +229,14 @@ class Persister:
             )
             await s.execute(stmt)
             await s.commit()
+        # ExecutionEvent carries risk_event_id, not decision_event_id. Joining on
+        # the latter would produce an UPDATE that never matches -- silent, and
+        # the journal would never receive an execution outcome.
+        await self._complete_journal(
+            DecisionJournal.risk_event_id == e.risk_event_id,
+            execution_event_id=e.event_id,
+            execution_kind=e.kind,
+            fill_price=e.fill_price,
+            realized_pnl=e.pnl,
+        )
         logger.info("updated trade %s -> %s", e.risk_event_id, e.kind)

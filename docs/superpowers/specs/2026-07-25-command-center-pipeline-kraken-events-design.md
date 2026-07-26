@@ -257,8 +257,19 @@ de celle des Futures implémentée dans `kraken.py:53-59`.
 Chaque provider s'active indépendamment selon la présence de ses clés. Aucune clé
 configurée → le venue est absent, pas en erreur.
 
-Le compte cible (spot, futures ou les deux) reste à vérifier côté Kraken ;
-l'abstraction supporte les deux cas et on branche ce qui existe.
+**Résolu le 2026-07-26 : le compte est du Kraken *spot*.** L'opérateur a transmis
+une paire de clés dont le format le détermine sans ambiguïté — clé publique de
+56 caractères, secret base64 de 88 caractères terminé par `==`, qui est la forme
+des clés `api.kraken.com`. Les clés Futures ont une forme différente.
+
+Conséquence : `KrakenSpotProvider` est le composant à écrire, et le client Futures
+existant (`trading-engine/app/kraken.py`) **n'aurait jamais pu montrer ce solde**,
+quelle que soit la configuration. L'abstraction multi-venue reste néanmoins
+justifiée : le compte Futures deviendra pertinent si le bot passe en `live`.
+
+⚠️ **Les clés transmises sont à considérer comme compromises** — elles sont
+passées en clair dans un transcript de conversation. En régénérer une paire
+neuve, avec la seule permission « Query Funds », avant toute implémentation.
 
 ### Flux de donnée
 
@@ -397,14 +408,68 @@ Quatre, dans la numérotation existante (dernière : `0007_sentiment_agg_daily`)
 
 - `0008_signal_diagnostics` — colonnes `ambiguous`, `block_reason`,
   `factors_present` sur `signals` + table `pipeline_rejections`
-- `0009_account_snapshots` — dernier état de solde par venue
-- `0010_events_market` — hypertable + politique de rétention
-- `0011_events_signal` — hypertable + politique de rétention
+- `0010_account_snapshots` — dernier état de solde par venue
+- `0011_events_market` — hypertable + politique de rétention
+- `0012_events_signal` — hypertable + politique de rétention
+
+> **Renumérotés le 2026-07-26.** `0009` a été pris par `0009_decision_journal`
+> (journal contrefactuel), livré entre-temps. Deux migrations portant le même
+> numéro produisent deux têtes Alembic et bloquent le déploiement.
 
 Chaque migration est additive : aucune colonne supprimée, aucun type modifié. Le
 rollback se limite à un `DROP`, et un ancien conteneur encore en vol pendant le
 déploiement continue de fonctionner — ce qui compte, le déploiement VPS étant un
 `docker compose up` sur GHCR sans fenêtre de maintenance.
+
+## Impacts du travail livré entre-temps (2026-07-26)
+
+La phase 1 et le journal contrefactuel ont été livrés après la rédaction de cette
+spec. Quatre points la modifient ; ils sont mécaniques mais chacun casserait
+silencieusement.
+
+### 1. Enregistrer tout nouvel événement dans l'union `AnyEvent`
+
+`kafka/consumer.py` décode **chaque** message via `parse_event`, qui valide contre
+l'union discriminée `AnyEvent` de `events/__init__.py`. Un événement absent de
+cette union **se publie sans erreur et se fait rejeter à la consommation**.
+
+Concerne `AccountSnapshotEvent` (phase 2) et tout événement de la phase 3.
+Ajouter à l'union, pas seulement à `__all__`, et l'épingler par un test
+d'aller-retour `parse_event(ev.as_kafka_value())`.
+
+### 2. Le triplet de tables de topics est désormais gardé par un test
+
+`tests/test_journal_topic.py::test_every_topic_appears_in_both_tables` échoue si
+un membre de `Topic` manque dans `TOPIC_EVENT` ou `TOPIC_PARTITIONS`. C'est une
+protection acquise : les nouveaux topics des phases 2 et 3 seront attrapés
+automatiquement.
+
+En revanche `scripts/create-topics.sh` reste hors de ce garde-fou, et il lui
+manque déjà `execution.events` et `control.commands`. Y ajouter les nouveaux
+topics explicitement — sinon ils sont créés avec les partitions par défaut du
+broker au lieu de celles déclarées.
+
+### 3. Phase 3 — l'archiveur doit-il archiver le journal ?
+
+Le topic `journal.entries` existe désormais et l'archiveur de la phase 3 consomme
+« tous les topics de diffusion ». Or le journal est **déjà** persisté dans
+`decision_journal` avec 180 jours de rétention. L'archiver aussi doublerait le
+stockage de la table la plus volumineuse du système sans rien apporter.
+
+**Décision retenue : exclure `journal.entries` de l'archiveur.** Il n'est pas un
+événement de marché diffusé au terminal, c'est un enregistrement d'audit qui a
+déjà sa table et sa rétention propre.
+
+### 4. Phase 3 — cohabitation dans le persister
+
+`Persister.handle` dispatche désormais sept types par `isinstance`, dont
+`JournalEntryEvent` placé avant `RiskRejectedEvent` et `DecisionEvent` (l'ordre
+compte : plusieurs types transitent sur `decision.events`). L'`EventArchiver` de
+la phase 3 reste un composant **distinct** du `Persister`, comme la spec le
+prévoit déjà — cette séparation devient d'autant plus justifiée que le persister
+s'est densifié.
+
+---
 
 ## Gestion des erreurs
 

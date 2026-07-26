@@ -18,6 +18,7 @@ from sqlalchemy import (
     Index,
     Integer,
     Numeric,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -119,6 +120,76 @@ class PipelineRejection(Base):
     symbol: Mapped[str] = mapped_column(String(32))
     correlation_id: Mapped[str | None] = mapped_column(String(64), default=None)
     reason: Mapped[str] = mapped_column(Text)
+
+
+class DecisionJournal(Base):
+    """One row per analysis — escalated or not -> hypertable on ``time``.
+
+    The non-escalated rows are the control group. Without them "would this
+    signal have deserved an analysis?" is unanswerable, because the only
+    observable population would be the one the gate already selected.
+    """
+
+    __tablename__ = "decision_journal"
+
+    time: Mapped[datetime] = mapped_column(primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(32))
+    signal_event_id: Mapped[str] = mapped_column(String(64))
+    correlation_id: Mapped[str] = mapped_column(String(64))
+
+    factors: Mapped[dict] = mapped_column(JSONB, default=dict)
+    features: Mapped[dict] = mapped_column(JSONB, default=dict)
+    score: Mapped[int] = mapped_column(Integer)
+    confidence: Mapped[float] = mapped_column(Float)
+    factors_present: Mapped[int] = mapped_column(SmallInteger)
+    escalated: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    entry_price: Mapped[Decimal | None] = mapped_column(Numeric(38, 12), default=None)
+    stop_loss: Mapped[Decimal | None] = mapped_column(Numeric(38, 12), default=None)
+    take_profit: Mapped[Decimal | None] = mapped_column(Numeric(38, 12), default=None)
+    risk_reward_ratio: Mapped[float | None] = mapped_column(Float, default=None)
+    volatility_1h: Mapped[float | None] = mapped_column(Float, default=None)
+    volatility_24h: Mapped[float | None] = mapped_column(Float, default=None)
+    dominant_factor: Mapped[str | None] = mapped_column(String(16), default=None)
+    dominant_factor_share: Mapped[float | None] = mapped_column(Float, default=None)
+    market_cap_rank: Mapped[int | None] = mapped_column(Integer, default=None)
+
+    sonnet_called: Mapped[bool] = mapped_column(Boolean, default=False)
+    sonnet_validated: Mapped[bool | None] = mapped_column(Boolean, default=None)
+    sonnet_score: Mapped[int | None] = mapped_column(Integer, default=None)
+    sonnet_confidence: Mapped[float | None] = mapped_column(Float, default=None)
+    sonnet_direction: Mapped[str | None] = mapped_column(String(8), default=None)
+    skip_reason: Mapped[str | None] = mapped_column(String(64), default=None)
+
+    cooldown_verdict: Mapped[bool | None] = mapped_column(Boolean, default=None)
+    dedup_verdict: Mapped[bool | None] = mapped_column(Boolean, default=None)
+    dedup_trigger: Mapped[str | None] = mapped_column(String(8), default=None)
+    drift_momentum: Mapped[float | None] = mapped_column(Float, default=None)
+    drift_volume: Mapped[float | None] = mapped_column(Float, default=None)
+    drift_sentiment: Mapped[float | None] = mapped_column(Float, default=None)
+    drift_liquidity: Mapped[float | None] = mapped_column(Float, default=None)
+    sign_flip_chg: Mapped[bool | None] = mapped_column(Boolean, default=None)
+    sign_flip_sentiment: Mapped[bool | None] = mapped_column(Boolean, default=None)
+    score_anchor: Mapped[int | None] = mapped_column(Integer, default=None)
+    factors_present_anchor: Mapped[int | None] = mapped_column(
+        SmallInteger, default=None
+    )
+    seconds_since_anchor: Mapped[int | None] = mapped_column(Integer, default=None)
+    regime: Mapped[str | None] = mapped_column(String(16), default=None)
+    regime_anchor: Mapped[str | None] = mapped_column(String(16), default=None)
+    dedup_version: Mapped[str | None] = mapped_column(String(32), default=None)
+    dedup_quantile: Mapped[float | None] = mapped_column(Float, default=None)
+    dedup_deltas: Mapped[dict] = mapped_column(JSONB, default=dict)
+
+    decision_event_id: Mapped[str | None] = mapped_column(String(64), default=None)
+    risk_event_id: Mapped[str | None] = mapped_column(String(64), default=None)
+    risk_verdict: Mapped[str | None] = mapped_column(String(16), default=None)
+    risk_reason: Mapped[str | None] = mapped_column(Text, default=None)
+    execution_event_id: Mapped[str | None] = mapped_column(String(64), default=None)
+    execution_kind: Mapped[str | None] = mapped_column(String(16), default=None)
+    fill_price: Mapped[Decimal | None] = mapped_column(Numeric(38, 12), default=None)
+    realized_pnl: Mapped[Decimal | None] = mapped_column(Numeric(38, 12), default=None)
 
 
 class Decision(Base, TimestampMixin):
@@ -271,4 +342,5 @@ HYPERTABLES = {
     "sentiments": "time",
     "signals": "time",
     "pipeline_rejections": "time",
+    "decision_journal": "time",
 }

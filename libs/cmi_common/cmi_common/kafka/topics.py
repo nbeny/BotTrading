@@ -8,6 +8,7 @@ from ..events.analysis import AnalysisEvent
 from ..events.control import ControlCommandEvent
 from ..events.decision import DecisionEvent
 from ..events.execution import ExecutionEvent
+from ..events.journal import JournalEntryEvent
 from ..events.market import DexEvent, PriceEvent, VolumeEvent
 from ..events.news import NewsEvent
 from ..events.risk import RiskApprovedEvent
@@ -27,6 +28,7 @@ class Topic(str, Enum):
     RISK_APPROVED = "risk.approved.events"
     EXECUTION = "execution.events"
     CONTROL = "control.commands"
+    JOURNAL = "journal.entries"
 
 
 # Which event type is expected on each topic (for validation / documentation).
@@ -42,6 +44,7 @@ TOPIC_EVENT = {
     Topic.RISK_APPROVED: RiskApprovedEvent,
     Topic.EXECUTION: ExecutionEvent,
     Topic.CONTROL: ControlCommandEvent,
+    Topic.JOURNAL: JournalEntryEvent,
 }
 
 # Recommended partition counts (see docs/scaling.md). High-fan-in topics get
@@ -58,4 +61,5 @@ TOPIC_PARTITIONS = {
     Topic.RISK_APPROVED: 3,
     Topic.EXECUTION: 3,
     Topic.CONTROL: 3,
+    Topic.JOURNAL: 6,
 }

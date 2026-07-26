@@ -1,28 +1,15 @@
 """Sonnet worker LLM budget + per-symbol cooldown gate.
 
-Loaded via importlib under a unique name to avoid shadowing the `app` package of
-other services during a full-suite run.
+Loaded via the shared helper so the module keeps a parent package: worker.py
+imports its siblings relatively, which a bare spec_from_file_location cannot
+resolve.
 """
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
+from service_modules import load_service_module
 
-_LIB = Path(__file__).resolve().parents[1] / "libs" / "cmi_common"
-if str(_LIB) not in sys.path:
-    sys.path.insert(0, str(_LIB))
-
-_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "services" / "ai-worker-sonnet" / "app" / "worker.py"
-)
-_spec = importlib.util.spec_from_file_location("sonnet_worker_mod", _PATH)
-_mod = importlib.util.module_from_spec(_spec)
-sys.modules["sonnet_worker_mod"] = _mod
-_spec.loader.exec_module(_mod)
-SonnetWorker = _mod.SonnetWorker
+SonnetWorker = load_service_module("ai-worker-sonnet", "worker").SonnetWorker
 
 
 class _FakeCache:

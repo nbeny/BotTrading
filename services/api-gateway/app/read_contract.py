@@ -72,4 +72,8 @@ CONTRACT: dict[str, set[str]] = {
         "window", "stages", "score_histogram", "factors_presence",
         "top_block_reasons", "updated_at",
     },
+    "systems/journal/summary": {
+        "window", "horizons", "sample", "q1_rejected_vs_approved",
+        "q2_gate_discrimination", "q3_sonnet_value", "cohorts", "updated_at",
+    },
 }

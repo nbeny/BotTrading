@@ -16,6 +16,8 @@ from cmi_common.events.decision import DecisionEvent, Direction
 from cmi_common.kafka import EventProducer, Topic
 from cmi_common.observability import EVENTS_CONSUMED, EVENTS_PRODUCED
 
+from .journal import build_entry
+
 logger = logging.getLogger(__name__)
 SERVICE = "ai-worker-sonnet"
 
@@ -51,19 +53,58 @@ class SonnetWorker:
         if not isinstance(event, AnalysisEvent):
             return
         EVENTS_CONSUMED.labels(SERVICE, Topic.ANALYSIS.value, event.event_type).inc()
-        # Senior analyst only intervenes on important signals.
+
+        # Senior analyst only intervenes on important signals. The ones it skips
+        # are the control group: without them the gate cannot be evaluated.
         if not event.escalate:
+            await self._journal(build_entry(event, escalated=False))
             return
+
         # Budget/cooldown gate — the only place we spend the subscription. A
         # symbol blocked here is simply re-evaluated on its next escalation.
         if not await self._may_call(event.symbol):
             logger.info("sonnet skip %s (cooldown/budget)", event.symbol)
+            await self._journal(
+                build_entry(event, escalated=True, skip_reason="cooldown_or_budget")
+            )
             return
+
         decision = await self._validate(event)
         if decision is None:
+            await self._journal(
+                build_entry(
+                    event, escalated=True, sonnet_called=True, sonnet_validated=False
+                )
+            )
             return
+
         await self._producer.publish(Topic.DECISION, decision)
         EVENTS_PRODUCED.labels(SERVICE, Topic.DECISION.value, decision.event_type).inc()
+        await self._journal(
+            build_entry(
+                event,
+                escalated=True,
+                sonnet_called=True,
+                sonnet_validated=True,
+                sonnet_score=decision.opportunity_score,
+                sonnet_confidence=decision.confidence,
+                sonnet_direction=decision.direction,
+            ),
+            decision_event_id=decision.event_id,
+        )
+
+    async def _journal(self, entry, *, decision_event_id: str | None = None) -> None:
+        """Best effort. Losing a journal row is acceptable; stalling the trading
+        pipeline because the audit trail failed is not."""
+        try:
+            if decision_event_id is not None:
+                # BaseEvent is frozen: attaching the id needs a copy, not assignment.
+                entry = entry.model_copy(
+                    update={"decision_event_id": decision_event_id}
+                )
+            await self._producer.publish(Topic.JOURNAL, entry)
+        except Exception:
+            logger.warning("journal publish failed for %s", entry.symbol, exc_info=True)
 
     async def _may_call(self, symbol: str) -> bool:
         """True if we're allowed to spend an LLM call on this symbol now."""

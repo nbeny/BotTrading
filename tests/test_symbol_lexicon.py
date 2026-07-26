@@ -53,7 +53,25 @@ def test_seed_lexicon_is_non_empty_and_knows_majors() -> None:
     assert SEED_LEXICON.resolve_ticker("ETH") == "ETH"
 
 
-def test_blank_and_short_names_are_ignored() -> None:
+def test_short_names_are_ignored() -> None:
     # A 2-char coin name would match half the corpus; it must not be indexed.
     lex = SymbolLexicon.from_coins([{"ticker": "OK", "name": "Ok"}, *COINS])
     assert lex.names_in("it is ok to buy") == set()
+
+
+def test_coins_without_a_ticker_are_skipped() -> None:
+    lex = SymbolLexicon.from_coins([{"ticker": "", "name": "Nameless"}, *COINS])
+    assert lex.names_in("a nameless coin") == set()
+    assert lex.resolve_ticker("") is None
+
+
+def test_a_coin_with_no_name_still_resolves_by_ticker() -> None:
+    lex = SymbolLexicon.from_coins([{"ticker": "XYZ", "name": ""}, *COINS])
+    assert lex.resolve_ticker("XYZ") == "XYZ"
+
+
+def test_longest_coin_name_wins_over_a_shorter_prefix() -> None:
+    # Without longest-first alternation, "Bitcoin Cash" would resolve to BTC —
+    # sentiment about BCH would land on Bitcoin.
+    lex = SymbolLexicon.from_coins([*COINS, {"ticker": "BCH", "name": "Bitcoin Cash"}])
+    assert lex.names_in("bitcoin cash hard fork news") == {"BCH"}

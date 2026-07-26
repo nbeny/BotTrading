@@ -4,6 +4,7 @@ from .base import Base, TimestampMixin
 from .models import (
     HYPERTABLES,
     Decision,
+    DecisionJournal,
     News,
     PipelineRejection,
     Price,
@@ -19,6 +20,7 @@ __all__ = [
     "Base",
     "Database",
     "Decision",
+    "DecisionJournal",
     "HYPERTABLES",
     "News",
     "PipelineRejection",

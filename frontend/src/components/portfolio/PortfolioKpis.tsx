@@ -7,7 +7,7 @@ import SavingsIcon from '@mui/icons-material/Savings';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import BarChartIcon from '@mui/icons-material/BarChart';
-import { StatCard } from '@/components/common';
+import { StatCard, krakenBalanceView } from '@/components/common';
 import { fmtUsd, fmtPct } from '@/lib/format';
 import type { Portfolio } from '@/lib/types/domain';
 
@@ -35,6 +35,9 @@ export function PortfolioKpis({ portfolio, isLoading }: Props) {
 
   if (!portfolio) return null;
 
+  // Same reading as the dashboard tile — see `krakenBalanceView`.
+  const kraken = krakenBalanceView(portfolio, Date.now());
+
   return (
     <Box
       sx={{
@@ -52,7 +55,8 @@ export function PortfolioKpis({ portfolio, isLoading }: Props) {
       />
       <StatCard
         label="Balance Kraken"
-        value={fmtUsd(portfolio.kraken_balance_usd)}
+        value={kraken.value}
+        footnote={kraken.note}
         icon={<CurrencyExchangeIcon fontSize="small" />}
         accent="#8b5cf6"
       />

@@ -4,6 +4,7 @@
  */
 import type {
   AssetExposure,
+  BalanceSource,
   MarketToken,
   NewsItem,
   Opportunity,
@@ -279,10 +280,56 @@ export function placeOrder(input: {
 // being re-rolled on every read, so the headline number stops teleporting.
 let _pnl24hPct = round(rand(-1.5, 3.5), 2);
 
-export function getPortfolio(): Portfolio {
+/**
+ * Which of the three Kraken-balance readings the mock serves.
+ *
+ * `unavailable` is the state production is actually in (no exchange keys in
+ * `.env`), so it has to be reachable without a backend — otherwise the only
+ * rendering ever exercised in dev is the one that never happens in prod.
+ */
+export type MockBalanceState = 'fresh' | 'stale' | 'unavailable';
+
+export function asMockBalanceState(v: string | null | undefined): MockBalanceState {
+  return v === 'stale' || v === 'unavailable' ? v : 'fresh';
+}
+
+// The exchange balance is a *separate measurement*, not a function of the
+// simulated book — deriving it from cash (`cash * 0.8`) was the fiction this
+// whole change exists to remove, and mirroring it here would keep the mock
+// lying in the same shape as the old backend. Own random walk.
+let _krakenEquity = round(rand(11_000, 14_000), 2);
+
+interface BalanceSnapshot {
+  kraken_balance_usd: number | null;
+  balance_source: BalanceSource;
+  balance_fetched_at: string | null;
+  balance_stale: boolean;
+}
+
+function krakenSnapshot(state: MockBalanceState): BalanceSnapshot {
+  if (state === 'unavailable') {
+    // Exactly what the backend serves with no snapshot row: no number at all.
+    return {
+      kraken_balance_usd: null,
+      balance_source: 'unavailable',
+      balance_fetched_at: null,
+      balance_stale: false,
+    };
+  }
+  _krakenEquity = round(Math.max(500, _krakenEquity + rand(-40, 45)), 2);
+  const ageMs = state === 'stale' ? 8 * 60_000 : rand(8_000, 40_000);
+  return {
+    kraken_balance_usd: _krakenEquity,
+    balance_source: 'kraken_spot',
+    balance_fetched_at: isoNow(-ageMs),
+    balance_stale: state === 'stale',
+  };
+}
+
+export function getPortfolio(balanceState: MockBalanceState = 'fresh'): Portfolio {
   // Total value is driven by the server-side simulation's evolving value, so the
-  // ticker, the Capital page and the live PortfolioChangedEvent stream all agree
-  // and move together (random walk, not re-randomized each call).
+  // ticker and the Capital page agree and move together (random walk, not
+  // re-randomized each call).
   const total = round(currentPortfolioValue(), 2);
   const totalInvested = round(_positions.reduce((s, p) => s + p.value_usd, 0), 2);
   const cash = round(Math.max(0, total - totalInvested), 2);
@@ -295,7 +342,7 @@ export function getPortfolio(): Portfolio {
   return {
     total_value_usd: total,
     cash_usd: cash,
-    kraken_balance_usd: round(cash * 0.8, 2),
+    ...krakenSnapshot(balanceState),
     invested_usd: totalInvested,
     unrealized_pnl_usd: totalPnl,
     unrealized_pnl_pct: pnlPct,

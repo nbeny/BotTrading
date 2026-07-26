@@ -59,6 +59,7 @@ const TYPE_META: Record<string, { label: string; color: ChipColor }> = {
   RiskRejectedEvent: { label: 'RISQUE KO', color: 'error' },
   ExecutionEvent: { label: 'EXÉCUTION', color: 'success' },
   OrderExecutedEvent: { label: 'ORDRE', color: 'success' },
+  AccountSnapshotEvent: { label: 'SOLDE', color: 'secondary' },
 };
 
 interface Filter {
@@ -161,6 +162,14 @@ function summarize(e: ArchivedEvent): string {
         text(p.kind),
         num(p.fill_price) != null ? `@ ${num(p.fill_price)}` : null,
         num(p.size) != null ? `taille ${num(p.size)}` : null,
+      ]);
+    case 'AccountSnapshotEvent':
+      // Carries no symbol, so the row would otherwise read "— " and nothing
+      // else; venue + equity is the whole point of the event.
+      return join([
+        text(p.venue),
+        num(p.equity_usd) != null ? `équité ${fmtUsdCompact(num(p.equity_usd))}` : null,
+        num(p.cash_usd) != null ? `cash ${fmtUsdCompact(num(p.cash_usd))}` : null,
       ]);
     case 'OrderExecutedEvent':
       return join([

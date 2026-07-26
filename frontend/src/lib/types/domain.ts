@@ -2,10 +2,24 @@
 
 export type TradingMode = 'dry_run' | 'demo' | 'live';
 
+/**
+ * Where `kraken_balance_usd` came from. `unavailable` is not an error state —
+ * it is the truthful answer when no exchange snapshot exists (no API keys
+ * configured, poller down, venue unreachable). It must never be rendered as an
+ * amount: `0 $` would read as "your account is empty", which is a lie.
+ */
+export type BalanceSource = 'kraken_spot' | 'kraken_futures' | 'unavailable';
+
 export interface Portfolio {
   total_value_usd: number;
   cash_usd: number;
-  kraken_balance_usd: number;
+  /** Real exchange balance, or `null` when there is no snapshot at all. */
+  kraken_balance_usd: number | null;
+  balance_source: BalanceSource;
+  /** ISO-8601 instant the snapshot was taken on the venue, or `null`. */
+  balance_fetched_at: string | null;
+  /** Backend verdict: the snapshot is older than the freshness window (5 min). */
+  balance_stale: boolean;
   invested_usd: number;
   unrealized_pnl_usd: number;
   unrealized_pnl_pct: number;

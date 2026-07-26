@@ -14,6 +14,8 @@ import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import { pnlColor } from '@/theme/theme';
 import { fmtPct, scoreColor } from '@/lib/format';
 
+export { krakenBalanceView, type KrakenBalanceView } from './KrakenBalance';
+
 /** Page title + optional actions row. */
 export function PageHeader({
   title,

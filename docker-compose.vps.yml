@@ -296,6 +296,13 @@ services:
       RECONCILE_INTERVAL_S: ${RECONCILE_INTERVAL_S:-10}
       KRAKEN_API_KEY: ${KRAKEN_API_KEY:-}
       KRAKEN_API_SECRET: ${KRAKEN_API_SECRET:-}
+      # Read-only pair, separate from the trading one on purpose: the balance
+      # poll is not governed by TRADING_MODE, so the real portfolio shows while
+      # the bot is still in dry_run. Absent both, build_poller returns None and
+      # the venue is simply reported as unavailable.
+      KRAKEN_READ_API_KEY: ${KRAKEN_READ_API_KEY:-}
+      KRAKEN_READ_API_SECRET: ${KRAKEN_READ_API_SECRET:-}
+      CMI_ACCOUNT_POLL_S: ${CMI_ACCOUNT_POLL_S:-60}
 
   # ------------------------------------------------- control / read plane
   api-gateway:

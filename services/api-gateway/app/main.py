@@ -28,6 +28,7 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
             Topic.RISK_APPROVED,
             Topic.EXECUTION,
             Topic.JOURNAL,
+            Topic.ACCOUNT_SNAPSHOT,
         ],
         persister.handle,
         group_id="api-gateway-persister",
@@ -50,6 +51,11 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
             Topic.DECISION,
             Topic.RISK_APPROVED,
             Topic.EXECUTION,
+            # The archiver routes unrecognised types to events_signal, but that
+            # only fires for events it actually receives -- subscription is an
+            # explicit list, not a wildcard. Without this line the spec's
+            # "events_signal holds ... AccountSnapshot" would never hold.
+            Topic.ACCOUNT_SNAPSHOT,
         ],
         archiver.handle,
         # Its own group: the archive must not compete with the persister for

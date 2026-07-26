@@ -315,6 +315,32 @@ class ServiceHealth(Base):
     )
 
 
+class AccountSnapshot(Base):
+    """One venue's balance at one instant, as published by trading-engine.
+
+    Deliberately not a hypertable: one row per venue per minute is 1440 rows a
+    day for one venue, and the only query is "latest state for this venue",
+    which time partitioning would complicate rather than help.
+    """
+
+    __tablename__ = "account_snapshots"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    # Unique because ON CONFLICT DO NOTHING infers on it: Kafka is at-least-once
+    # and a redelivered message carries an identical event.
+    event_id: Mapped[str] = mapped_column(String(64), unique=True)
+    venue: Mapped[str] = mapped_column(String(32))
+    equity_usd: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    cash_usd: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    balances: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
+    # timezone=True to match what migration 0012 creates.
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        Index("ix_account_snapshots_venue_time", "venue", sa_text("fetched_at DESC")),
+    )
+
+
 class ContentSentimentAgg(Base):
     """Per-symbol hourly rollup derived from scored raw_content.
 

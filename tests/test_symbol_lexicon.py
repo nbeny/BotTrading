@@ -37,12 +37,13 @@ def test_name_matching_respects_word_boundaries() -> None:
 
 
 def test_ambiguous_set_is_computed_from_common_words() -> None:
-    # ONE and KEEP are ordinary English words; BTC/ETH/HYPE are not.
+    # ONE, KEEP and HYPE are ordinary English words; BTC and ETH are not.
     lex = SymbolLexicon.from_coins(COINS)
     assert lex.is_ambiguous("ONE") is True
     assert lex.is_ambiguous("KEEP") is True
+    assert lex.is_ambiguous("HYPE") is True
     assert lex.is_ambiguous("BTC") is False
-    assert lex.is_ambiguous("HYPE") is False
+    assert lex.is_ambiguous("ETH") is False
 
 
 def test_seed_lexicon_is_non_empty_and_knows_majors() -> None:

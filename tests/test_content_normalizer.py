@@ -110,7 +110,18 @@ def test_multiword_coin_name_resolves_without_a_bare_ticker_mention() -> None:
 
 def test_all_caps_headline_only_matches_universe_tickers() -> None:
     # An all-caps headline turns ordinary words into upper-case tokens too.
-    # "ALL" is ambiguous and unconfirmed here, so it must not leak in as HYPE's
-    # companion just because the headline happens to be shouted.
-    result = _norm().apply([_item(title="BREAKING: HYPE SURGES TO NEW ALL TIME HIGH")])
+    # "ALL" and "TIME" are ambiguous and unconfirmed, so they must not ride along
+    # just because the headline is shouted. HYPE is confirmed by "Hyperliquid".
+    result = _norm().apply(
+        [_item(title="BREAKING: HYPERLIQUID HYPE HITS AN ALL TIME HIGH")]
+    )
     assert result.kept[0].symbols == ["HYPE"]
+
+
+def test_a_shouted_non_crypto_headline_yields_no_symbol() -> None:
+    # "HYPE" is an ordinary English word before it is a ticker. Uncorroborated,
+    # it must not manufacture a symbol -- this exact headline shape produced a
+    # bogus HYPE attribution before the word was added to COMMON_WORDS.
+    result = _norm().apply([_item(title="ALL THE HYPE IS ABOUT NOTHING")])
+    assert result.kept == []
+    assert result.dropped[0][1] == "not_relevant"

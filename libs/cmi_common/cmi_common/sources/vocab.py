@@ -9,7 +9,14 @@ from __future__ import annotations
 # Ordinary English words that are also crypto tickers. Intersecting this with
 # the live universe yields the "ambiguous" set: tickers that must be corroborated
 # before they are believed. Uppercase, 2-6 chars (the ticker shape).
+#
+# Curating this is the one manual duty the design keeps: a ticker missing here is
+# believed on sight. The cost of a false entry is small (that coin then needs a
+# cashtag or its full name, which crypto coverage almost always supplies); the
+# cost of an omission is a bogus symbol feeding the decision engine. When in
+# doubt, include the word.
 COMMON_WORDS: frozenset[str] = frozenset("""
+    APT ARB ATOM DOT ETC HYPE OP RUNE TON UNI VET
     ONE TWO SIX TEN ALL AND ANY ARE ASK BAD BAG BAN BAND BANK BASE BEAR BEST BET
     BID BIG BIT BLUE BODY BOND BOOK BOOM BOOST BOT BOX BOY BULL BUY CALL CAN CAP
     CAR CARD CARE CASE CASH CAT CELL CHAT CITY CLUB COIN COLD COME CORE COST

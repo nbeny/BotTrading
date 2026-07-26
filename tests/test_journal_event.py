@@ -82,3 +82,18 @@ def test_decision_event_id_is_settable_via_model_copy() -> None:
     linked = ev.model_copy(update={"decision_event_id": "dec-1"})
     assert linked.decision_event_id == "dec-1"
     assert ev.decision_event_id is None
+
+
+def test_round_trips_through_parse_event() -> None:
+    """Le consommateur Kafka (kafka/consumer.py) désérialise via parse_event,
+    qui valide contre l'union AnyEvent. Un événement publié mais absent de cette
+    union est produit sans erreur et rejeté à la consommation — panne muette du
+    côté qui compte.
+    """
+    from cmi_common.events import parse_event
+
+    ev = _minimal(escalated=True, sonnet_called=True, sonnet_validated=False)
+    decoded = parse_event(ev.as_kafka_value())
+    assert isinstance(decoded, JournalEntryEvent)
+    assert decoded.event_id == ev.event_id
+    assert decoded.sonnet_validated is False

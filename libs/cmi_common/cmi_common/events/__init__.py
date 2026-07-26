@@ -40,6 +40,7 @@ AnyEvent = Annotated[
         RiskRejectedEvent,
         ExecutionEvent,
         ControlCommandEvent,
+        JournalEntryEvent,
     ],
     Field(discriminator="event_type"),
 ]

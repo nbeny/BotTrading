@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 
+from cmi_common.cache import Cache
 from cmi_common.kafka import EventProducer, Topic
 from cmi_common.observability import EVENTS_PRODUCED
+from cmi_common.sources import LEXICON_KEY
 
 from ..domain.mapper import to_price_event, to_volume_event
 from ..infrastructure.coingecko_client import CoinGeckoClient
@@ -22,20 +24,29 @@ class CoinGeckoCollector:
         client: CoinGeckoClient,
         producer: EventProducer,
         *,
+        cache: Cache,
         pages: int = 2,
         per_page: int = 100,
     ) -> None:
         self._client = client
         self._producer = producer
+        self._cache = cache
         self._pages = pages
         self._per_page = per_page
 
     async def poll_once(self) -> int:
         trending = set(await self._client.trending())
         published = 0
+        universe: list[dict[str, str]] = []
         for page in range(1, self._pages + 1):
             rows = await self._client.markets(per_page=self._per_page, page=page)
             for row in rows:
+                ticker = str(row.get("symbol") or "").upper()
+                if ticker:
+                    universe.append(
+                        {"ticker": ticker, "name": str(row.get("name") or "")}
+                    )
+
                 price = to_price_event(row, trending)
                 await self._producer.publish(Topic.PRICE, price)
                 EVENTS_PRODUCED.labels(
@@ -50,5 +61,12 @@ class CoinGeckoCollector:
                         SERVICE, Topic.VOLUME.value, volume.event_type
                     ).inc()
                     published += 1
+        # The content collectors resolve symbols against this universe. A write
+        # failure must not cost us the price/volume events we already published.
+        if universe:
+            try:
+                await self._cache.set_json(LEXICON_KEY, universe, ttl_seconds=86400)
+            except Exception:
+                logger.warning("lexicon publish failed", exc_info=True)
         logger.info("coingecko poll published %d events", published)
         return published

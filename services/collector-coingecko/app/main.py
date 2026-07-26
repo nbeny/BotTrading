@@ -25,7 +25,7 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     producer = EventProducer(settings.kafka)
     await producer.start()
     client = CoinGeckoClient(BASE_URL, API_KEY, cache)
-    collector = CoinGeckoCollector(client, producer)
+    collector = CoinGeckoCollector(client, producer, cache=cache)
 
     app.state.cache = cache
     app.state.producer = producer
@@ -43,6 +43,4 @@ async def _shutdown(app: FastAPI, settings: Settings) -> None:
     await app.state.cache.close()
 
 
-app = create_app(
-    "collector-coingecko", on_startup=_startup, on_shutdown=_shutdown
-)
+app = create_app("collector-coingecko", on_startup=_startup, on_shutdown=_shutdown)

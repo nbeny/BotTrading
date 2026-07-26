@@ -26,7 +26,14 @@ import httpx
 BASE_URL = "https://api.kraken.com"
 BALANCE_PATH = "/0/private/Balance"
 TRADE_BALANCE_PATH = "/0/private/TradeBalance"
+# The asset TradeBalance values the account in. Kraken's own ledger symbol for
+# US dollars.
 QUOTE_ASSET = "ZUSD"
+# What counts as spendable cash. A spot account can hold none of Kraken's own
+# ZUSD and still be entirely in cash: this operator's whole balance is USDC, and
+# reporting `cash_usd: 0.0` next to an equity of 97.21 reads as "fully invested"
+# when nothing is invested at all. Dollar-pegged stablecoins are cash here.
+CASH_ASSETS = ("ZUSD", "USD", "USDC", "USDT", "DAI", "PYUSD")
 # Kraken keeps dust on old accounts; it adds nothing to a balance display and
 # only lengthens the payload. The comparison is strict, so a balance of exactly
 # one satoshi is dropped too -- deliberate, and worth stating because 1e-8 is
@@ -60,13 +67,13 @@ def parse_balances(raw: dict[str, str]) -> dict[str, float]:
 def build_snapshot(
     *, trade_balance: dict[str, str], balances: dict[str, str]
 ) -> dict[str, Any]:
-    """`eb` is the whole account valued in the quote currency; the ZUSD line of
-    Balance is the cash alone. Reporting the first as the second would present
-    the entire portfolio as spendable."""
+    """`eb` is the whole account valued in the quote currency; the cash lines of
+    Balance are the spendable part alone. Reporting the first as the second
+    would present the entire portfolio as spendable."""
     parsed = parse_balances(balances)
     return {
         "equity_usd": float(trade_balance.get("eb", 0.0)),
-        "cash_usd": parsed.get(QUOTE_ASSET, 0.0),
+        "cash_usd": round(sum(parsed.get(a, 0.0) for a in CASH_ASSETS), 8),
         "balances": parsed,
     }
 

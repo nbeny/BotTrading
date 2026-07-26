@@ -81,3 +81,29 @@ def test_a_missing_quote_balance_means_zero_cash_not_a_crash() -> None:
     snap = ks.build_snapshot(trade_balance={"eb": "500.0"}, balances={"XXBT": "0.01"})
     assert snap["cash_usd"] == 0.0
     assert snap["equity_usd"] == 500.0
+
+
+def test_a_usdc_only_account_is_not_reported_as_having_no_cash() -> None:
+    """Mesuré sur le compte réel : tout le solde est en USDC, Kraken n'a aucune
+    ligne ZUSD. Ne compter que ZUSD rendait `cash_usd: 0.0` à côté d'une équité
+    de 97,21 — ce qui se lit « entièrement investi » alors que rien ne l'est."""
+    snap = ks.build_snapshot(
+        trade_balance={"eb": "97.2072"}, balances={"USDC": "97.207294"}
+    )
+    assert snap["equity_usd"] == 97.2072
+    assert snap["cash_usd"] == 97.207294
+
+
+def test_cash_sums_across_the_dollar_pegs() -> None:
+    snap = ks.build_snapshot(
+        trade_balance={"eb": "300.0"},
+        balances={"ZUSD": "100.0", "USDC": "150.0", "XXBT": "0.01"},
+    )
+    assert snap["cash_usd"] == 250.0
+    assert snap["balances"]["XXBT"] == 0.01
+
+
+def test_a_coin_only_account_still_reports_no_cash() -> None:
+    """Le pendant : sans stablecoin, zéro est la bonne réponse, pas un repli."""
+    snap = ks.build_snapshot(trade_balance={"eb": "500.0"}, balances={"XXBT": "0.01"})
+    assert snap["cash_usd"] == 0.0

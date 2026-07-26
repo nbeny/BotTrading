@@ -40,7 +40,11 @@ export default function CommandCenterPage() {
       <PageHeader title="Command Center" subtitle="Supervision temps réel — décisions, exécution, marché & santé" />
       <KpiTicker portfolio={portfolio.data} status={status.data} exposure={exposure.data} eventsPerMin={eventsPerMin} />
       <Box sx={{ mt: 2, display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', lg: '2fr 1fr' }, alignItems: 'start' }}>
-        <Stack spacing={2}>
+        {/* minWidth: 0 — a grid item also defaults to `min-width: auto`, so
+            without it this column refuses to shrink below its widest child and
+            the whole page scrolls sideways instead of the pipeline row doing
+            it. Both this and the scroller inside PipelineFlow are needed. */}
+        <Stack spacing={2} sx={{ minWidth: 0 }}>
           <Box className="cmi-glass reveal" sx={{ borderRadius: 3, p: 2 }}>
             {systems.data && <PipelineFlow stages={systems.data.pipeline} />}
           </Box>

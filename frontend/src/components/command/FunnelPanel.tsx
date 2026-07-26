@@ -47,7 +47,7 @@ export function FunnelPanel() {
 
   if (!data) return null;
 
-  const { stages, factors_presence, top_block_reasons } = data;
+  const { stages, factors_presence, top_block_reasons, block_reasons_truncated } = data;
   const firstCount = stages[0]?.count ?? 0;
   const bottleneckIdx = findBottleneck(stages);
 
@@ -118,6 +118,13 @@ export function FunnelPanel() {
                 Aucun blocage recensé.
               </Typography>
             )}
+            {/* Say the list is partial. Without this the ten shown read as all
+                there is, and a rare cause would look like it never happened. */}
+            {block_reasons_truncated ? (
+              <Typography variant="caption" color="text.disabled" sx={{ alignSelf: 'center' }}>
+                + causes moins fréquentes non affichées
+              </Typography>
+            ) : null}
           </Stack>
         </Box>
 

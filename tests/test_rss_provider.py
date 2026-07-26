@@ -110,3 +110,24 @@ async def test_external_id_uses_stable_feed_hash() -> None:
 
     src = hashlib.sha1(feed.encode()).hexdigest()[:16]
     assert all(i.external_id.startswith(f"{src}:") for i in items)
+
+
+@respx.mock
+async def test_a_redirected_feed_is_followed_not_reported_unreachable() -> None:
+    # CoinDesk answers 308 on its own advertised feed URL and Blockworks moved
+    # .co -> .com. Without follow_redirects both were logged "RSS feed
+    # unreachable" every cycle while serving perfectly good XML one hop away.
+    old = "https://old.example/feed"
+    new = "https://new.example/feed"
+    respx.get(old).mock(return_value=httpx.Response(308, headers={"Location": new}))
+    respx.get(new).mock(
+        return_value=httpx.Response(
+            200, text=_FEED, headers={"content-type": "application/rss+xml"}
+        )
+    )
+
+    provider = rss.RSSProvider(feeds=[old])
+    items = await provider.fetch()
+    await provider.close()
+
+    assert items, "the redirected feed produced no items"

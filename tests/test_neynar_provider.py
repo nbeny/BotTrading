@@ -39,7 +39,10 @@ def _cast(h: str, text: str, likes: int = 0) -> dict:
 
 
 @respx.mock
-async def test_maps_casts_with_cashtags() -> None:
+async def test_maps_every_cast_and_leaves_symbols_to_the_normalizer() -> None:
+    # Requiring an explicit $TICKER discarded every cast, so Farcaster produced
+    # zero rows despite a working API key. The collector's normalizer resolves
+    # symbols for all providers and overwrites whatever is set here.
     respx.get(ny.SEARCH_URL).mock(
         return_value=httpx.Response(
             200,
@@ -57,14 +60,15 @@ async def test_maps_casts_with_cashtags() -> None:
     items = await provider.fetch()
     await provider.close()
 
-    assert len(items) == 1
+    assert len(items) == 2
     it = items[0]
     assert it.source == "neynar"
     assert it.kind == "social"
     assert it.external_id == "0xaa"
-    assert it.symbols == ["BTC"]
+    assert it.symbols == []
     assert it.author == "alice"
     assert it.engagement == 5.0
+    assert items[1].external_id == "0xbb"
 
 
 async def test_no_key_is_noop() -> None:

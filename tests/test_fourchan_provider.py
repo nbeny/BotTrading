@@ -28,7 +28,11 @@ def _thread(no: int, com: str, replies: int = 0) -> dict:
 
 
 @respx.mock
-async def test_maps_threads_with_cashtags() -> None:
+async def test_maps_every_thread_and_leaves_symbols_to_the_normalizer() -> None:
+    # The provider used to require an explicit $TICKER and skip the thread
+    # otherwise, which discarded 100% of /biz/ -- the source produced zero rows
+    # for its entire life. Symbol resolution belongs to the collector's
+    # normalizer, which sees every provider and overwrites this field anyway.
     respx.get(fc.CATALOG_URL).mock(return_value=httpx.Response(200, json=[
         {"page": 1, "threads": [
             _thread(101, "buy $BTC now<br>moon", replies=12),
@@ -39,14 +43,15 @@ async def test_maps_threads_with_cashtags() -> None:
     items = await provider.fetch()
     await provider.close()
 
-    assert len(items) == 1
+    assert len(items) == 2
     it = items[0]
     assert it.source == "fourchan"
     assert it.kind == "social"
     assert it.external_id == "101"
-    assert it.symbols == ["BTC"]
+    assert it.symbols == []
     assert "$BTC" in it.text          # <br> stripped
     assert it.engagement == 12.0
+    assert items[1].external_id == "102"
 
 
 @respx.mock

@@ -252,9 +252,18 @@ Macro and regulatory content stops being discarded, and no existing tuning moves
 | Reddit | Application-only OAuth | **Requires operator action**: create an app at reddit.com/prefs/apps (free) and set `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET`. Without credentials Reddit stays at 403 and the source stays dark. |
 | 4chan | Drop `if not symbols: continue` (`fourchan.py:55`) | The normalizer decides now; /biz/ goes from 0 rows to real volume. |
 | Farcaster | Drop `if not symbols: continue` (`neynar.py:67`) | Same. Key already present in prod. |
-| CryptoCompare | Enable | Its `/news` endpoint is free and keyless; `categories` feed Gate 1 as provider tags. |
-| RSS | Replace the 308-ing CoinDesk URL; add The Block, Blockworks, CryptoSlate, Bitcoin Magazine | Free, high crypto purity. |
-| GDELT | Narrow the query to crypto terms | Gate 2 absorbs the residual noise. |
+| CryptoCompare | **Key-gated, off by default** | The spec claimed the `/news` endpoint was free and keyless. Verified false: it answers `401 API key required` and points at developers.coindesk.com — CryptoCompare was folded into CoinDesk Data. Keyless it only burned a request and logged a failure every cycle, which is why it had zero rows *and* zero successful logs. A free key re-enables it. |
+| RSS | `follow_redirects=True`; add The Block, Blockworks, Bitcoin Magazine | The CoinDesk URL was never wrong — it answers 308 and serves valid RSS one hop away, but the client did not follow redirects. Same for Blockworks' `.co` → `.com` move. CryptoSlate is excluded: it answers 403 to any non-browser client, browser User-Agent included. |
+| GDELT | Narrow the query to crypto terms | Now an efficiency measure, not a correctness one: the gate already cut GDELT from 19.9% to 2.6% of ingested rows in production. A tighter query spends the rate-limited budget on articles that can survive it. |
+
+**Reddit is deferred indefinitely, not scheduled.** Reddit closed self-service
+Data API registration in 2026; new OAuth credentials require an approval ticket
+with an architecture description and take weeks to months, against unpublished
+rejection criteria. Devvit is not an alternative — it builds apps that run
+*inside* Reddit, installation requires moderator rights on each target
+subreddit, its outbound HTTP is a review-gated premium feature, and its rules
+forbid sharing Reddit data to train models or otherwise commercialise it. If
+pre-existing credentials turn up, the provider only needs two env vars.
 
 ### Added
 

@@ -63,9 +63,10 @@ class NeynarProvider:
             if not isinstance(cast, dict):
                 continue
             text = cast.get("text", "")
-            symbols = sorted({m.upper() for m in _CASHTAG.findall(text)})
-            if not symbols:
-                continue
+            # No symbol extraction here: the collector's normalizer resolves
+            # symbols for every provider and overwrites whatever we set. Requiring
+            # an explicit $TICKER and skipping otherwise discarded every cast --
+            # Farcaster produced zero rows despite a working API key.
             h = cast.get("hash")
             if not h:
                 continue
@@ -82,7 +83,6 @@ class NeynarProvider:
                     external_id=str(h),
                     text=text,
                     author=(cast.get("author") or {}).get("username"),
-                    symbols=symbols,
                     engagement=engagement,
                     published_at=_ts(cast.get("timestamp")),
                 )

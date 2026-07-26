@@ -17,7 +17,12 @@ DEFAULT_FEEDS = [
     "https://www.coindesk.com/arc/outboundfeeds/rss/",
     "https://cointelegraph.com/rss",
     "https://decrypt.co/feed",
+    "https://www.theblock.co/rss.xml",
+    "https://blockworks.com/feed",
+    "https://bitcoinmagazine.com/feed",
 ]
+# CryptoSlate is deliberately absent: https://cryptoslate.com/feed/ answers 403
+# to any non-browser client, browser User-Agent included. Not worth spoofing.
 
 
 class RSSProvider:
@@ -32,8 +37,11 @@ class RSSProvider:
         user_agent: str = "cmi-collector/0.1",
     ) -> None:
         self._feeds = feeds or DEFAULT_FEEDS
+        # Follow redirects: CoinDesk answers 308 on its own advertised feed URL
+        # and Blockworks moved .co -> .com. Without this both were logged
+        # "unreachable" every cycle while serving perfectly good RSS one hop away.
         self._client = httpx.AsyncClient(
-            headers={"User-Agent": user_agent}, timeout=15.0
+            headers={"User-Agent": user_agent}, timeout=15.0, follow_redirects=True
         )
 
     async def close(self) -> None:

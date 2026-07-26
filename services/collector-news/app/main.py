@@ -28,6 +28,14 @@ POLL_INTERVAL = float(os.getenv("NEWS_POLL_INTERVAL", "300"))
 CC_BASE_URL = os.getenv("CRYPTOCOMPARE_BASE_URL", "https://min-api.cryptocompare.com")
 CC_API_KEY = os.getenv("CRYPTOCOMPARE_API_KEY") or None
 RSS_FEEDS = [f for f in os.getenv("RSS_FEEDS", "").split(",") if f]
+# GDELT indexes all world news, so a bare "cryptocurrency" pulled in football and
+# regional reporting that merely brushed the word. The relevance gate rejects
+# that downstream, but a tighter query means the rate-limited budget is spent on
+# articles that can actually survive it.
+DEFAULT_GDELT_QUERY = (
+    "(bitcoin OR ethereum OR cryptocurrency OR blockchain OR stablecoin) "
+    "sourcelang:english"
+)
 
 
 class _RepoFactory:
@@ -46,10 +54,14 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     db = Database(settings.db)
     repo = _RepoFactory(db)
     providers: list[Provider] = [
-        CryptoCompareNewsProvider(CC_BASE_URL, CC_API_KEY),
         RSSProvider(feeds=RSS_FEEDS or None),
-        GdeltProvider(query=os.getenv("GDELT_QUERY", "cryptocurrency")),
+        GdeltProvider(query=os.getenv("GDELT_QUERY", DEFAULT_GDELT_QUERY)),
     ]
+    # Key-gated since CryptoCompare was folded into CoinDesk Data: the news
+    # endpoint now answers 401 without a key, so running it keyless only burned
+    # a request and logged a failure every cycle. Free keys: developers.coindesk.com
+    if CC_API_KEY:
+        providers.append(CryptoCompareNewsProvider(CC_BASE_URL, CC_API_KEY))
     if os.getenv("NEWSDATA_API_KEY"):
         providers.append(NewsDataProvider(os.getenv("NEWSDATA_API_KEY")))
     normalizer = LexiconNormalizer(

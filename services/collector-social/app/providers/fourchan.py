@@ -51,16 +51,17 @@ class FourchanProvider:
                 if no is None:
                     continue
                 text = _strip_html(thread.get("com", ""))
-                symbols = sorted({m.upper() for m in _CASHTAG.findall(text)})
-                if not symbols:
-                    continue
+                # No symbol extraction here: the collector's normalizer resolves
+                # symbols for every provider and overwrites whatever we set. This
+                # used to require an explicit $TICKER and `continue` otherwise,
+                # which discarded 100% of /biz/ -- the source produced zero rows
+                # for its entire life.
                 items.append(
                     RawItem(
                         source="fourchan",
                         kind="social",
                         external_id=str(no),
                         text=text,
-                        symbols=symbols,
                         engagement=float(thread.get("replies", 0)),
                     )
                 )

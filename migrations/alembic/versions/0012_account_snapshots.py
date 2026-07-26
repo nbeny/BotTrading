@@ -34,18 +34,25 @@ def upgrade() -> None:
         sa.Column("balances", postgresql.JSONB, nullable=False, server_default="{}"),
         sa.Column("fetched_at", sa.DateTime(timezone=True), nullable=False),
     )
-    # Serves the only query there is: the latest snapshot for a venue.
-    # DESC is cosmetic here — a btree scans backwards, so a plain
-    # (venue, fetched_at) would answer ORDER BY fetched_at DESC within a venue
-    # at the same cost. It is kept because it states the access pattern; the
-    # rendered DDL was checked to be `(venue, fetched_at DESC)`.
+    # Indexed on fetched_at alone, not (venue, fetched_at): the read plane asks
+    # for the newest snapshot across venues and never filters by one, so a
+    # venue-leading composite cannot serve it. Measured against production with
+    # 200k rows: 22.9 ms (parallel seq scan + top-N sort) versus 0.109 ms once
+    # this index exists -- on a query every portfolio page load issues.
+    #
+    # A (venue, fetched_at) composite is the right index the day a second venue
+    # exists and queries start filtering; there is one venue today, so adding it
+    # now would be an unused index maintained on every write.
+    #
+    # Note this table has no retention policy: ~525k rows a year for one venue.
+    # Small in bytes, and the index keeps reads flat, but it grows forever.
     op.create_index(
-        "ix_account_snapshots_venue_time",
+        "ix_account_snapshots_time",
         "account_snapshots",
-        ["venue", sa.text("fetched_at DESC")],
+        [sa.text("fetched_at DESC")],
     )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_account_snapshots_venue_time", table_name="account_snapshots")
+    op.drop_index("ix_account_snapshots_time", table_name="account_snapshots")
     op.drop_table("account_snapshots")

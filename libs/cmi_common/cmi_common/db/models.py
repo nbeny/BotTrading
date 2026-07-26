@@ -319,8 +319,10 @@ class AccountSnapshot(Base):
     """One venue's balance at one instant, as published by trading-engine.
 
     Deliberately not a hypertable: one row per venue per minute is 1440 rows a
-    day for one venue, and the only query is "latest state for this venue",
-    which time partitioning would complicate rather than help.
+    day for one venue, and the only query is "the newest snapshot", which time
+    partitioning would complicate rather than help. Migration 0012 indexes
+    ``fetched_at DESC`` for exactly that query -- see the note there on why it
+    is not a (venue, fetched_at) composite yet.
     """
 
     __tablename__ = "account_snapshots"

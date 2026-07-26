@@ -333,19 +333,31 @@ Schéma commun, aligné sur les conventions du projet (timestamps UTC naïfs via
 `_naive_utc`, payload JSONB) :
 
 ```
-time           TIMESTAMP NOT NULL   -- occurred_at, UTC naïf
-event_id       TEXT NOT NULL        -- UNIQUE : déduplication
+time           TIMESTAMPTZ NOT NULL      -- occurred_at
+event_id       TEXT NOT NULL
 event_type     TEXT NOT NULL
 topic          TEXT NOT NULL
 symbol         TEXT NULL
 correlation_id TEXT NULL
 payload        JSONB NOT NULL
+PRIMARY KEY (time, event_id)
 ```
 
-Index : `UNIQUE (event_id)` pour l'idempotence Kafka (at-least-once →
-`ON CONFLICT DO NOTHING`, comme le persister actuel), `(time DESC, event_id DESC)`
-pour la pagination par curseur, `(correlation_id)` qui enrichit au passage
-`/trace/{cid}`.
+> **Corrige le 2026-07-26.** La spec prevoyait `UNIQUE (event_id)` seul.
+> TimescaleDB le refuse — verifie contre la base de production :
+> `cannot create a unique index without the column "time" (used in partitioning)`.
+> Tout index unique d'une hypertable doit contenir sa colonne de partitionnement.
+>
+> `PRIMARY KEY (time, event_id)` est equivalent pour l'idempotence Kafka : un
+> message redelivre porte un evenement serialise identique, donc `occurred_at`
+> et `event_id` le sont aussi. Meme forme que `decision_journal` et
+> `pipeline_rejections`.
+>
+> Le type est `TIMESTAMPTZ`, pas `TIMESTAMP` : c'est ce que sont reellement
+> toutes les hypertables du repo.
+
+Index complementaires : `(time DESC, event_id DESC)` pour la pagination par
+curseur, et `(correlation_id)` qui enrichit au passage `/trace/{cid}`.
 
 ### Écriture : un EventArchiver distinct du persister
 

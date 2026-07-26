@@ -12,6 +12,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
+_N_FACTORS = 4
+
 
 @dataclass(frozen=True, slots=True)
 class ScorerConfig:
@@ -40,6 +42,15 @@ class ScoreResult:
     reason: str
     escalate: bool                  # worth a senior (LLM) look?
     ambiguous: bool
+    # Diagnostics — why a signal did or did not reach the senior analyst, and
+    # how much evidence the score was actually computed from. A score built on
+    # 2 of 4 factors is not comparable to one built on 4 of 4; the funnel needs
+    # to tell them apart before any threshold is tuned.
+    # unknown (never scored) | escalated | score_below_threshold | gate_not_met
+    block_reason: str = "unknown"
+    factors_present: int = 0         # 0-4
+    # dex | unknown (volume_proxy reserved for a later task)
+    liquidity_source: str = "unknown"
     factors: dict[str, float] = field(default_factory=dict)
 
 
@@ -55,14 +66,34 @@ def local_opportunity(f: dict, cfg: ScorerConfig | None = None) -> ScoreResult:
     sent = f.get("sentiment_score")          # expected ~[-1, 1]
     liq = f.get("liquidity_usd")
 
+    # A dex pair with no liquidity reading arrives as 0.0, not None
+    # (worker.py: `float(event.liquidity_usd or 0)`), and a 0x volume ratio is
+    # not a reading either. One predicate per factor, so the score, the reason
+    # string and the diagnostics can never disagree about what was supplied.
+    has_chg = chg is not None
+    has_vol = vol_spike is not None and vol_spike > 0
+    has_sent = sent is not None
+    has_liq = liq is not None and liq > 0
+
+    # How many of the four factors were actually supplied (0-_N_FACTORS).
+    # Missing momentum/volume/sentiment normalize to 0.0 and missing liquidity
+    # to a neutral 0.5, so the score alone cannot say whether a low value means
+    # "weak" or "unknown". factors_present is what tells the two apart.
+    factors_present = sum((has_chg, has_vol, has_sent, has_liq))
+    liquidity_source = "dex" if has_liq else "unknown"
+
     # Normalize each factor to [0,1] (magnitude of a tradeable setup).
-    mom = _clamp(abs(chg) / cfg.mom_cap_pct, 0.0, 1.0) if chg is not None else 0.0
-    vol = _clamp((vol_spike - 1.0) / (cfg.vol_cap - 1.0), 0.0, 1.0) if vol_spike else 0.0
-    sent_mag = _clamp(abs(sent), 0.0, 1.0) if sent is not None else 0.0
+    mom = _clamp(abs(chg) / cfg.mom_cap_pct, 0.0, 1.0) if has_chg else 0.0
+    vol = (
+        _clamp((vol_spike - 1.0) / (cfg.vol_cap - 1.0), 0.0, 1.0)
+        if has_vol
+        else 0.0
+    )
+    sent_mag = _clamp(abs(sent), 0.0, 1.0) if has_sent else 0.0
     # Unknown liquidity is treated as neutral (0.5) rather than penalized to 0.
     liq_f = (
         _clamp(math.log10(max(liq, 1.0)) / math.log10(cfg.liq_cap_usd), 0.0, 1.0)
-        if liq
+        if has_liq
         else 0.5
     )
 
@@ -76,25 +107,34 @@ def local_opportunity(f: dict, cfg: ScorerConfig | None = None) -> ScoreResult:
 
     # Ambiguity / signal disagreement — where the LLM earns its keep.
     disagreement = (
-        chg is not None
-        and sent is not None
+        has_chg
+        and has_sent
         and abs(chg) > 2.0
         and abs(sent) > 0.2
         and (chg > 0) != (sent > 0)
     )
-    thin_liq_big_move = liq is not None and liq < cfg.thin_liq_usd and mom > 0.5
+    thin_liq_big_move = has_liq and liq < cfg.thin_liq_usd and mom > 0.5
     ambiguous = bool(disagreement or thin_liq_big_move)
 
-    confidence = round(_clamp(0.3 + 0.4 * liq_f + (0.0 if ambiguous else 0.3), 0.0, 1.0), 2)
+    # Confidence measures how much we trust the *data*, so factor coverage must
+    # outweigh the neutral value substituted for unknown liquidity — otherwise
+    # knowing nothing scores higher than knowing everything about an illiquid
+    # pair. Bounded to [0.25, 1.00] by construction; the attainable floor is
+    # 0.35, since liq_f = 0 implies liquidity was supplied and so fp >= 1.
+    # The risk engine floors at 0.55.
+    # Monotonic in factors_present at fixed liq_f. A *measured* liquidity under
+    # ~$20 still scores below an unknown one (0.65 vs 0.73) — that is deliberate
+    # distrust of a dead pool, not an inversion.
+    confidence = round(0.25 + 0.35 * liq_f + 0.4 * (factors_present / _N_FACTORS), 2)
 
     bits: list[str] = []
-    if chg is not None:
+    if has_chg:
         bits.append(f"24h {chg:+.1f}%")
-    if vol_spike:
+    if has_vol:
         bits.append(f"vol x{vol_spike:.1f}")
-    if sent is not None:
+    if has_sent:
         bits.append(f"sent {sent:+.2f}")
-    if liq is not None:
+    if has_liq:
         bits.append(f"liq ${liq:,.0f}")
     if disagreement:
         bits.append("price/sentiment disagree")
@@ -102,7 +142,15 @@ def local_opportunity(f: dict, cfg: ScorerConfig | None = None) -> ScoreResult:
 
     # Escalate only strong setups that are also ambiguous or high-conviction —
     # a calm, unanimous move needs no LLM.
-    escalate = score >= cfg.escalate_score and (ambiguous or vol >= 0.6 or mom >= 0.6)
+    strong = score >= cfg.escalate_score
+    gate = ambiguous or vol >= 0.6 or mom >= 0.6
+    escalate = strong and gate
+    if escalate:
+        block_reason = "escalated"
+    elif not strong:
+        block_reason = "score_below_threshold"
+    else:
+        block_reason = "gate_not_met"
 
     return ScoreResult(
         opportunity_score=score,
@@ -110,6 +158,9 @@ def local_opportunity(f: dict, cfg: ScorerConfig | None = None) -> ScoreResult:
         reason=reason,
         escalate=escalate,
         ambiguous=ambiguous,
+        block_reason=block_reason,
+        factors_present=factors_present,
+        liquidity_source=liquidity_source,
         factors={
             "momentum": round(mom, 3),
             "volume": round(vol, 3),

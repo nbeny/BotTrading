@@ -252,7 +252,6 @@ services:
     environment:
       <<: *common-env
       ANTHROPIC_HAIKU_MODEL: ${ANTHROPIC_HAIKU_MODEL:-claude-haiku-4-5-20251001}
-      ANTHROPIC_ESCALATION_THRESHOLD: ${ANTHROPIC_ESCALATION_THRESHOLD:-75}
       ANTHROPIC_TRANSPORT: ${ANTHROPIC_TRANSPORT:-cli}
       ANTHROPIC_CLI_PATH: ${ANTHROPIC_CLI_PATH:-claude}
       ANTHROPIC_CLI_TIMEOUT_MS: ${ANTHROPIC_CLI_TIMEOUT_MS:-120000}
@@ -277,6 +276,11 @@ services:
       ANTHROPIC_CLI_PATH: ${ANTHROPIC_CLI_PATH:-claude}
       ANTHROPIC_CLI_TIMEOUT_MS: ${ANTHROPIC_CLI_TIMEOUT_MS:-120000}
       ANTHROPIC_CLI_CONCURRENCY: ${ANTHROPIC_CLI_CONCURRENCY:-4}
+      # Rolling-hour ceiling on senior-analyst calls. Measured in production:
+      # 329 escalations/24h against a 288/day budget, so this is the binding
+      # constraint on decision output. Raise deliberately — it spends quota.
+      ANTHROPIC_MAX_CALLS_PER_HOUR: ${ANTHROPIC_MAX_CALLS_PER_HOUR:-12}
+      ANTHROPIC_SYMBOL_COOLDOWN_S: ${ANTHROPIC_SYMBOL_COOLDOWN_S:-900}
     volumes:
       - ${CLAUDE_DIR}:/home/appuser/.claude:ro
       - ${CLAUDE_CONFIG}:/home/appuser/.claude.json:ro

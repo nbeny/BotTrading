@@ -97,7 +97,28 @@ class Signal(Base):
     confidence: Mapped[float] = mapped_column(Float)
     reason: Mapped[str] = mapped_column(Text)
     escalated: Mapped[bool] = mapped_column(Boolean, default=False)
+    ambiguous: Mapped[bool] = mapped_column(Boolean, default=False)
+    block_reason: Mapped[str] = mapped_column(String(32), default="unknown")
+    factors_present: Mapped[int] = mapped_column(Integer, default=0)
     payload: Mapped[dict] = mapped_column(JSONB, default=dict)
+
+
+class PipelineRejection(Base):
+    """Where a signal died, per stage -> hypertable on ``time``.
+
+    "Why do I get no decisions?" is only answerable if every stage records its
+    refusals. Sourced from RiskRejectedEvent, which both the decision engine and
+    the risk engine publish on the decision topic.
+    """
+
+    __tablename__ = "pipeline_rejections"
+
+    time: Mapped[datetime] = mapped_column(primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    stage: Mapped[str] = mapped_column(String(32))
+    symbol: Mapped[str] = mapped_column(String(32))
+    correlation_id: Mapped[str | None] = mapped_column(String(64), default=None)
+    reason: Mapped[str] = mapped_column(Text)
 
 
 class Decision(Base, TimestampMixin):
@@ -249,4 +270,5 @@ HYPERTABLES = {
     "prices": "time",
     "sentiments": "time",
     "signals": "time",
+    "pipeline_rejections": "time",
 }

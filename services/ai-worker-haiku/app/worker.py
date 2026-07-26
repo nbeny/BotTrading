@@ -116,5 +116,9 @@ class HaikuWorker:
             sentiment_score=features.get("sentiment_score"),
             social_growth=features.get("social_growth"),
             escalate=r.escalate,
+            ambiguous=r.ambiguous,
+            block_reason=r.block_reason,
+            factors_present=r.factors_present,
+            liquidity_source=r.liquidity_source,
             meta={"features": features, "factors": r.factors, "triage": "deterministic"},
         )

@@ -79,10 +79,243 @@ Ce qui existe déjà et qu'il ne faut PAS recréer :
 
 ---
 
+## Task 0 : Réparer le chargement des modules de service dans les tests
+
+**Prérequis dur.** `pytest tests/` échoue aujourd'hui à la *collecte* sur
+`master` — aucun test ne s'exécute, donc `make test` est vert par accident
+d'affichage seulement. Sans cette tâche, la tâche 11 est invérifiable et chaque
+test ajouté aggrave la collision.
+
+**Cause :** chaque service a un package nommé `app`. `tests/test_api_gateway_read.py`
+s'exécute avant `tests/test_haiku_extract.py` (ordre alphabétique) et laisse
+`sys.modules["app"]` pointant sur l'`app` de l'api-gateway. `test_haiku_extract.py`
+charge ensuite `app.worker` du worker Haiku, dont l'import relatif
+`from .features import FeatureStore` cherche `app.features` dans le mauvais
+package → `ModuleNotFoundError`, collecte interrompue.
+
+`tests/test_scorer.py:3-4` documente déjà la parade (charger sous un nom unique)
+mais chaque fichier la réinvente ou l'oublie. On la centralise.
+
+**Files:**
+- Create: `tests/service_modules.py`
+- Modify: `tests/test_haiku_extract.py`
+- Modify: `tests/test_scorer_diagnostics.py` (créé en T1 avec le mauvais motif)
+
+- [ ] **Step 1: Reproduce the failure**
+
+Run: `python -m pytest tests/ -q`
+
+Expected: `ERROR tests/test_haiku_extract.py` … `ModuleNotFoundError: No module
+named 'app.features'` … `Interrupted: 1 error during collection`.
+
+Note the exact error — Step 5 checks it is gone.
+
+- [ ] **Step 2: Write the shared loader**
+
+Create `tests/service_modules.py`:
+
+```python
+"""Load a service's ``app`` package under a unique top-level alias.
+
+Every service in this repo ships a package literally named ``app``. Loading two
+of them in one pytest session makes the second shadow the first in
+``sys.modules``, so a relative import such as ``from .features import
+FeatureStore`` resolves against the wrong service and raises ModuleNotFoundError
+— which aborted collection of the whole suite.
+
+Registering each service under an alias derived from its directory name
+(``ai_worker_haiku_app``, ``api_gateway_app``, …) gives every module a parent
+package rooted at its own service directory, so relative imports resolve within
+that service and nowhere else.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import sys
+from pathlib import Path
+from types import ModuleType
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def load_service_module(service: str, module: str) -> ModuleType:
+    """Import ``services/<service>/app/<module>.py`` under a per-service alias.
+
+    The alias is derived from ``service`` rather than passed in, so uniqueness
+    holds by construction. A caller-supplied alias could collide silently: the
+    module would be loaded under another service's ``__path__``, or the cache
+    would hand back the wrong service's module — with no error either way.
+    """
+    alias = service.replace("-", "_") + "_app"
+    app_dir = _REPO_ROOT / "services" / service / "app"
+
+    if alias not in sys.modules:
+        pkg_spec = importlib.util.spec_from_file_location(
+            alias,
+            app_dir / "__init__.py",
+            submodule_search_locations=[str(app_dir)],
+        )
+        assert pkg_spec and pkg_spec.loader
+        pkg = importlib.util.module_from_spec(pkg_spec)
+        sys.modules[alias] = pkg
+        pkg_spec.loader.exec_module(pkg)
+
+    qualified = f"{alias}.{module}"
+    if qualified in sys.modules:
+        return sys.modules[qualified]
+
+    spec = importlib.util.spec_from_file_location(qualified, app_dir / f"{module}.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    # Registered before exec so dataclasses and relative imports can resolve it.
+    sys.modules[qualified] = mod
+    spec.loader.exec_module(mod)
+    return mod
+```
+
+- [ ] **Step 3: Migrate `tests/test_haiku_extract.py`**
+
+Replace its entire importlib preamble (the block from `import importlib.util`
+through `_spec.loader.exec_module(hw)`, roughly lines 5-25) with:
+
+```python
+from cmi_common.events.sentiment import SentimentEvent
+
+from .service_modules import load_service_module
+
+hw = load_service_module("ai-worker-haiku", "worker")
+```
+
+If the relative import `from .service_modules import ...` fails because `tests/`
+is not a package, use `from service_modules import load_service_module` instead —
+pytest puts the test file's directory on `sys.path` under rootdir-based
+collection. Verify which one works in Step 5 and use that form consistently in
+every migrated file.
+
+- [ ] **Step 4: Migrate `tests/test_scorer_diagnostics.py`**
+
+Replace its importlib preamble with the same pattern:
+
+```python
+from service_modules import load_service_module
+
+sc = load_service_module("ai-worker-haiku", "scorer")
+```
+
+Leave the seven test functions untouched.
+
+- [ ] **Step 4b: Close the remaining `app` claim and guard against recurrence**
+
+Three files still do `sys.path.insert` + `import app` for api-gateway:
+`tests/test_api_gateway_read.py`, `tests/test_api_gateway_sentiment.py`,
+`tests/test_read_contract.py`. Nothing breaks today only because no *second*
+service is imported under the bare name — but tasks 6, 7 and 8 add more
+api-gateway test loading, and `pyproject.toml`'s `pythonpath` already lists three
+further services shipping an `app/`. Migrate all three onto
+`load_service_module("api-gateway", ...)`.
+
+Migrate `tests/test_scorer.py` too: it is the file whose docstring first
+documented this workaround, and leaving it on an ad-hoc loader means the teacher
+contradicts the lesson.
+
+Then add `tests/conftest.py` (none exists in the repo today):
+
+```python
+"""Guard: load service `app` packages via tests/service_modules.py, never bare."""
+
+import sys
+
+
+def pytest_collection_finish(session):
+    leaked = sorted(k for k in sys.modules if k == "app" or k.startswith("app."))
+    assert not leaked, (
+        f"{leaked} loaded under the bare name 'app'. Every service ships a package "
+        "named 'app'; use tests/service_modules.load_service_module() instead."
+    )
+```
+
+Order matters: the guard fails until the three migrations land, so migrate first.
+
+- [ ] **Step 5: Verify the whole suite now collects**
+
+Run: `python -m pytest tests/ -q`
+
+Expected: collection completes — no `Interrupted: N error during collection`.
+Record the pass/fail counts. **Pre-existing failures may now become visible for
+the first time; that is progress, not regression.** Report them, do not fix them
+in this task.
+
+Run: `python -m pytest tests/test_haiku_extract.py tests/test_scorer_diagnostics.py tests/test_scorer.py -v`
+
+Expected: all pass (2 + 7 + 5 = 14).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add tests/service_modules.py tests/test_haiku_extract.py tests/test_scorer_diagnostics.py
+git commit -m "fix(tests): load service app packages under unique aliases
+
+Every service ships a package named 'app'. Loading two in one pytest session
+shadowed the first in sys.modules, so a relative import inside the second
+resolved against the wrong service and aborted collection of the entire suite —
+'make test' has been running zero tests.
+
+Centralises the workaround that test_scorer.py already documented ad hoc.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+```
+
+---
+
+## Convention pour tous les tests suivants
+
+**Ne jamais charger un module de service sous un nom commençant par `app.`.**
+Utiliser systématiquement :
+
+```python
+from service_modules import load_service_module
+
+mod = load_service_module("<service-dir>", "<module>")
+```
+
+L'alias est **dérivé du nom du service** par le helper — il n'est pas un
+paramètre. Un alias fourni par l'appelant n'apporte rien que le nom du service ne
+porte déjà, et sa seule fonction (l'unicité) est garantie par construction quand
+il est dérivé. Passé en argument, il ouvrait deux défaillances silencieuses
+démontrées en revue : deux services partageant un alias donnaient soit un module
+chargé sous le `__path__` d'un autre service, soit un retour de cache livrant le
+module du mauvais service — sans erreur ni avertissement.
+
+---
+
 ## Task 1 : Le scorer expose ses diagnostics
 
 Le scorer calcule déjà `ambiguous` et les facteurs, mais ne dit pas *pourquoi* il
 n'escalade pas, ni combien de facteurs étaient réellement disponibles.
+
+> **Réalisé en deux commits.** `1e61a00` implémente le plan ci-dessous ; `c3dc14f`
+> corrige deux défauts que la revue qualité a trouvés et que j'ai reproduits :
+>
+> 1. **La formule de confiance ci-dessous est erronée** — `0.3 + 0.4·liq_f +
+>    0.15·(fp/4)` récompense l'absence de données (dict vide → 0.50 contre 0.45
+>    pour quatre facteurs avec liquidité faible), parce que la substitution
+>    neutre de 0.5 pour une liquidité inconnue rapporte 0.20 quand le terme de
+>    couverture plafonne à 0.15. Elle est aussi bornée à [0.30, 0.85], rendant
+>    son `_clamp` inatteignable. Remplacée par
+>    `round(0.25 + 0.35 * liq_f + 0.4 * (factors_present / _N_FACTORS), 2)`,
+>    monotone et bornée à [0.25, 1.00], sans clamp.
+> 2. **`liquidity_usd == 0.0` est le chemin normal, pas un cas limite** —
+>    `worker.py:83` envoie `float(event.liquidity_usd or 0)`, donc une liquidité
+>    absente arrive à `0.0`. `thin_liq_big_move` la lisait comme « liquidité
+>    ténue » et escaladait vers le LLM payant un symbole sans information.
+>    Corrigé par des prédicats `has_chg`/`has_vol`/`has_sent`/`has_liq` employés
+>    par `factors_present`, `liquidity_source`, la normalisation,
+>    `thin_liq_big_move` et la chaîne `reason`. **Changement de comportement
+>    assumé**, couvert par un test.
+>
+> `block_reason` prend aussi `"unknown"` comme défaut de dataclass (et non
+> `"escalated"`), ce que les tâches 2 et 5 répercutent.
 
 **Files:**
 - Modify: `services/ai-worker-haiku/app/scorer.py`
@@ -351,13 +584,14 @@ from cmi_common.events import AnalysisEvent
 
 
 def test_defaults_are_backwards_compatible() -> None:
-    """Existing producers that omit the new fields must still validate."""
+    """Existing producers that omit the new fields must still validate, and an
+    unset block_reason must not read as "this reached the senior analyst"."""
     ev = AnalysisEvent(
         symbol="BTC", opportunity_score=22, confidence=0.6, reason="r"
     )
     assert ev.ambiguous is False
     assert ev.factors_present == 0
-    assert ev.block_reason == "escalated"
+    assert ev.block_reason == "unknown"
 
 
 def test_diagnostics_round_trip_through_json() -> None:
@@ -390,9 +624,11 @@ immediately after the `escalate: bool = False` line:
 
 ```python
     # Triage diagnostics — carried so the pipeline funnel can report *where* a
-    # signal stopped without re-deriving it. Defaults keep older producers valid.
+    # signal stopped without re-deriving it. Defaults keep older producers valid;
+    # "unknown" rather than "escalated" so an event from a producer that does not
+    # set it is never mistaken for one that reached the senior analyst.
     ambiguous: bool = False
-    block_reason: str = "escalated"
+    block_reason: str = "unknown"
     factors_present: int = Field(default=0, ge=0, le=4)
     liquidity_source: str = "unknown"
 ```
@@ -442,21 +678,9 @@ Create `tests/test_haiku_scorer_config.py`:
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
+from service_modules import load_service_module
 
-_APP_ROOT = Path(__file__).resolve().parents[1] / "services" / "ai-worker-haiku"
-if str(_APP_ROOT) not in sys.path:
-    sys.path.insert(0, str(_APP_ROOT))
-
-_spec = importlib.util.spec_from_file_location(
-    "app.main_cfg", _APP_ROOT / "app" / "main.py"
-)
-hm = importlib.util.module_from_spec(_spec)
-assert _spec.loader
-sys.modules[_spec.name] = hm
-_spec.loader.exec_module(hm)
+hm = load_service_module("ai-worker-haiku", "main")
 
 
 def test_default_preserves_current_behaviour(monkeypatch) -> None:
@@ -534,27 +758,15 @@ Create `tests/test_decision_engine_rejection.py`:
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
-
 import pytest
 
 from cmi_common.events import AnalysisEvent
 from cmi_common.events.base import Source
 from cmi_common.kafka import Topic
 
-_APP_ROOT = Path(__file__).resolve().parents[1] / "services" / "decision-engine"
-if str(_APP_ROOT) not in sys.path:
-    sys.path.insert(0, str(_APP_ROOT))
+from service_modules import load_service_module
 
-_spec = importlib.util.spec_from_file_location(
-    "app.engine", _APP_ROOT / "app" / "engine.py"
-)
-de = importlib.util.module_from_spec(_spec)
-assert _spec.loader
-sys.modules[_spec.name] = de
-_spec.loader.exec_module(de)
+de = load_service_module("decision-engine", "engine")
 
 
 class FakeProducer:
@@ -578,7 +790,9 @@ async def test_low_score_publishes_a_rejection() -> None:
     assert event.event_type == "RiskRejectedEvent"
     assert event.symbol == "BTC"
     assert "below decision threshold" in event.reason
-    assert event.source is Source.DECISION_ENGINE
+    # `==`, not `is`: BaseEvent sets use_enum_values=True, so the field holds the
+    # plain string "decision-engine" and identity against the enum never holds.
+    assert event.source == Source.DECISION_ENGINE
 
 
 @pytest.mark.asyncio
@@ -706,7 +920,7 @@ def upgrade() -> None:
     op.add_column(
         "signals",
         sa.Column(
-            "block_reason", sa.String(32), server_default="escalated", nullable=False
+            "block_reason", sa.String(32), server_default="unknown", nullable=False
         ),
     )
     op.add_column(
@@ -748,7 +962,7 @@ In `libs/cmi_common/cmi_common/db/models.py`, add three columns to `Signal`
 
 ```python
     ambiguous: Mapped[bool] = mapped_column(Boolean, default=False)
-    block_reason: Mapped[str] = mapped_column(String(32), default="escalated")
+    block_reason: Mapped[str] = mapped_column(String(32), default="unknown")
     factors_present: Mapped[int] = mapped_column(Integer, default=0)
 ```
 
@@ -776,17 +990,30 @@ class PipelineRejection(Base):
 Export it in `libs/cmi_common/cmi_common/db/__init__.py`: add
 `PipelineRejection` to the import list from `.models` and to `__all__`.
 
-- [ ] **Step 3: Verify the migration applies**
+- [ ] **Step 3: Verify the migration offline**
 
-Run: `make migrate`
+No database is available in this environment by operator decision, so the
+migration is validated by generating its SQL rather than applying it. It will be
+applied for real on the VPS at deploy time.
 
-Expected: `Running upgrade 0007 -> 0008, signal diagnostics columns + pipeline_rejections`.
+Run: `cd migrations && python -m alembic upgrade head --sql`
 
-Then verify the table is a hypertable:
+Expected: the emitted script ends with the `0007 -> 0008` step. Read the generated
+DDL and confirm, line by line:
 
-Run: `docker compose exec postgres psql -U cmi -d cmi -c "SELECT hypertable_name FROM timescaledb_information.hypertables WHERE hypertable_name = 'pipeline_rejections';"`
+1. Three `ALTER TABLE signals ADD COLUMN` with `DEFAULT` clauses — a `NOT NULL`
+   column added without a default would fail on a non-empty table.
+2. `CREATE TABLE pipeline_rejections` whose primary key **includes `time`**.
+   TimescaleDB rejects `create_hypertable` when the partitioning column is absent
+   from the primary key, and that failure would only appear at deploy.
+3. `UPDATE alembic_version SET version_num='0008'`.
 
-Expected: one row, `pipeline_rejections`.
+Then run `cd migrations && python -m alembic downgrade 0007 --sql` and confirm it
+emits the matching `DROP`s. A downgrade that does not round-trip is how a failed
+deploy becomes unrecoverable.
+
+Because this is not applied against a live TimescaleDB, `create_hypertable`'s
+runtime behaviour is unverified here. Flag that explicitly in your report.
 
 - [ ] **Step 4: Commit**
 
@@ -822,15 +1049,9 @@ import pytest
 from cmi_common.events.base import Source
 from cmi_common.events.risk import RiskRejectedEvent
 
-from importlib import import_module
-import sys
-from pathlib import Path
+from service_modules import load_service_module
 
-_APP_ROOT = Path(__file__).resolve().parents[1] / "services" / "api-gateway"
-if str(_APP_ROOT) not in sys.path:
-    sys.path.insert(0, str(_APP_ROOT))
-
-persister_mod = import_module("app.persister")
+persister_mod = load_service_module("api-gateway", "persister")
 
 
 def test_stage_from_source_maps_both_producers() -> None:
@@ -838,9 +1059,21 @@ def test_stage_from_source_maps_both_producers() -> None:
     assert persister_mod.stage_for(Source.RISK_ENGINE) == "risk_engine"
 
 
-def test_unknown_source_falls_back_to_its_value() -> None:
-    """An unmapped producer must stay visible rather than be silently dropped."""
-    assert persister_mod.stage_for(Source.AI_HAIKU) == Source.AI_HAIKU.value
+def test_source_arrives_as_a_plain_string_on_a_real_event() -> None:
+    """BaseEvent sets use_enum_values=True, so `source` is a str, not a Source
+    member. The dict lookup still works (Source is a str enum), but any code
+    reaching for `.value` would raise AttributeError inside the persister's
+    Kafka consumer loop."""
+    ev = RiskRejectedEvent(source=Source.RISK_ENGINE, symbol="BTC", reason="x")
+    assert isinstance(ev.source, str)
+    assert not isinstance(ev.source, Source)
+    assert persister_mod.stage_for(ev.source) == "risk_engine"
+
+
+def test_unknown_source_keeps_its_raw_name() -> None:
+    """An unmapped producer must stay visible rather than be dropped — and must
+    not crash the consumer on the way."""
+    assert persister_mod.stage_for("some-future-service") == "some-future-service"
 
 
 class FakeSession:
@@ -916,10 +1149,17 @@ _STAGE_BY_SOURCE = {
 }
 
 
-def stage_for(source: Source) -> str:
-    """Which pipeline stage refused. Unmapped producers keep their raw source
-    name rather than being dropped — an unexpected rejector must stay visible."""
-    return _STAGE_BY_SOURCE.get(source, source.value)
+def stage_for(source: str) -> str:
+    """Which pipeline stage refused.
+
+    ``BaseEvent`` sets ``use_enum_values=True``, so ``event.source`` is a plain
+    string, not a ``Source`` member. The dict lookup below still resolves because
+    ``Source`` is a str enum, but reaching for ``.value`` would raise
+    AttributeError — inside a Kafka consumer loop, on precisely the unmapped case
+    this fallback exists to survive. Unmapped producers keep their raw name: an
+    unexpected rejector must stay visible in the funnel.
+    """
+    return _STAGE_BY_SOURCE.get(source, str(source))
 ```
 
 In `Persister.handle`, add a branch **before** the `DecisionEvent` branch —
@@ -992,15 +1232,9 @@ Create `tests/test_funnel_aggregation.py`:
 
 from __future__ import annotations
 
-import sys
-from importlib import import_module
-from pathlib import Path
+from service_modules import load_service_module
 
-_APP_ROOT = Path(__file__).resolve().parents[1] / "services" / "api-gateway"
-if str(_APP_ROOT) not in sys.path:
-    sys.path.insert(0, str(_APP_ROOT))
-
-funnel = import_module("app.funnel")
+funnel = load_service_module("api-gateway", "funnel")
 
 
 def test_stages_are_ordered_and_complete() -> None:
@@ -1528,7 +1762,14 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 Run: `make test`
 
-Expected: all tests pass. Note the count so a later regression is visible.
+Expected: **collection completes** (no `Interrupted: N error during collection`)
+and the tests added by this phase pass.
+
+Caveat inherited from Task 0: the suite never ran end-to-end before this phase,
+so failures unrelated to phase 1 may surface here for the first time. Triage each
+one — `git stash` the phase's commits and re-run to confirm whether it predates
+this work. Report pre-existing failures to the operator; **do not fix them inside
+this phase** and do not weaken a test to make it green.
 
 - [ ] **Step 2: Lint**
 
@@ -1536,25 +1777,40 @@ Run: `make lint`
 
 Expected: ruff, black --check and mypy all clean.
 
-- [ ] **Step 3: Bring the stack up and apply the migration**
+- [ ] **Step 3: Offline migration check**
 
-Run: `make up && make migrate`
+No local database by operator decision — the stack is not brought up. Run
+`cd migrations && python -m alembic upgrade head --sql` and confirm the `0008`
+step is emitted, then `python -m alembic downgrade 0007 --sql` for the round trip.
 
-Expected: `Running upgrade 0007 -> 0008`.
+- [ ] **Step 4: Frontend build**
 
-- [ ] **Step 4: Confirm the funnel answers**
+Run: `cd frontend && npx tsc --noEmit && npm run build`
 
-Run: `curl -s http://localhost:8000/systems/funnel?window=24h | python -m json.tool`
+Expected: clean. The funnel panel renders against the mock BFF route, so the
+Command Center is verifiable without any backend.
 
-Expected: a JSON object with the five stages. On a stalled pipeline you should
-see a large `analyses` count, `escalated: 0`, and `top_block_reasons` dominated
-by `haiku · score_below_threshold` — this is the diagnosis rendered as data.
+- [ ] **Step 5: Post-deploy verification (on the VPS, after merge)**
 
-- [ ] **Step 5: Confirm no behaviour changed**
+These cannot run before deployment. Record them as the acceptance checklist:
 
-Run: `docker compose logs ai-worker-haiku --tail 50`
+```bash
+ssh <VPS_USER>@<VPS_HOST> 'cd /opt/bottrading && docker compose logs migrate --tail 20'
+# expect: Running upgrade 0007 -> 0008
 
-Expected: analyses still published at the same rate; no new errors.
+ssh <VPS_USER>@<VPS_HOST> 'docker compose exec -T postgres psql -U cmi -d cmi -c \
+  "SELECT hypertable_name FROM timescaledb_information.hypertables \
+   WHERE hypertable_name = '"'"'pipeline_rejections'"'"';"'
+# expect: one row
+
+curl -s https://crypto.nbeny.fr/api/gateway/systems/funnel?window=24h | python -m json.tool
+# expect: five stages. On the current stalled pipeline: a large `analyses` count,
+# `escalated: 0`, and top_block_reasons dominated by haiku/score_below_threshold.
+```
+
+Also confirm no behaviour regressed:
+`ssh <VPS_USER>@<VPS_HOST> 'cd /opt/bottrading && docker compose logs ai-worker-haiku --tail 50'`
+— analyses still published at the same rate, no new errors.
 
 ---
 

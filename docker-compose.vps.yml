@@ -229,8 +229,10 @@ services:
     image: ${REGISTRY:-ghcr.io/nbeny}/bottrading-ai-worker-haiku:${TAG:-latest}
     environment:
       <<: *common-env
+      # Local triage score above which a signal is considered for escalation to
+      # the (paid) Sonnet analyst. Tune from /systems/funnel, not from intuition.
+      HAIKU_ESCALATE_SCORE: ${HAIKU_ESCALATE_SCORE:-60}
       ANTHROPIC_HAIKU_MODEL: ${ANTHROPIC_HAIKU_MODEL:-claude-haiku-4-5-20251001}
-      ANTHROPIC_ESCALATION_THRESHOLD: ${ANTHROPIC_ESCALATION_THRESHOLD:-75}
       ANTHROPIC_TRANSPORT: ${ANTHROPIC_TRANSPORT:-cli}
       ANTHROPIC_CLI_PATH: ${ANTHROPIC_CLI_PATH:-claude}
       ANTHROPIC_CLI_TIMEOUT_MS: ${ANTHROPIC_CLI_TIMEOUT_MS:-120000}
@@ -255,6 +257,11 @@ services:
       ANTHROPIC_CLI_CONCURRENCY: ${ANTHROPIC_CLI_CONCURRENCY:-2}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       KAFKA_MAX_POLL_INTERVAL_MS: ${KAFKA_MAX_POLL_INTERVAL_MS:-22200000}
+      # Rolling-hour ceiling on senior-analyst calls. Measured in production:
+      # 329 escalations/24h against a 288/day budget, so this is the binding
+      # constraint on decision output. Raise deliberately — it spends quota.
+      ANTHROPIC_MAX_CALLS_PER_HOUR: ${ANTHROPIC_MAX_CALLS_PER_HOUR:-12}
+      ANTHROPIC_SYMBOL_COOLDOWN_S: ${ANTHROPIC_SYMBOL_COOLDOWN_S:-900}
 
   decision-engine:
     <<: *svc
@@ -269,6 +276,11 @@ services:
     environment:
       <<: *common-env
       RISK_MAX_POSITION_PCT: ${RISK_MAX_POSITION_PCT:-0.05}
+      # Floors a decision must clear to become an actionable signal. Both are
+      # read by rules.evaluate; surfaced here so they can be tuned from the
+      # funnel without a rebuild.
+      RISK_MIN_SCORE: ${RISK_MIN_SCORE:-70}
+      RISK_MIN_CONFIDENCE: ${RISK_MIN_CONFIDENCE:-0.55}
 
   trading-engine:
     <<: *svc

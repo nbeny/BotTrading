@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 from fastapi import FastAPI
 
@@ -11,7 +12,20 @@ from cmi_common.cache import Cache
 from cmi_common.kafka import EventConsumer, EventProducer, Topic
 
 from .features import FeatureStore
+from .scorer import ScorerConfig
 from .worker import HaikuWorker
+
+
+def scorer_config_from_env() -> ScorerConfig:
+    """Escalation floor is operator-tunable: it decides how much traffic reaches
+    the paid senior analyst, and the right value is only knowable from live
+    funnel data. Everything else in ScorerConfig is a model parameter and stays
+    fixed — a deploy must not be able to change what the score means.
+
+    Default matches the previous hardcoded value, so enabling this changes
+    nothing on its own.
+    """
+    return ScorerConfig(escalate_score=int(os.getenv("HAIKU_ESCALATE_SCORE", "60")))
 
 
 async def _startup(app: FastAPI, settings: Settings) -> None:
@@ -19,7 +33,9 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     producer = EventProducer(settings.kafka)
     await producer.start()
     # Haiku triage is now a deterministic local scorer — no Claude, no quota.
-    worker = HaikuWorker(FeatureStore(cache), producer)
+    worker = HaikuWorker(
+        FeatureStore(cache), producer, scorer_config=scorer_config_from_env()
+    )
     consumer = EventConsumer(
         settings.kafka,
         [Topic.PRICE, Topic.VOLUME, Topic.DEX, Topic.SENTIMENT],

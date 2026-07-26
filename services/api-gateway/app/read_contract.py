@@ -68,4 +68,8 @@ CONTRACT: dict[str, set[str]] = {
         "summary", "services", "pipeline", "kafka", "collectors", "workers",
         "infra",
     },
+    "systems/funnel": {
+        "window", "stages", "score_histogram", "factors_presence",
+        "top_block_reasons", "updated_at",
+    },
 }

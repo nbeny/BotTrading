@@ -17,7 +17,7 @@ import type {
   WorkerDecision,
 } from '@/lib/types/domain';
 import type { AnalysisEvent, DecisionEvent, PriceEvent, SentimentEvent } from '@/lib/types/events';
-import type { SystemsSnapshot } from '@/lib/types/systems';
+import type { FunnelStats, SystemsSnapshot } from '@/lib/types/systems';
 
 // ── Portfolio ───────────────────────────────────────────────────────────────
 export const portfolioApi = {
@@ -146,6 +146,8 @@ export const collectorsApi = {
 // built-in BFF snapshot generator.
 export const systemsApi = {
   overview: () => api.get<SystemsSnapshot>('/systems/overview').then((r) => r.data),
+  funnel: (window = '24h') =>
+    api.get<FunnelStats>(`/systems/funnel?window=${window}`).then((r) => r.data),
 };
 
 // ── Decision trace ────────────────────────────────────────────────────────────

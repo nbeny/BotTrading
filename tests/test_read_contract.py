@@ -7,29 +7,25 @@ drift: a renamed/removed response field breaks this test in CI, not the browser.
 
 from __future__ import annotations
 
-import sys
 from datetime import datetime, timezone
-from pathlib import Path
 from types import SimpleNamespace
 
-_SVC = Path(__file__).resolve().parents[1] / "services" / "api-gateway"
-if str(_SVC) not in sys.path:
-    sys.path.insert(0, str(_SVC))
+from service_modules import load_service_module
 
-from app import read_api  # noqa: E402
-from app.read_api import (  # noqa: E402
-    compute_exposure,
-    compute_portfolio,
-    compute_risk_alerts,
-    compute_risk_limits,
-    map_decision,
-    map_news,
-    map_portfolio_trade,
-    map_position,
-    map_price_point,
-    map_token,
-)
-from app.read_contract import CONTRACT  # noqa: E402
+read_api = load_service_module("api-gateway", "read_api")
+
+compute_exposure = read_api.compute_exposure
+compute_portfolio = read_api.compute_portfolio
+compute_risk_alerts = read_api.compute_risk_alerts
+compute_risk_limits = read_api.compute_risk_limits
+map_decision = read_api.map_decision
+map_news = read_api.map_news
+map_portfolio_trade = read_api.map_portfolio_trade
+map_position = read_api.map_position
+map_price_point = read_api.map_price_point
+map_token = read_api.map_token
+
+CONTRACT = load_service_module("api-gateway", "read_contract").CONTRACT
 
 NOW = datetime(2026, 7, 25, 12, 0, tzinfo=timezone.utc)
 
@@ -96,9 +92,19 @@ class _FakeSession:
         self._n -= 1
         return _Result()
 
+    async def scalar(self, _stmt):
+        """Counting endpoints call `session.scalar` directly rather than going
+        through `execute`. Returning 0 exercises the all-zeros path, which is
+        the current production state of the pipeline."""
+        return 0
+
 
 # ── assertions ────────────────────────────────────────────────────────────────
+_ASSERTED: set[str] = set()
+
+
 def _assert_keys(name: str, obj: dict) -> None:
+    _ASSERTED.add(name)
     missing = CONTRACT[name] - set(obj)
     assert not missing, f"{name} missing keys: {sorted(missing)}"
 
@@ -178,3 +184,31 @@ async def test_systems_overview_contract() -> None:
 async def test_trace_contract() -> None:
     resp = await read_api.trace(cid="corr-x", session=_FakeSession(8))
     _assert_keys("trace", resp)
+
+
+async def test_systems_funnel_contract() -> None:
+    resp = await read_api.systems_funnel(window="24h", session=_FakeSession(40))
+    _assert_keys("systems/funnel", resp)
+
+
+# ── manifest coverage ─────────────────────────────────────────────────────────
+# Defined last on purpose: pytest runs a module's tests in definition order, so
+# every _assert_keys call above has already registered by the time this runs.
+def test_every_contract_entry_is_actually_asserted() -> None:
+    """A CONTRACT entry with no test is inert — it documents a shape nothing
+    enforces, which is worse than no entry because it reads as coverage.
+
+    This file enumerates endpoints by hand rather than iterating the manifest,
+    so adding a key to CONTRACT alone changes nothing in CI. This test is what
+    makes the manifest self-enforcing.
+
+    ``market/signals`` is excluded by design: it returns a heterogeneous union
+    of raw event dicts with no stable shared key set (see read_contract.py's
+    module docstring), and is smoke-checked live instead.
+    """
+    expected = set(CONTRACT) - {"market/signals"}
+    unasserted = expected - _ASSERTED
+    assert not unasserted, (
+        f"CONTRACT entries with no assertion: {sorted(unasserted)}. "
+        "Add a test calling _assert_keys for each, or the manifest lies."
+    )

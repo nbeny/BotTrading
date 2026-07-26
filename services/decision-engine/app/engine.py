@@ -13,6 +13,7 @@ import logging
 from cmi_common.events import AnalysisEvent, BaseEvent, SentimentEvent
 from cmi_common.events.base import Source
 from cmi_common.events.decision import DecisionEvent, Direction
+from cmi_common.events.risk import RiskRejectedEvent
 from cmi_common.kafka import EventProducer, Topic
 from cmi_common.observability import EVENTS_CONSUMED, EVENTS_PRODUCED
 
@@ -51,6 +52,24 @@ class DecisionEngine:
         )
         result = score(features)
         if result.opportunity_score < self._threshold:
+            # Reuse the risk engine's audit event rather than inventing a second
+            # one of identical shape. Without this the deterministic path is the
+            # only stage whose rejections leave no trace, so the funnel would
+            # show signals vanishing here with no reason attached.
+            rejected = RiskRejectedEvent(
+                source=Source.DECISION_ENGINE,
+                correlation_id=event.correlation_id,
+                symbol=event.symbol,
+                reason=(
+                    f"score {result.opportunity_score} below decision threshold "
+                    f"{self._threshold}"
+                ),
+                decision_event_id=event.event_id,
+            )
+            await self._producer.publish(Topic.DECISION, rejected)
+            EVENTS_PRODUCED.labels(
+                SERVICE, Topic.DECISION.value, rejected.event_type
+            ).inc()
             return
         decision = DecisionEvent(
             source=Source.DECISION_ENGINE,

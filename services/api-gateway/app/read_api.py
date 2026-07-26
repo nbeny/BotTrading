@@ -27,9 +27,10 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cmi_common.db import Decision, News, Price, Sentiment, ServiceHealth, Signal, Token, Trade
-from cmi_common.db.models import RawContent
+from cmi_common.db.models import PipelineRejection, RawContent
 from cmi_common.sources import SqlSentimentAggReader
 
+from .funnel import SCORE_BUCKET_WIDTH, build_funnel
 from .routers import get_session_dep
 
 router = APIRouter(tags=["read"])
@@ -100,8 +101,15 @@ def _utcnow() -> datetime:
 
 
 def _utcnow_naive() -> datetime:
-    """Naive UTC — for the TIMESTAMP WITHOUT TIME ZONE columns (prices, signals,
-    sentiments, decisions.created_at, trades.created_at)."""
+    """Naive UTC — for the time-series columns (prices, signals, sentiments,
+    pipeline_rejections, decisions.created_at, trades.created_at).
+
+    Those columns are ``timestamptz``, not TIMESTAMP WITHOUT TIME ZONE as an
+    earlier version of this docstring claimed (the wrong description cost a
+    reviewer a false alarm). The naive comparison is still correct: PostgreSQL
+    reads a naive literal in the session timezone, which is UTC here, so it
+    resolves to the same instant an aware UTC value would.
+    """
     return datetime.now(tz=timezone.utc).replace(tzinfo=None)
 
 
@@ -517,6 +525,10 @@ async def data_stats(session: AsyncSession = Depends(get_session_dep)) -> dict:
 # risk-approved events only carry a size *fraction*). Documented assumption.
 BASE_CAPITAL = float(os.getenv("CMI_BASE_CAPITAL_USD", "100000"))
 OPEN_STATUSES = ("submitted", "filled")
+# ExecutionKind values meaning an order actually reached the exchange. The other
+# three — `pending` (queued), `failed`, `rejected` — are not executions, so the
+# funnel's "executed" stage must enumerate rather than exclude "approved".
+EXECUTED_STATUSES = ("submitted", "filled", "closed")
 DAILY_LOSS_LIMIT = 2000.0
 MAX_EXPOSURE_PCT = 80.0
 MAX_ASSET_PCT = 30.0
@@ -945,3 +957,95 @@ async def systems_overview(session: AsyncSession = Depends(get_session_dep)) -> 
     if not snap["summary"]["events_per_min"]:
         snap["summary"]["events_per_min"] = int(sum(t["msg_per_min"] for t in snap["kafka"]))
     return snap
+
+
+@router.get("/systems/funnel")
+async def systems_funnel(
+    window: str = Query("24h", pattern="^(1h|24h|7d)$"),
+    session: AsyncSession = Depends(get_session_dep),
+) -> dict:
+    """Stage-by-stage survival of signals, plus why the rest were dropped."""
+    hours = {"1h": 1, "24h": 24, "7d": 168}[window]
+    since = _utcnow_naive() - timedelta(hours=hours)
+
+    analyses = await session.scalar(
+        select(func.count()).select_from(Signal).where(Signal.time >= since)
+    )
+    escalated = await session.scalar(
+        select(func.count())
+        .select_from(Signal)
+        .where(and_(Signal.time >= since, Signal.escalated.is_(True)))
+    )
+    decisions = await session.scalar(
+        select(func.count()).select_from(Decision).where(Decision.created_at >= since)
+    )
+    approved = await session.scalar(
+        select(func.count()).select_from(Trade).where(Trade.created_at >= since)
+    )
+    # A trade is born "approved" and is stamped with the ExecutionEvent kind once
+    # the engine acts on it. Enumerate the kinds that mean an order actually
+    # reached the exchange rather than testing "moved past approved": of the six
+    # ExecutionKind values, `failed` and `rejected` are terminal non-executions
+    # and `pending` is still queued, so a negative test would report three kinds
+    # of non-execution as executions — in a funnel whose only job is to say where
+    # signals stop, that inverts the answer.
+    executed = await session.scalar(
+        select(func.count())
+        .select_from(Trade)
+        .where(
+            and_(Trade.created_at >= since, Trade.status.in_(EXECUTED_STATUSES))
+        )
+    )
+
+    # Floor-divide, not `/`: SQLAlchemy renders `/` on two Integers as true
+    # division (it casts the divisor to NUMERIC), which would put every distinct
+    # score in its own group instead of a bucket. `//` compiles to PostgreSQL
+    # integer division and keeps the keys integral, as build_funnel expects.
+    bucket = (Signal.opportunity_score // SCORE_BUCKET_WIDTH) * SCORE_BUCKET_WIDTH
+    score_rows = (
+        await session.execute(
+            select(bucket.label("b"), func.count())
+            .where(Signal.time >= since)
+            .group_by("b")
+        )
+    ).all()
+
+    factor_rows = (
+        await session.execute(
+            select(Signal.factors_present, func.count())
+            .where(Signal.time >= since)
+            .group_by(Signal.factors_present)
+        )
+    ).all()
+
+    # Haiku's own non-escalation reasons live on `signals`; the two downstream
+    # stages report theirs through pipeline_rejections.
+    haiku_rows = (
+        await session.execute(
+            select(Signal.block_reason, func.count())
+            .where(and_(Signal.time >= since, Signal.escalated.is_(False)))
+            .group_by(Signal.block_reason)
+        )
+    ).all()
+    stage_rows = (
+        await session.execute(
+            select(PipelineRejection.stage, PipelineRejection.reason, func.count())
+            .where(PipelineRejection.time >= since)
+            .group_by(PipelineRejection.stage, PipelineRejection.reason)
+        )
+    ).all()
+
+    block_reasons = [("haiku", str(r), int(c)) for r, c in haiku_rows]
+    block_reasons += [(str(s), str(r), int(c)) for s, r, c in stage_rows]
+
+    return build_funnel(
+        window=window,
+        analyses=int(analyses or 0),
+        escalated=int(escalated or 0),
+        decisions=int(decisions or 0),
+        approved=int(approved or 0),
+        executed=int(executed or 0),
+        score_buckets={int(b): int(c) for b, c in score_rows},
+        block_reasons=block_reasons,
+        factors_presence={int(f): int(c) for f, c in factor_rows},
+    )

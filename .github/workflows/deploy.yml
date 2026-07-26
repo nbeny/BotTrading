@@ -38,6 +38,7 @@ jobs:
             tests/test_ai_config.py \
             tests/test_ai_quota.py \
             tests/test_scorer.py \
+            tests/test_scorer_diagnostics.py \
             tests/test_sonnet_budget.py \
             tests/test_collector_runtime.py -q
 

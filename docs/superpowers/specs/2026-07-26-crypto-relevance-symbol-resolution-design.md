@@ -1,8 +1,22 @@
 # Crypto Relevance & Symbol Resolution — Design
 
 **Date:** 2026-07-26
-**Status:** Phase 1 implemented and merged. Phases 2-4 pending — phase 2 (the
-data wipe) must not run until phase 1 is observed behaving in production.
+**Status:** Delivered and running in production.
+
+- **Phase 1** (normalization core) — shipped. Mis-attribution went from 62% of
+  symbol assignments to 0%, measured on live rows before and after.
+- **Phase 2** (data wipe) — done, 1757 rows destroyed after the gate was
+  confirmed working. Repopulated under the gate with `no_symbol = 0` throughout.
+- **Phase 3** (source revival) — 4chan and Farcaster produce for the first time
+  ever; RSS widened and its redirect bug fixed; CryptoCompare key-gated after
+  its free tier turned out to be gone; GDELT query narrowed.
+- **Phase 4** (regime signal) — `MARKET` now reaches decision scoring. Two of the
+  three new sources are blocked on operator actions and one is shelved; see the
+  Added table for the probe evidence.
+
+**Outstanding, none blocking:** Reddit (registration closed, see below),
+CryptoPanic and Telegram (operator actions), and the drop counter still has no
+denominator, so judging over-filtering means counting rows per source in the DB.
 **Services touched:** `libs/cmi_common`, `collector-social`, `collector-news`,
 `collector-coingecko`, `sentiment-service`, `decision-engine`, `scripts/`
 

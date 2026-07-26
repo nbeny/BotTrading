@@ -133,14 +133,29 @@ CREATE TABLE decision_journal (
     sonnet_confidence      REAL,
     sonnet_direction       TEXT,
 
-    -- aval
-    decision_event_id      TEXT,
-    risk_verdict           TEXT,                   -- approved | rejected | not_reached
-    risk_reason            TEXT,
+    -- contexte d'entrée théorique : le « pourquoi », pas seulement le « bon/mauvais »
     entry_price            NUMERIC(38,12),
     stop_loss              NUMERIC(38,12),
     take_profit            NUMERIC(38,12),
     position_size_pct      REAL,
+    risk_reward_ratio      REAL,
+    volatility_1h          REAL,                   -- écart-type des log-rendements, %
+    volatility_24h         REAL,
+    dominant_factor        TEXT,                   -- momentum|volume|sentiment|liquidity|mixed
+    dominant_factor_share  REAL,                   -- part du facteur dominant dans le score
+
+    -- aval
+    decision_event_id      TEXT,
+    risk_verdict           TEXT,                   -- approved | rejected | not_reached
+    risk_reason            TEXT,
+
+    -- chaînage vers l'exécution réelle (rempli quand elle survient)
+    correlation_id         TEXT        NOT NULL,
+    risk_event_id          TEXT,
+    execution_event_id     TEXT,
+    execution_kind         TEXT,                   -- submitted|pending|filled|closed|failed|rejected
+    fill_price             NUMERIC(38,12),
+    realized_pnl           NUMERIC(38,12),
 
     -- provenance de calibration
     dedup_version          TEXT        NOT NULL,
@@ -156,6 +171,42 @@ SELECT create_hypertable('decision_journal', 'time');
 Rétention **180 jours** — le double de la table `events_signal`, parce qu'un
 horizon de 24 h plus une fenêtre statistique de plusieurs semaines rend ce journal
 plus lent à mûrir que tout le reste.
+
+### Le contexte d'entrée, et pourquoi la volatilité y est essentielle
+
+Sans ces colonnes, le journal dirait *qu'un* signal était bon ou mauvais, jamais
+*pourquoi*. Trois méritent une justification.
+
+**`volatility_1h` / `volatility_24h`** — écart-type des log-rendements sur la
+fenêtre glissante, en pourcentage. Stockées et non recalculées : ce sont des
+propriétés ponctuelles du moment de la décision, bon marché à mesurer une fois et
+coûteuses à recalculer sur 1,4 M de lignes.
+
+Leur importance dépasse le simple contexte. `rules._compute_levels` applique un
+stop-loss **fixe à 5 %** et un take-profit fixe à 10 %. Or 5 % sur un actif à 2 %
+de volatilité horaire est un vrai signal de sortie ; sur un actif à 15 %, c'est du
+bruit — la position sera stoppée par le mouvement ordinaire du marché avant que la
+thèse ait eu le temps d'être juste ou fausse.
+
+**Sans la volatilité, Q1 est ininterprétable.** On verrait des rejets « rentables »
+et des approbations « perdantes » sans pouvoir distinguer une mauvaise décision
+d'un stop mal dimensionné. C'est aussi ce qui dira, à terme, si des niveaux fixes
+sont défendables ou s'ils doivent devenir proportionnels à la volatilité.
+
+**`risk_reward_ratio`** — aujourd'hui constant à 2,0 par construction (5 % / 10 %).
+Stocké quand même : le jour où les niveaux deviennent dynamiques, l'historique
+restera comparable. Une colonne constante aujourd'hui coûte quatre octets ; une
+colonne absente coûte une rupture de série.
+
+**`dominant_factor`** — le facteur dont la contribution au score est la plus forte,
+soit `poids_i × facteur_i` (0,35 momentum, 0,25 volume, 0,25 sentiment,
+0,15 liquidité). C'est bien la *contribution* et non la valeur normalisée : avec
+la saturation, momentum et volume valent tous deux 1,0 chez DEXE et un simple
+argmax serait arbitraire.
+
+Si les deux premières contributions diffèrent de moins de 0,02, la valeur est
+`mixed` — « dominant » n'a alors aucun sens et prétendre le contraire créerait une
+cohorte fictive.
 
 ### Population journalisée
 
@@ -213,6 +264,38 @@ simulate(symbol, t0, entry, direction, sl, tp, horizon) :
 `pnl_net = pnl_brut − frais_entrée − frais_sortie`. Les ignorer rendrait
 profitable une stratégie à faible espérance et fausserait toute calibration de
 seuil.
+
+### 5.2 bis Horizons configurables
+
+Les horizons ne sont pas dans le schéma — conséquence directe du calcul à la
+volée (§3). Ce sont des paramètres de requête.
+
+```
+COUNTERFACTUAL_HORIZONS=1h,4h,24h
+```
+
+Valeurs retenues et leur raison, à conserver au dossier :
+
+| Horizon | Ce qu'il mesure |
+|---|---|
+| **+1 h** | le signal avait-il une valeur immédiate ? |
+| **+4 h** | fenêtre réaliste d'une position court terme |
+| **+24 h** | l'analyse captait-elle une tendance plus large ? |
+
+Ajouter `+72h` ou `+15m` demain est un changement de configuration, pas une
+migration — c'est précisément ce que le calcul à la volée achète.
+
+**Extension prévue : horizons par classe d'actif.** La structure existe déjà —
+`market_cap_rank` est journalisé et la déduplication l'utilise pour différencier
+`MAX_AGE`. Le même découpage (majeures / établies / petites) accueillera des
+horizons distincts le jour où le style de détention le justifiera, sous la forme
+`COUNTERFACTUAL_HORIZONS_MAJOR` / `_MID` / `_SMALL` avec repli sur la liste
+globale.
+
+**Une conséquence à ne pas manquer :** chaque horizon a sa propre maturité. Une
+ligne de moins de 24 h est exploitable à +1 h et pas à +24 h. Le décompte
+d'effectif est donc **par horizon**, jamais global — sans quoi une analyse à
++24 h se croirait alimentée par des lignes trop jeunes.
 
 ### 5.3 Limites explicites
 
@@ -343,6 +426,98 @@ un délai utile. Un journal alimenté par 2 symboles mettra des mois à conclure
 
 ---
 
+## 7 bis. Analyse par cohorte
+
+### Axes prévus
+
+| Axe | Valeurs | Question qu'il éclaire |
+|---|---|---|
+| `symbol` | brut | un actif porte-t-il tout le signal ? |
+| Classe de capitalisation | majeure / établie / petite (mêmes bornes que la dédup) | le modèle se comporte-t-il pareil selon la taille ? |
+| Tranche de confiance | 0,5–0,6 / 0,6–0,7 / 0,7–0,8 / 0,8+ | la confiance est-elle calibrée ? |
+| `dominant_factor` | momentum / volume / sentiment / liquidity / mixed | quel facteur porte réellement de la valeur ? |
+| `dedup_trigger` | T1…T7 | quels déclencheurs produisent des appels utiles ? |
+
+La cohorte `dedup_trigger` répond directement à une question laissée ouverte par
+le design de déduplication : **les appels T7 (péremption) produisent-ils des
+validations, ou seulement des rejets ?** S'ils ne produisent que des rejets,
+`MAX_AGE` est trop court et consomme du budget pour rien.
+
+La cohorte `dominant_factor` est la plus prometteuse pour la calibration : si les
+signaux portés par le sentiment surperforment ceux portés par le momentum, ce sont
+les **poids du scorer** qu'il faut revoir, pas les seuils.
+
+### Le piège des comparaisons multiples
+
+Cinq axes, plusieurs modalités chacun : une exploration exhaustive produit des
+dizaines de comparaisons. **À 5 % de seuil, une comparaison sur vingt ressort
+significative par pur hasard.** Chercher « quels profils sont rentables » à
+travers toutes les cohortes garantit de trouver des gagnants illusoires.
+
+Trois garde-fous, dans l'ordre :
+
+1. **La cohorte génère des hypothèses, elle n'en confirme aucune.** Un profil
+   rentable repéré sur une cohorte est une piste, pas un résultat.
+2. **Confirmation sur période retenue** — un profil n'est retenu que s'il tient sur
+   une fenêtre temporelle qui n'a pas servi à le découvrir. C'est le même
+   découpage première moitié / seconde moitié que le protocole de changement de
+   seuil.
+3. **L'effectif minimum s'applique par cohorte**, pas globalement. Une cohorte de
+   moins de 30 observations mûres renvoie `null`.
+
+Conséquence assumée : **la plupart des cohortes renverront `null` pendant
+longtemps.** Croiser cinq axes fragmente vite un échantillon déjà mince. Commencer
+par les axes les plus grossiers — classe de capitalisation, `dominant_factor` — et
+n'ouvrir les plus fins qu'une fois le volume suffisant.
+
+---
+
+## 7 ter. Chaînage avec le trading-engine
+
+### La chaîne d'identifiants existe déjà
+
+Vérifié dans le code : `correlation_id` est porté par `BaseEvent` et propagé à
+chaque étage, jusqu'à `ExecutionEvent` (`trading-engine/app/engine.py:289`). Les
+liens explicites parent-enfant existent également :
+
+```
+AnalysisEvent.event_id → DecisionEvent.correlated_event_ids
+DecisionEvent.event_id → RiskApprovedEvent.decision_event_id
+RiskApprovedEvent.event_id → ExecutionEvent.risk_event_id → Trade.event_id
+```
+
+Le journal porte `correlation_id`, `decision_event_id`, `risk_event_id` et
+`execution_event_id`. Aucun nouveau modèle d'événement n'est requis — la chaîne
+est déjà là, elle n'était simplement pas exploitée.
+
+**Jointure : privilégier les liens explicites, pas `correlation_id`.**
+`correlation_id` a un `default_factory` : un producteur qui oublierait de le
+propager en génèrerait un neuf **silencieusement**, et la jointure échouerait sans
+la moindre erreur. Les liens explicites sont nullables — leur absence se voit.
+`correlation_id` reste utile en secours et pour le regroupement large.
+
+### Ce que l'exécution réelle apporte : la validation du simulateur
+
+Une fois des trades réels enregistrés, le journal peut confronter, **sur les mêmes
+positions**, le P&L simulé et le P&L réalisé.
+
+C'est la seule façon de transformer les biais listés en §5.3 — slippage,
+profondeur, mèches sous la minute, latence — d'hypothèses en **quantités
+mesurées**. Aujourd'hui on sait que la simulation est optimiste ; on ne sait pas
+de combien. L'écart médian entre simulé et réalisé donnera ce facteur, et permettra
+de corriger toutes les analyses contrefactuelles rétroactivement.
+
+**C'est la raison principale de câbler l'exécution dès maintenant**, avant même
+qu'il y ait des trades : au premier trade réel, la mesure démarre. Câbler après
+coup signifierait perdre les premiers, qui sont justement ceux qu'on regardera le
+plus attentivement.
+
+Colonnes prévues à cet effet : `execution_kind`, `fill_price`, `realized_pnl`.
+Elles restent nulles jusqu'au premier trade, et cette nullité est informative —
+elle dit « pas encore d'exécution », pas « donnée manquante ».
+
+---
+
 ## 8. Restitution
 
 `GET /systems/journal/summary?window=30d` :
@@ -419,7 +594,13 @@ l'incertitude se résout toujours en faveur du chemin de production.
 2. **Effectif minimum de 30 par groupe** avant toute réponse chiffrée. Volontairement
    conservateur — la conséquence est qu'il ne faut pas espérer de conclusion sur
    Q3 avant plusieurs semaines, et aucune sur Q1 tant qu'aucun trade n'est passé.
-3. **Horizons +1 h / +4 h / +24 h.** Fixés par jugement, pas par mesure. Si
-   l'horizon de détention visé diffère, il faut le dire maintenant : c'est le seul
-   paramètre de ce design qui dépend de ta stratégie de trading et non des
-   données.
+3. **Horizons +1 h / +4 h / +24 h** — retenus et configurables via
+   `COUNTERFACTUAL_HORIZONS`. Extension par classe d'actif prévue et non
+   implémentée.
+4. **Cohortes : la plupart renverront `null` pendant des semaines.** C'est le prix
+   de l'effectif minimum de 30, et il est assumé. Le risque inverse — conclure sur
+   une cohorte de 4 observations — est bien plus coûteux.
+5. **Colonnes d'exécution câblées avant qu'aucun trade n'existe.** Volontaire :
+   elles permettront de mesurer l'écart entre P&L simulé et réalisé dès le premier
+   trade, donc de chiffrer le biais optimiste du simulateur au lieu de le
+   supposer.

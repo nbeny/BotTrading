@@ -47,11 +47,18 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     app.state.producer = producer
     app.state.consumer = consumer
     app.state.consumer_task = asyncio.create_task(consumer.run())
+    # Sweeper: emits one analysis per symbol once its collection window has gone
+    # quiet. Without this task the worker would consume events and never score.
+    app.state.worker = worker
+    app.state.sweep_task = asyncio.create_task(worker.run())
 
 
 async def _shutdown(app: FastAPI, settings: Settings) -> None:
     await app.state.consumer.stop()
-    await asyncio.gather(app.state.consumer_task, return_exceptions=True)
+    app.state.worker.stop()
+    await asyncio.gather(
+        app.state.consumer_task, app.state.sweep_task, return_exceptions=True
+    )
     await app.state.producer.stop()
     await app.state.cache.close()
 

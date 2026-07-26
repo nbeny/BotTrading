@@ -75,7 +75,12 @@ async def test_scores_marks_and_publishes_per_symbol() -> None:
     assert repo.aggregates  # aggregate rows upserted
 
 
-async def test_symbolless_item_scored_as_market() -> None:
+async def test_symbolless_item_is_not_rescued_as_market() -> None:
+    # The normalizer (not the worker) assigns MARKET to symbol-less crypto
+    # content and drops everything else, so every stored row is guaranteed a
+    # symbol. A row without one here means that invariant was broken upstream;
+    # the worker must surface that (score nothing published) rather than mask
+    # it by inventing MARKET.
     repo = FakeContentRepository()
     await repo.insert_items(
         [
@@ -87,7 +92,7 @@ async def test_symbolless_item_scored_as_market() -> None:
 
     await worker.run_once()
 
-    assert {e.symbol for e in producer.published} == {"MARKET"}
+    assert producer.published == []
 
 
 async def test_worker_accumulates_additive_bucket() -> None:

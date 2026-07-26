@@ -16,7 +16,15 @@ RUNTIME_KEY = "collectors:runtime"
 
 # Canonical platform list per category (provider .name values).
 KNOWN_PLATFORMS: dict[str, list[str]] = {
-    "social": ["bluesky", "reddit", "mastodon", "fourchan", "neynar", "youtube", "lens"],
+    "social": [
+        "bluesky",
+        "reddit",
+        "mastodon",
+        "fourchan",
+        "neynar",
+        "youtube",
+        "lens",
+    ],
     "news": ["cryptocompare", "gdelt", "newsdata", "rss"],
 }
 
@@ -25,9 +33,7 @@ def default_runtime() -> dict[str, Any]:
     return {
         "social_enabled": True,
         "news_enabled": True,
-        "platforms": {
-            p: True for ps in KNOWN_PLATFORMS.values() for p in ps
-        },
+        "platforms": {p: True for ps in KNOWN_PLATFORMS.values() for p in ps},
     }
 
 

@@ -251,9 +251,7 @@ class FakeContentRepository:
     aggregates: dict[tuple[str, str, datetime], dict[str, Any]] = field(
         default_factory=dict
     )
-    daily: dict[tuple[str, str, datetime], dict[str, Any]] = field(
-        default_factory=dict
-    )
+    daily: dict[tuple[str, str, datetime], dict[str, Any]] = field(default_factory=dict)
     _seq: int = 0
 
     async def insert_items(self, items: list[RawItem]) -> int:

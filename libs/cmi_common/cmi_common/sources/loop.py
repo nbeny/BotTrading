@@ -12,17 +12,23 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from typing import Protocol
 
 from ..cache import Cache
 from ..observability import EVENTS_PRODUCED, UPSTREAM_REQUESTS
 from .cascade import RateLimitedError
 from .provider import Provider
+from .raw import RawItem
 from .repository import ContentRepository
 from .runtime import is_enabled
 
 logger = logging.getLogger(__name__)
 
 Sleep = Callable[[float], Awaitable[None]]
+
+
+class Normalizer(Protocol):
+    async def normalize(self, items: list[RawItem]) -> list[RawItem]: ...
 
 
 class AdaptivePollLoop:
@@ -36,6 +42,7 @@ class AdaptivePollLoop:
         service: str,
         error_backoff: float = 120.0,
         sleep: Sleep | None = None,
+        normalizer: Normalizer | None = None,
     ) -> None:
         self._provider = provider
         self._repo = repository
@@ -44,6 +51,7 @@ class AdaptivePollLoop:
         self._service = service
         self._error_backoff = error_backoff
         self._sleep = sleep or asyncio.sleep
+        self._normalizer = normalizer
 
     async def run(self) -> None:
         max_calls, window = self._provider.rate_limit
@@ -62,6 +70,10 @@ class AdaptivePollLoop:
                 continue
             try:
                 items = await self._provider.fetch()
+                if self._normalizer is not None:
+                    # Crypto relevance + symbol resolution, before anything is
+                    # stored. One choke point for every provider.
+                    items = await self._normalizer.normalize(items)
                 # Persist inside the try so a transient DB failure backs off
                 # like any other error instead of silently killing this loop.
                 inserted = await self._repo.insert_items(items)

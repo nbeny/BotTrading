@@ -108,3 +108,65 @@ async def test_persist_error_backs_off_and_does_not_kill_loop() -> None:
     await _run(loop)
     assert provider.calls == 1        # it did poll
     assert sleeps.calls == [120]      # backed off on the persist failure, loop survived
+
+
+class DroppingNormalizer:
+    """Normalizer stand-in: keeps nothing, records what it was handed."""
+
+    def __init__(self) -> None:
+        self.seen: list[RawItem] = []
+
+    async def normalize(self, items: list[RawItem]) -> list[RawItem]:
+        self.seen.extend(items)
+        return []
+
+
+async def test_normalizer_runs_between_fetch_and_persist() -> None:
+    repo = FakeContentRepository()
+    item = RawItem(source="stub", kind="social", external_id="1")
+    provider = StubProvider(items=[item])
+    normalizer = DroppingNormalizer()
+    sleeps = Sleeps(stop_after=1)
+    loop = AdaptivePollLoop(provider, repo, FakeCache(), poll_interval=300,
+                            service="collector-social", sleep=sleeps,
+                            normalizer=normalizer)
+    await _run(loop)
+    assert normalizer.seen == [item]   # it saw the fetched item
+    assert repo.rows == []             # and its rejection reached the repository
+
+
+async def test_loop_without_a_normalizer_persists_unchanged() -> None:
+    # The hook is optional so existing wiring keeps working untouched.
+    repo = FakeContentRepository()
+    provider = StubProvider(
+        items=[RawItem(source="stub", kind="social", external_id="1")]
+    )
+    sleeps = Sleeps(stop_after=1)
+    loop = AdaptivePollLoop(provider, repo, FakeCache(), poll_interval=300,
+                            service="collector-social", sleep=sleeps)
+    await _run(loop)
+    assert len(repo.rows) == 1
+
+
+class RaisingNormalizer:
+    """Normalizer stand-in that fails, like a bad lexicon fetch would."""
+
+    async def normalize(self, items: list[RawItem]) -> list[RawItem]:
+        raise RuntimeError("lexicon unavailable")
+
+
+async def test_normalizer_error_backs_off_and_does_not_persist() -> None:
+    # A normalizer failure must be treated exactly like a DB failure: back off,
+    # do not persist, and do not kill the loop.
+    repo = FakeContentRepository()
+    provider = StubProvider(
+        items=[RawItem(source="stub", kind="social", external_id="1")]
+    )
+    sleeps = Sleeps(stop_after=1)
+    loop = AdaptivePollLoop(provider, repo, FakeCache(), poll_interval=300,
+                            service="collector-social", error_backoff=120, sleep=sleeps,
+                            normalizer=RaisingNormalizer())
+    await _run(loop)
+    assert provider.calls == 1        # it did poll
+    assert repo.rows == []            # nothing reached the repository
+    assert sleeps.calls == [120]      # backed off, loop survived

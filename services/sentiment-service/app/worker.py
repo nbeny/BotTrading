@@ -64,7 +64,20 @@ class SentimentDbWorker:
                 confidence=result.confidence,
                 model=result.model_name,
             )
-            symbols = row.symbols or ["MARKET"]
+            # Every stored row carries at least one symbol: the collectors'
+            # normalizer assigns MARKET to symbol-less crypto content and drops
+            # everything else. A fallback here would mask a broken invariant --
+            # but silence would hide it just as well, so say so out loud. Rows
+            # written before the normalizer shipped land here until the table is
+            # rebuilt, and so would any future writer that skips the poll loop.
+            symbols = row.symbols
+            if not symbols:
+                logger.warning(
+                    "raw_content row %s from %s has no symbols; scored but not "
+                    "aggregated. Upstream normalization was bypassed.",
+                    row.id,
+                    row.source,
+                )
             bucket_start = _floor_hour(row.published_at)
             engagement = float(row.engagement or 0.0)
             for symbol in symbols:

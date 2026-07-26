@@ -97,13 +97,21 @@ class SqlSentimentAggReader:
         self._session = session
 
     async def _fetch_buckets(
-        self, *, symbol: str | None, kind: str | None, since: datetime,
+        self,
+        *,
+        symbol: str | None,
+        kind: str | None,
+        since: datetime,
         model: type = ContentSentimentAgg,
     ) -> list[BucketRow]:
         m = model
         stmt = select(
-            m.bucket_start, m.mentions, m.score_sum, m.confidence_sum,
-            m.weighted_score_sum, m.engagement_sum,
+            m.bucket_start,
+            m.mentions,
+            m.score_sum,
+            m.confidence_sum,
+            m.weighted_score_sum,
+            m.engagement_sum,
         ).where(m.bucket_start >= since)
         if symbol is not None:
             stmt = stmt.where(m.symbol == symbol)
@@ -111,8 +119,14 @@ class SqlSentimentAggReader:
             stmt = stmt.where(m.kind == kind)
         rows = (await self._session.execute(stmt)).all()
         return [
-            BucketRow(bucket_start=r[0], mentions=r[1], score_sum=r[2],
-                      confidence_sum=r[3], weighted_score_sum=r[4], engagement_sum=r[5])
+            BucketRow(
+                bucket_start=r[0],
+                mentions=r[1],
+                score_sum=r[2],
+                confidence_sum=r[3],
+                weighted_score_sum=r[4],
+                engagement_sum=r[5],
+            )
             for r in rows
         ]
 
@@ -139,18 +153,27 @@ class SqlSentimentAggReader:
         return out
 
     async def all_windows(
-        self, *, symbol: str | None, kind: str | None,
-        half_life_h: float | None = None, now: datetime | None = None,
+        self,
+        *,
+        symbol: str | None,
+        kind: str | None,
+        half_life_h: float | None = None,
+        now: datetime | None = None,
     ) -> list[dict[str, float]]:
         now = now or datetime.now(tz=UTC)
         return [
-            await self.window_stats(symbol=symbol, kind=kind, window=w,
-                                    half_life_h=half_life_h, now=now)
+            await self.window_stats(
+                symbol=symbol, kind=kind, window=w, half_life_h=half_life_h, now=now
+            )
             for w in WINDOWS
         ]
 
     async def series(
-        self, *, symbol: str | None, kind: str | None, points: int,
+        self,
+        *,
+        symbol: str | None,
+        kind: str | None,
+        points: int,
         now: datetime | None = None,
     ) -> list[dict[str, float]]:
         """Exactly `points` hourly buckets, oldest first, as {hour, sentiment}.
@@ -170,8 +193,13 @@ class SqlSentimentAggReader:
         for i in range(points):
             hour = since + timedelta(hours=i)
             agg = aggregate_buckets(by_hour.get(hour, []), now=now, half_life_h=None)
-            out.append({"hour": hour.isoformat(), "sentiment": agg["avg"],
-                        "mentions": agg["mentions"]})
+            out.append(
+                {
+                    "hour": hour.isoformat(),
+                    "sentiment": agg["avg"],
+                    "mentions": agg["mentions"],
+                }
+            )
         return out
 
     async def distinct_authors(

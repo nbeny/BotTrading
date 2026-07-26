@@ -107,8 +107,24 @@ configurable interval (default 15 min).
 - `by_name: dict[str, str]` — lowercased coin name and alias → canonical symbol
 - `ambiguous: frozenset[str]` — tickers that are also common English words
 
-`ambiguous` is **computed**, not hand-maintained: it is the intersection of the
-universe's tickers with a bundled common-English-word list. Today that yields
+`ambiguous` is **computed** rather than enumerated: it is the intersection of the
+universe's tickers with a bundled common-English-word list, so it follows
+universe rotation on its own.
+
+Be honest about what that does and does not buy. The *derivation* is automatic;
+the **word list itself is hand-curated, and is the one manual duty in the whole
+design** — a ticker missing from it is believed on sight. Three review rounds
+audited it against the 50-coin seed and passed; the first audit against a
+top-200-shaped universe found `ATH`, `PUMP`, `APE`, `IP`, `ID`, `AI`, `LAYER`
+and a dozen more still missing. `ATH` was the worst: it means "all-time high" in
+most crypto copy, always co-occurs with crypto vocabulary so the item is kept,
+and would have climbed the aggregate table exactly as `ONE` did. **Re-audit this
+list against the live universe, not the seed, whenever the universe rotates.**
+
+There is a recall cost, accepted deliberately: a homograph ticker now needs its
+coin name or a cashtag, so `ARB unlock schedule tomorrow` resolves to nothing
+unless "Arbitrum" appears. Crypto coverage almost always names the project, and
+precision is the stated priority. Today that yields
 `ONE, CORE, FORM, PEOPLE, KEEP, FLOW, NEAR, BAND, LINK, UNI, GAS, TIME, WIN,
 MASK, …` — i.e. exactly the observed false positives. As the universe rotates,
 the set updates itself.
@@ -128,9 +144,35 @@ Each candidate is then confirmed:
 
 | Candidate | Rule |
 |---|---|
-| In universe, ticker not in `ambiguous` | accept |
-| In universe, ticker in `ambiguous` | accept **only** if it arrived as an explicit cashtag, or the coin's full name appears in the text |
-| Not in universe | accept **only** if it arrived as an explicit cashtag |
+| In universe, ticker not in `ambiguous` | accept, in any case — lowercase included |
+| In universe, ticker in `ambiguous` | accept **only** if it arrived as an uppercase explicit cashtag, or the coin's name appears in the text |
+| Not in universe | accept **only** if it arrived as an explicit cashtag **and** the item is otherwise crypto-relevant |
+
+Three refinements were forced by review, each after a concrete false positive:
+
+- **Cashtag bodies must be uppercase.** `$one million` and `$trillion` are
+  spelled-out amounts, and the lowercase form resurrected `ONE` — the single
+  worst production false positive — through a channel that also satisfies Gate 2,
+  so the row skipped every other check.
+- **An out-of-universe cashtag needs corroboration.** Alone it is just a
+  `$`-prefixed word: `$TSLA and $NVDA are leading the rally` booked two equities.
+  The channel stays open (it is how a new token gets in) but the item must say
+  something crypto elsewhere. This matters most before StockTwits lands.
+- **Lowercase is trusted for non-homograph tickers.** `btc is ripping right now`
+  matched nothing and was *dropped*, not booked as `MARKET` — real content loss
+  on the all-lowercase social sources, invisible because the drop counter
+  conflated it with football articles.
+
+**Coin names need the same guard as tickers, and word count is not the test.**
+A name match is what corroborates an ambiguous ticker, so an unguarded name
+unlocks both channels at once: "the market maker" booked MKR, "cash flow
+analysis" booked FLOW. An initial fix exempted multi-word names on the theory
+that prose cannot produce them by accident; "The Graph" (GRT, in the seed)
+disproved it immediately — "as the graph shows, inflation cooled" booked GRT.
+A name is prose when **every** word in it is ordinary English. Prose names live
+in a separate index: they confirm nothing alone, but they corroborate their own
+ticker, which is what keeps coins whose ticker *and* name are both English words
+(Dash, Gala, Beam) reachable at all.
 
 **Provider-supplied tags (NewsData `coin`, CryptoCompare `categories`, CryptoPanic
 `currencies`) are discarded, not validated.** Validating a tag can only mean
@@ -146,9 +188,17 @@ cashtags or CryptoPanic's editorial currencies) is a deliberate later extension,
 to be justified by measurement rather than assumed now.
 
 **Gate 2 — crypto relevance.** The item is kept if it has at least one confirmed
-symbol, **or** matches at least one term from a bundled crypto vocabulary
-(blockchain, DeFi, ETF, halving, staking, SEC, stablecoin, exchange, wallet,
-altcoin, …). Otherwise it is dropped and never inserted.
+symbol, **or** the text is crypto-relevant. Otherwise it is dropped and never
+inserted.
+
+Relevance is not one flat word list. The vocabulary is split by specificity: one
+**strong** term (blockchain, DeFi, stablecoin, altcoin, onchain, halving,
+airdrop, …) carries an item alone, while **weak** terms (gas, mining, bridge,
+custody, exchange, futures, leverage, wallet, whale, sec, …) need two distinct
+hits. A single generic term admits far too much: "Gas prices drop across the
+Midwest", "whale watching season opens" and "custody battle ends in family
+court" are exactly the regional general-news shape this gate exists to reject,
+and each hits precisely one generic term. Matching tolerates a plural "s".
 
 **Gate 3 — MARKET fallback.** Relevant but symbol-less items get
 `symbols = ["MARKET"]` assigned **at collection time**, so `raw_content` records
@@ -156,11 +206,26 @@ the fact explicitly instead of the worker inventing it later. The
 `symbols or ["MARKET"]` fallback in `worker.py:67` is removed — the invariant
 becomes "every stored row has at least one symbol".
 
-**Observability:** a `CONTENT_DROPPED{source, reason}` Prometheus counter, with
-`reason` in `{not_relevant, empty_text}`, exposed on the existing `/metrics`
-endpoint. The filter's behaviour is measured, not assumed. (There is no
-`no_confirmed_symbol` reason: an item with no confirmed symbol but with crypto
-vocabulary is kept as `MARKET` by Gate 3 rather than dropped.)
+**Observability:** a `CONTENT_DROPPED{service, source, reason}` Prometheus
+counter, with `reason` in `{not_relevant, empty_text}`, exposed on the existing
+`/metrics` endpoint. The filter's behaviour is measured, not assumed. (There is
+no `no_confirmed_symbol` reason: an item with no confirmed symbol but with
+crypto vocabulary is kept as `MARKET` by Gate 3 rather than dropped.)
+
+Two silent-degradation paths are instrumented alongside it, because both fail
+invisibly and both mis-attribute rather than error:
+
+- `cmi_lexicon_coins{service}` plus a warning while the loader is serving the
+  bundled seed. A collector resolving against 50 coins instead of the live 200 —
+  because `collector-coingecko` is down or not yet deployed — books genuine
+  symbols as `MARKET`, and nothing downstream can tell.
+- A warning in the sentiment worker naming the row and source when a
+  `raw_content` row carries no symbols. Removing the worker's `MARKET` fallback
+  is what surfaces the broken invariant; without the log it would simply vanish.
+
+The counter has **no denominator**: it reports items rejected, not the rejection
+rate. Judging whether the gate filters too aggressively means counting
+`raw_content` rows per source in the database.
 
 ### Wiring MARKET into decisions
 

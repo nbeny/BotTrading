@@ -22,7 +22,12 @@ from cmi_common.kafka import TOPIC_EVENT, Topic
 from cmi_common.observability import EVENTS_CONSUMED
 
 logger = logging.getLogger(__name__)
-SERVICE = "api-gateway"
+# Not plain "api-gateway": the persister in this same process already increments
+# EVENTS_CONSUMED under that label, and the two consumers overlap on five of the
+# eight topics. Sharing the label would have doubled the counter for price,
+# analysis, decision, risk-approved and execution events -- silently, in every
+# dashboard built on it. The archive gets its own series instead.
+SERVICE = "api-gateway-archiver"
 
 # Reverse lookup so a row records which topic carried it. Built once.
 # TOPIC_EVENT is one class per topic, so the inversion is lossless.

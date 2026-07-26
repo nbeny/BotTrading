@@ -163,3 +163,54 @@ async def test_the_regime_changes_the_score_of_an_analysed_symbol() -> None:
     biased_score = biased._producer.published[0][1].reason
     # Both are below-threshold rejections whose reason quotes the score.
     assert plain_score != biased_score
+
+
+# --- liquidity proxy ---------------------------------------------------------
+
+
+def _analysis_with(features: dict) -> AnalysisEvent:
+    return AnalysisEvent(
+        symbol="SOL",
+        opportunity_score=50,
+        confidence=0.5,
+        reason="r",
+        price_change_pct_24h=5.0,
+        volume_spike_ratio=3.0,
+        meta={"features": features},
+    )
+
+
+def test_dex_liquidity_is_used_when_present() -> None:
+    assert de._liquidity({"liquidity_usd": 2_000_000.0}) == 2_000_000.0
+
+
+def test_volume_stands_in_when_there_is_no_dex_reading() -> None:
+    # CEX-listed pairs never produce a DexEvent, so reading liquidity_usd alone
+    # left liquidity_score at zero for essentially the whole flow: it was
+    # populated in 0 of 12,183 production signals, killing 15% of the weight.
+    assert de._liquidity({"volume_24h_usd": 9_203_643.0}) == 9_203_643.0
+
+
+def test_a_zero_dex_reading_falls_through_to_the_proxy() -> None:
+    # A dex pair with no liquidity arrives as 0.0, not None -- haiku's scorer
+    # documents this exact shape. Zero is not a reading.
+    assert (
+        de._liquidity({"liquidity_usd": 0.0, "volume_24h_usd": 500_000.0}) == 500_000.0
+    )
+
+
+def test_neither_reading_stays_none_rather_than_inventing_a_number() -> None:
+    assert de._liquidity({}) is None
+    assert de._liquidity({"liquidity_usd": 0.0, "volume_24h_usd": 0.0}) is None
+
+
+async def test_the_proxy_reaches_the_score_through_the_engine() -> None:
+    engine = de.DecisionEngine(FakeProducer(), decision_threshold=101, clock=Clock())
+    await engine.handle(_analysis_with({"volume_24h_usd": 9_203_643.0}))
+    with_proxy = engine._producer.published[0][1].reason
+
+    bare = de.DecisionEngine(FakeProducer(), decision_threshold=101, clock=Clock())
+    await bare.handle(_analysis_with({}))
+    without = bare._producer.published[0][1].reason
+
+    assert with_proxy != without

@@ -421,7 +421,52 @@ then caught only by inspecting live production rows 90 minutes after deploy.
 The method that works is building a lexicon from the real universe and running
 plausible headlines through it — not reading the list.
 
-### 3. The deterministic decision path cannot reach its own threshold
+### 3. RESOLVED IN PART — the deterministic path cannot reach its own threshold
+
+**Liquidity is fixed.** `engine.py` now falls back to haiku's own 24h-volume
+proxy, mirroring the substitution `ai-worker-haiku`'s scorer has made since
+Plan-1. Replayed over the same 12,183 signals:
+
+| | before | after |
+|---|---|---|
+| signals with a usable liquidity figure | 0.0% | **86.1%** |
+| median score | 40 | **54** |
+| max score | 61 | **66** |
+| mean confidence | 0.557 | **0.686** |
+| crossings of the threshold | — | 0 |
+
+**But the path still cannot fire, and the reason is a second dead axis.**
+Breaking down the top 100 real signals by contribution:
+
+| axis | weight | best-100 avg | ceiling |
+|---|---|---|---|
+| `volume_growth` | 0.25 | 24.9 | 25 |
+| `social_score` | 0.20 | **0.0** | 20 |
+| `news_score` | 0.20 | 16.8 | 20 |
+| `market_trend` | 0.20 | 8.1 | 20 |
+| `liquidity_score` | 0.15 | 15.0 | 15 |
+
+`social_growth` is populated in **0 of 12,183** signals — another 20 points of
+weight permanently at zero. This one is not a key mismatch: nothing in the
+system computes it at all. `ai-worker-haiku` reads
+`features.get("social_growth")` (`worker.py:196`) but none of its four
+extractors ever writes that key, because the producer disappeared when social
+ingestion moved from Kafka events to `raw_content` and the consumer was never
+updated.
+
+With 20 of 100 points structurally unreachable, clearing 70 demands near-perfect
+scores on every remaining axis. The best real signal reaches 66.
+
+Two things to decide, neither done here:
+
+- **Compute `social_growth`.** The data already exists:
+  `content_sentiment_agg` holds hourly mention counts per symbol, and
+  `SqlSentimentAggReader.window_stats` already aggregates them. Growth is this
+  hour's mentions against a trailing baseline. This is new work in haiku, not a
+  repair.
+- **Re-examine the threshold of 70.** It was presumably chosen when the model
+  had five live axes. Whether it still means what it meant then is worth
+  checking against a replay before tuning anything.
 
 Found while measuring issue 0, and larger than the issue that surfaced it.
 

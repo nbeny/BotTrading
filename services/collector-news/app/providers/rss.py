@@ -17,12 +17,14 @@ DEFAULT_FEEDS = [
     "https://www.coindesk.com/arc/outboundfeeds/rss/",
     "https://cointelegraph.com/rss",
     "https://decrypt.co/feed",
-    "https://www.theblock.co/rss.xml",
     "https://blockworks.com/feed",
     "https://bitcoinmagazine.com/feed",
 ]
-# CryptoSlate is deliberately absent: https://cryptoslate.com/feed/ answers 403
-# to any non-browser client, browser User-Agent included. Not worth spoofing.
+# Two feeds are deliberately absent, both 403 for the same reason: they refuse
+# datacenter IPs. CryptoSlate refuses everything non-browser, browser
+# User-Agent included. The Block answers 200 from a home connection and 403
+# from the VPS -- a reminder to probe candidate feeds from where they will
+# actually be fetched, not from a laptop. Neither is worth spoofing a UA for.
 
 
 class RSSProvider:

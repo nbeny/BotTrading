@@ -564,7 +564,7 @@ class FakeProducer:
     def __init__(self) -> None:
         self.sent: list = []
 
-    async def send(self, topic, event) -> None:
+    async def publish(self, topic, event) -> None:
         self.sent.append((topic, event))
 
 
@@ -572,7 +572,7 @@ class FakeCache:
     def __init__(self) -> None:
         self.written: dict = {}
 
-    async def set_json(self, key, value, ttl=None) -> None:
+    async def set_json(self, key, value, ttl_seconds: int = 60) -> None:
         self.written[key] = value
 
 
@@ -688,12 +688,12 @@ class AccountPoller:
                            exc_info=True)
             return
         event = AccountSnapshotEvent(venue=self._venue, **snap)
-        await self._producer.send(Topic.ACCOUNT_SNAPSHOT, event)
+        await self._producer.publish(Topic.ACCOUNT_SNAPSHOT, event)
         await self._cache.set_json(
             REDIS_KEY.format(venue=self._venue),
             {"venue": self._venue, "fetched_at": event.occurred_at.isoformat(),
              **snap},
-            ttl=self._interval * CACHE_TTL_MULTIPLE,
+            ttl_seconds=self._interval * CACHE_TTL_MULTIPLE,
         )
 
     async def run(self) -> None:
@@ -722,10 +722,9 @@ def build_poller(config, producer, cache) -> AccountPoller | None:
                          interval_s=config.account_poll_s)
 ```
 
-**Vérifier avant d'écrire** : le nom réel de la méthode d'écriture JSON de
-`cmi_common.cache.Cache` (lire `libs/cmi_common/cmi_common/cache/`), et la
-signature réelle de `EventProducer.send`. Adapter le code **et** les fakes du
-test à ce que le dépôt fait vraiment.
+**Signatures vérifiées contre le dépôt** (2026-07-26) : `EventProducer.publish(topic, event)`
+— *pas* `send` — et `Cache.set_json(key, value, ttl_seconds=60)` — *pas* `ttl`.
+Le code et les fakes ci-dessus sont déjà corrigés en conséquence.
 
 - [ ] **Step 4: Wire it into `main.py`**
 

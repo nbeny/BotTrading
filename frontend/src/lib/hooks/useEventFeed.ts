@@ -63,9 +63,24 @@ export function useEventFeed(opts: { types?: string; symbol?: string } = {}) {
     return true;
   }, []);
 
+  // `types` and `symbol` are sent to the server for the archived pages, but the
+  // socket subscription is deliberately unfiltered (`[]` = every type) because
+  // one provider feeds the whole app. Applying the same filter to live frames
+  // here is what makes the option mean one thing: without it, a caller asking
+  // for DecisionEvent would still watch PriceEvents stream past, and would have
+  // to re-filter `items` itself to undo the surprise.
+  const wanted = useMemo(
+    () => new Set(opts.types?.split(',').map((t) => t.trim()).filter(Boolean) ?? []),
+    [opts.types],
+  );
+  const wantedSymbol = opts.symbol?.toUpperCase();
+
   useEventSubscription([], (event: CmiEvent, msg) => {
     const id = event.event_id;
-    if (!id || !remember(id)) return;
+    if (!id) return;
+    if (wanted.size && !wanted.has(event.event_type)) return;
+    if (wantedSymbol && event.symbol?.toUpperCase() !== wantedSymbol) return;
+    if (!remember(id)) return;
     setLive((prev) =>
       [
         {
@@ -94,6 +109,16 @@ export function useEventFeed(opts: { types?: string; symbol?: string } = {}) {
     }
     return [...merged.values()].sort((a, b) => ts(b) - ts(a));
   }, [live, query.data]);
+
+  // Frames accumulated under the previous filter no longer match this one, and
+  // react-query swaps to a different cache entry for the archive half. Dropping
+  // them keeps the two halves describing the same query instead of leaving the
+  // old category's events stranded at the top of the feed.
+  useEffect(() => {
+    setLive([]);
+    seen.current.clear();
+    seenOrder.current = [];
+  }, [opts.types, opts.symbol]);
 
   // A history page can contain an event the socket already delivered; register
   // those ids so a later frame for the same event is not appended again.

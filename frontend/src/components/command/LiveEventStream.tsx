@@ -196,19 +196,14 @@ export function LiveEventStream({
 
   const active = FILTERS.find((f) => f.key === filterKey) ?? FILTERS[0];
 
-  // Filtering is server-side: `types` goes into the query key, so a category
-  // change refetches and "charger plus" then walks the *matching* history
-  // instead of paging through rows the client would throw away. The predicate
-  // below is not a second filter — `useEventFeed` subscribes to the whole
-  // socket and cannot know about `types`, so live frames need the same gate to
-  // stop the feed contradicting the tab that is selected.
+  // One filter, applied in one place. `types` goes into the query key, so a
+  // category change refetches and "charger plus" then walks the *matching*
+  // history instead of paging through rows the client would throw away;
+  // `useEventFeed` applies the same list to the live frames it keeps. Filtering
+  // again here would only hide a divergence between the two halves.
   const types = active.types.length ? active.types.join(',') : undefined;
-  const { items, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useEventFeed({ types });
-
-  const visible = useMemo(
-    () => (active.types.length ? items.filter((e) => active.types.includes(e.event_type)) : items),
-    [items, active],
-  );
+  const { items: visible, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } =
+    useEventFeed({ types });
 
   const empty = visible.length === 0;
 

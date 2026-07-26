@@ -76,7 +76,7 @@ CONTRACT: dict[str, set[str]] = {
     },
     "systems/funnel": {
         "window", "stages", "score_histogram", "factors_presence",
-        "top_block_reasons", "updated_at",
+        "top_block_reasons", "block_reasons_truncated", "updated_at",
     },
     "systems/journal/summary": {
         "window", "horizons", "sample", "q1_rejected_vs_approved",

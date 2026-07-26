@@ -44,7 +44,11 @@ export function getFunnelStats(window = '24h'): FunnelStats {
     top_block_reasons: [
       { stage: 'haiku', reason: 'score_below_threshold', count: 980 },
       { stage: 'haiku', reason: 'gate_not_met', count: 20 },
+      // Numbers in a reason are normalised to N server-side, so that one row
+      // stands for every score that fell short rather than one row per score.
+      { stage: 'decision_engine', reason: 'score N below decision threshold N', count: 143 },
     ],
+    block_reasons_truncated: false,
     updated_at: new Date().toISOString(),
   };
 }

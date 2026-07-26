@@ -147,5 +147,7 @@ export interface FunnelStats {
   score_histogram: { bucket: number; count: number }[];
   factors_presence: Record<string, number>;
   top_block_reasons: FunnelBlockReason[];
+  /** True when reasons beyond the top ones were dropped from the list. */
+  block_reasons_truncated: boolean;
   updated_at: string;
 }

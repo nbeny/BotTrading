@@ -18,6 +18,12 @@ from .topics import Topic
 
 logger = logging.getLogger(__name__)
 
+# How long a poll waits for records before returning empty, and how many it may
+# return at once. The batch bounds one offset commit, so a larger value trades
+# a slightly wider replay window on restart for far fewer broker round-trips.
+BATCH_TIMEOUT_MS = 1000
+BATCH_MAX_RECORDS = 500
+
 Handler = Callable[[BaseEvent], Awaitable[None]]
 
 
@@ -69,22 +75,43 @@ class EventConsumer:
             self._consumer = None
 
     async def run(self) -> None:
-        """Main consume loop. Runs until :meth:`stop` is called."""
+        """Main consume loop. Runs until :meth:`stop` is called.
+
+        Polls and commits in batches. It used to commit after *every* message,
+        which is a broker round-trip per message on top of the handler's own
+        work -- measured in production as ~1330 messages a minute produced
+        against ~516 consumed, on a host already losing 24% of its CPU to
+        hypervisor steal.
+
+        Batching changes only how often the offset is committed, never what the
+        handler sees: every message of the batch is passed to it, in order. A
+        failing message is logged and skipped so it cannot take the rest of its
+        batch with it -- which matches the previous behaviour, where the next
+        successful commit advanced past the failure anyway.
+        """
         if self._consumer is None:
             raise RuntimeError("Consumer not started")
         try:
-            async for msg in self._consumer:
-                if self._stopped.is_set():
-                    break
-                try:
-                    event = parse_event(msg.value)
-                    await self._handler(event)
-                    await self._consumer.commit()
-                except Exception:
-                    logger.exception(
-                        "handler failed topic=%s offset=%s", msg.topic, msg.offset
-                    )
-                    # Offset not committed -> message will be retried. A real
-                    # deployment would route poison messages to a DLQ here.
+            while not self._stopped.is_set():
+                batches = await self._consumer.getmany(
+                    timeout_ms=BATCH_TIMEOUT_MS, max_records=BATCH_MAX_RECORDS
+                )
+                if not batches:
+                    # Nothing to do; committing here would be a round-trip to
+                    # the broker at loop frequency for no offset movement.
+                    continue
+                for messages in batches.values():
+                    for msg in messages:
+                        try:
+                            await self._handler(parse_event(msg.value))
+                        except Exception:
+                            logger.exception(
+                                "handler failed topic=%s offset=%s",
+                                msg.topic,
+                                msg.offset,
+                            )
+                            # Skipped, not retried: the previous per-message
+                            # loop also advanced past it on the next success.
+                await self._consumer.commit()
         finally:
             await self.stop()

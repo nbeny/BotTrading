@@ -114,8 +114,17 @@ Cadence 300 s (`BINANCE_FUTURES_POLL_INTERVAL`), two tiers mirroring `CandleSwee
   funding rate for every perpetual in **one** request. Retained for symbols seen in `prices`
   over the last 24 hours.
 - **majors** — for each major from `split_regimes` (~11 symbols at
-  `KRAKEN_MAJOR_MIN_MENTIONS_7D=10`): `GET /fapi/v1/openInterest` and
+  `KRAKEN_MAJOR_MIN_MENTIONS_7D=10`): `GET /futures/data/openInterestHist` and
   `GET /futures/data/globalLongShortAccountRatio`. ~22 requests.
+
+  The open-interest endpoint is the *history* one at `period=1h&limit=25`, not
+  `/fapi/v1/openInterest`. Verified against the live API: the history spans exactly
+  24 hours and carries `sumOpenInterestValue` (USD notional) alongside
+  `sumOpenInterest` (base units), so one request yields both the level and the 24h
+  change. The snapshot endpoint returns a bare base-unit figure, which would leave
+  `open_interest_change_pct_24h` permanently null and the positioning axis's
+  open-interest term dead on arrival. The change is computed on base units, since
+  the USD series moves with price as well as with positioning.
 
 Roughly 23 requests per 5-minute cycle against a 2400 weight/minute budget. The majors set is
 read from the existing universe helpers rather than reimplemented.

@@ -1756,11 +1756,62 @@ async def test_premium_index_returns_every_perp_in_one_call() -> None:
     assert [r["symbol"] for r in rows] == ["BTCUSDT", "ETHUSDT"]
 
 
-async def test_open_interest_is_returned_as_a_float() -> None:
+async def test_open_interest_history_yields_the_usd_level_and_the_24h_change() -> None:
+    # One request gives both. The level comes from sumOpenInterestValue (USD),
+    # the change from sumOpenInterest (base units) — the USD series moves with
+    # price as well as with positioning, so it cannot answer "is conviction
+    # entering the book".
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"symbol": "BTCUSDT", "openInterest": "12345.6"})
+        assert request.url.params["period"] == "1h"
+        assert request.url.params["limit"] == "25"
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "sumOpenInterest": "100.0",
+                    "sumOpenInterestValue": "1000000.0",
+                    "timestamp": 1785445200000,
+                },
+                {
+                    "sumOpenInterest": "110.0",
+                    "sumOpenInterestValue": "1100000.0",
+                    "timestamp": 1785531600000,
+                },
+            ],
+        )
 
-    assert await _client(handler).open_interest("BTCUSDT") == 12345.6
+    reading = await _client(handler).open_interest("BTCUSDT")
+    assert reading is not None
+    assert reading.usd == 1100000.0
+    assert reading.change_pct_24h == 10.0
+
+
+async def test_a_single_open_interest_point_yields_no_change() -> None:
+    # A level without a baseline is a level, not a trend. Reporting 0.0 would
+    # claim flat positioning we never measured.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "sumOpenInterest": "100.0",
+                    "sumOpenInterestValue": "1000000.0",
+                    "timestamp": 1785445200000,
+                }
+            ],
+        )
+
+    reading = await _client(handler).open_interest("BTCUSDT")
+    assert reading is not None
+    assert reading.usd == 1000000.0
+    assert reading.change_pct_24h is None
+
+
+async def test_an_empty_open_interest_history_yields_no_reading() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[])
+
+    assert await _client(handler).open_interest("BTCUSDT") is None
 
 
 async def test_long_short_ratio_reads_the_most_recent_bucket() -> None:
@@ -1825,6 +1876,7 @@ after.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -1844,6 +1896,18 @@ class BinanceRateLimited(RuntimeError):
     def __init__(self, retry_after: float | None) -> None:
         super().__init__("binance rate limited")
         self.retry_after = retry_after
+
+
+@dataclass(frozen=True, slots=True)
+class OpenInterest:
+    """USD notional now, and how it moved over 24h.
+
+    `change_pct_24h` is None when the history held a single point: a level with
+    no baseline is a level, not a trend.
+    """
+
+    usd: float
+    change_pct_24h: float | None
 
 
 class BinanceFuturesClient:
@@ -1894,10 +1958,32 @@ class BinanceFuturesClient:
         payload = await self._get("/fapi/v1/premiumIndex")
         return payload if isinstance(payload, list) else [payload]
 
-    async def open_interest(self, ticker: str) -> float | None:
-        payload = await self._get("/fapi/v1/openInterest", {"symbol": ticker})
-        raw = payload.get("openInterest")
-        return float(raw) if raw is not None else None
+    async def open_interest(self, ticker: str) -> OpenInterest | None:
+        """Current USD open interest and its 24h change, in one request.
+
+        `/futures/data/openInterestHist` at `period=1h&limit=25` spans exactly
+        24 hours and carries both the USD notional and the base-unit size, which
+        `/fapi/v1/openInterest` does not: that endpoint returns a bare base-unit
+        snapshot, leaving the change unmeasurable and the positioning axis's
+        open-interest term permanently dead.
+
+        The change is computed on base units on purpose. `sumOpenInterestValue`
+        moves with price as well as with positioning, so a 10% USD rise during a
+        10% rally is no new interest at all.
+        """
+        payload = await self._get(
+            "/futures/data/openInterestHist",
+            {"symbol": ticker, "period": "1h", "limit": 25},
+        )
+        if not payload:
+            return None
+        usd = float(payload[-1]["sumOpenInterestValue"])
+        if len(payload) < 2:
+            return OpenInterest(usd=usd, change_pct_24h=None)
+        oldest = float(payload[0]["sumOpenInterest"])
+        newest = float(payload[-1]["sumOpenInterest"])
+        change = round(100.0 * (newest - oldest) / oldest, 4) if oldest > 0 else None
+        return OpenInterest(usd=usd, change_pct_24h=change)
 
     async def long_short_ratio(self, ticker: str) -> float | None:
         """Most recent 5-minute retail long/short account ratio bucket."""
@@ -1942,6 +2028,7 @@ Create `tests/test_binance_futures_collector.py`:
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 from service_modules import load_service_module
@@ -1950,6 +2037,9 @@ from cmi_common.kafka import Topic
 
 collector_mod = load_service_module(
     "collector-binance-futures", "application.collector"
+)
+client_mod = load_service_module(
+    "collector-binance-futures", "infrastructure.binance_client"
 )
 
 
@@ -1975,9 +2065,9 @@ class FakeClient:
             {"symbol": "DOGEUSDT", "lastFundingRate": "0.0003"},
         ]
 
-    async def open_interest(self, ticker: str) -> float | None:
+    async def open_interest(self, ticker: str):
         self.oi_calls.append(ticker)
-        return 1000.0
+        return client_mod.OpenInterest(usd=1_000_000.0, change_pct_24h=7.5)
 
     async def long_short_ratio(self, ticker: str) -> float | None:
         self.ls_calls.append(ticker)
@@ -2015,10 +2105,12 @@ async def test_majors_carry_the_detail_and_others_do_not() -> None:
     await _collector(FakeClient(), producer).poll_once()
     events = {e.symbol: e for _, e in producer.published}
     assert events["BTC"].long_short_account_ratio == 1.8
-    assert events["BTC"].open_interest_usd is not None
+    assert events["BTC"].open_interest_usd == Decimal("1000000.0")
+    assert events["BTC"].open_interest_change_pct_24h == 7.5
     # A non-major is not a degraded reading; those fields were never measured.
     assert events["ETH"].long_short_account_ratio is None
     assert events["ETH"].open_interest_usd is None
+    assert events["ETH"].open_interest_change_pct_24h is None
     assert events["ETH"].funding_rate_8h == 0.0002
 
 
@@ -2138,11 +2230,10 @@ class BinanceFuturesCollector:
         have: the event goes out with whatever was measured and nothing else.
         """
         ticker = f"{event.symbol}USDT"
-        open_interest = None
+        reading = None
         ratio = None
         try:
-            raw_oi = await self._client.open_interest(ticker)
-            open_interest = Decimal(str(raw_oi)) if raw_oi is not None else None
+            reading = await self._client.open_interest(ticker)
         except Exception:
             logger.warning("open interest failed for %s", ticker, exc_info=True)
         try:
@@ -2151,11 +2242,8 @@ class BinanceFuturesCollector:
             logger.warning("long/short failed for %s", ticker, exc_info=True)
         return with_majors_detail(
             event,
-            open_interest_usd=open_interest,
-            # Binance reports open interest in base units and publishes no 24h
-            # delta; deriving one needs history this collector does not keep.
-            # Absent is the honest answer until a store exists.
-            oi_change_pct_24h=None,
+            open_interest_usd=Decimal(str(reading.usd)) if reading else None,
+            oi_change_pct_24h=reading.change_pct_24h if reading else None,
             long_short_ratio=ratio,
         )
 ```

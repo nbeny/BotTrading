@@ -708,15 +708,56 @@ def test_tvl_weighted_change_is_used_when_deployments_disagree() -> None:
     assert events[0].tvl_change_pct_7d == 2.0
 
 
-def test_fees_are_attached_by_coin_id() -> None:
+def test_fees_are_joined_by_slug_not_by_gecko_id() -> None:
+    # Verified against the live API: /overview/fees carries no gecko_id at all
+    # (0 of 2514 rows), so the join has to go through slug. Keying on gecko_id
+    # would find nothing and report every protocol as fee-less.
     events = mapper.to_fundamentals_events(
-        [_protocol("aave", "aave", 1.0, 0.0)],
-        fees={"aave": {"total24h": 42_000.0, "change_7dover7d": 12.5}},
+        [_protocol("aave-v3", "aave", 1.0, 0.0)],
+        fees={"aave-v3": {"total24h": 42_000.0, "total7d": 200.0, "total14dto7d": 160.0}},
         unlocks={},
         known=KNOWN,
     )
     assert events[0].fees_24h_usd == Decimal("42000")
-    assert events[0].fees_change_pct_7d == 12.5
+    # 7d-over-7d is derived: there is no change_7dover7d field in the payload.
+    assert events[0].fees_change_pct_7d == 25.0
+
+
+def test_fees_are_summed_across_a_tokens_deployments() -> None:
+    events = mapper.to_fundamentals_events(
+        [
+            _protocol("aave-v2", "aave", 1.0, 0.0),
+            _protocol("aave-v3", "aave", 1.0, 0.0),
+        ],
+        fees={
+            "aave-v2": {"total24h": 1_000.0, "total7d": 50.0, "total14dto7d": 100.0},
+            "aave-v3": {"total24h": 3_000.0, "total7d": 150.0, "total14dto7d": 100.0},
+        },
+        unlocks={},
+        known=KNOWN,
+    )
+    assert events[0].fees_24h_usd == Decimal("4000")
+    # (200 - 200) / 200 -> 0.0, computed on the sums rather than averaged per
+    # deployment, which would have given +25%.
+    assert events[0].fees_change_pct_7d == 0.0
+
+
+def test_a_zero_fee_baseline_yields_no_change_rather_than_a_division() -> None:
+    events = mapper.to_fundamentals_events(
+        [_protocol("aave-v3", "aave", 1.0, 0.0)],
+        fees={"aave-v3": {"total24h": 10.0, "total7d": 50.0, "total14dto7d": 0.0}},
+        unlocks={},
+        known=KNOWN,
+    )
+    assert events[0].fees_change_pct_7d is None
+
+
+def test_a_protocol_with_no_fee_row_reports_no_fees() -> None:
+    events = mapper.to_fundamentals_events(
+        [_protocol("aave-v3", "aave", 1.0, 0.0)], fees={}, unlocks={}, known=KNOWN
+    )
+    assert events[0].fees_24h_usd is None
+    assert events[0].fees_change_pct_7d is None
 
 
 def test_a_known_schedule_with_a_pending_unlock_is_carried() -> None:
@@ -750,6 +791,25 @@ def test_an_untracked_token_reports_no_schedule() -> None:
         [_protocol("aave", "aave", 1.0, 0.0)], fees={}, unlocks={}, known=KNOWN
     )
     assert events[0].has_unlock_schedule is False
+
+
+def test_emission_key_uses_the_parent_slug_when_there_is_one() -> None:
+    # Measured against the live API: the emissions list contains "aave" while
+    # /protocols only ever contains "aave-v2", "aave-v3" and friends. Matching
+    # on slug alone covers 220 of 359 scheduled protocols and misses Aave
+    # outright; going through parentProtocol covers 335.
+    assert (
+        mapper.emission_key({"slug": "aave-v3", "parentProtocol": "parent#aave"})
+        == "aave"
+    )
+
+
+def test_emission_key_falls_back_to_the_slug() -> None:
+    assert mapper.emission_key({"slug": "drift"}) == "drift"
+
+
+def test_emission_key_is_absent_when_the_row_has_neither() -> None:
+    assert mapper.emission_key({"name": "nameless"}) is None
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -775,6 +835,22 @@ from cmi_common.events.base import Source
 from .unlocks import Unlock
 
 
+def emission_key(row: dict[str, Any]) -> str | None:
+    """The slug DefiLlama's emissions list uses for this protocol row.
+
+    Emission slugs are *parent* slugs. The list contains ``aave``; ``/protocols``
+    only ever contains ``aave-v2``, ``aave-v3`` and their siblings, each carrying
+    ``parentProtocol: "parent#aave"``. Matching the emissions list against
+    ``slug`` alone covers 220 of the 359 scheduled protocols and misses Aave
+    entirely — and it misses them silently, since an unmatched protocol simply
+    reports no schedule. Going through the parent covers 335.
+    """
+    parent = row.get("parentProtocol")
+    if parent:
+        return str(parent).split("#", 1)[-1] or None
+    return row.get("slug") or None
+
+
 def to_fundamentals_events(
     protocols: list[dict[str, Any]],
     *,
@@ -788,6 +864,11 @@ def to_fundamentals_events(
     whose id we do not track, is dropped rather than matched on its ticker:
     ticker collisions are real and silently wrong.
 
+    ``fees`` is keyed by protocol **slug**, because the fees payload carries no
+    ``gecko_id`` at all — verified against the live API, 0 of 2,514 rows have
+    one. Keying it by coin id would match nothing and quietly report every
+    protocol as fee-less.
+
     ``unlocks`` maps CoinGecko id -> the pending unlock, or None when the
     schedule is known and empty. A key that is simply absent means DefiLlama
     publishes no schedule for that token, which is a different statement.
@@ -798,20 +879,28 @@ def to_fundamentals_events(
         if not coin_id or coin_id not in known:
             continue
         tvl = float(row.get("tvl") or 0.0)
-        bucket = aggregated.setdefault(coin_id, {"tvl": 0.0, "weighted_change": 0.0})
+        bucket = aggregated.setdefault(
+            coin_id,
+            {"tvl": 0.0, "weighted_change": 0.0, "f24": 0.0, "f7": 0.0, "f14to7": 0.0},
+        )
         bucket["tvl"] += tvl
         # TVL-weighted: a $3M deployment flat and a $1M deployment up 8% is a 2%
         # move for the token, not the 4% a plain mean would report.
         change = row.get("change_7d")
         if change is not None:
             bucket["weighted_change"] += tvl * float(change)
+        # Fees aggregate the same way TVL does. Aave alone is seven deployment
+        # rows sharing one gecko_id, so reading any single row would report a
+        # fraction of the token's revenue as if it were all of it.
+        fee_row = fees.get(row.get("slug") or "") or {}
+        bucket["f24"] += float(fee_row.get("total24h") or 0.0)
+        bucket["f7"] += float(fee_row.get("total7d") or 0.0)
+        bucket["f14to7"] += float(fee_row.get("total14dto7d") or 0.0)
 
     events: list[FundamentalsEvent] = []
     for coin_id, bucket in aggregated.items():
         tvl = bucket["tvl"]
-        fee_row = fees.get(coin_id) or {}
-        fees_24h = fee_row.get("total24h")
-        fees_change = fee_row.get("change_7dover7d")
+        baseline = bucket["f14to7"]
         unlock = unlocks.get(coin_id)
         events.append(
             FundamentalsEvent(
@@ -822,9 +911,14 @@ def to_fundamentals_events(
                 tvl_change_pct_7d=(
                     round(bucket["weighted_change"] / tvl, 4) if tvl > 0 else None
                 ),
-                fees_24h_usd=Decimal(str(fees_24h)) if fees_24h else None,
+                fees_24h_usd=Decimal(str(bucket["f24"])) if bucket["f24"] else None,
+                # Derived: the payload has change_30dover30d but no 7d-over-7d.
+                # A zero baseline yields None, not a division and not a 0.0 that
+                # would read as "fees held flat".
                 fees_change_pct_7d=(
-                    float(fees_change) if fees_change is not None else None
+                    round(100.0 * (bucket["f7"] - baseline) / baseline, 4)
+                    if baseline > 0
+                    else None
                 ),
                 next_unlock_at=unlock.at if unlock else None,
                 next_unlock_pct_supply=unlock.pct_supply if unlock else None,
@@ -962,26 +1056,39 @@ async def test_a_failed_unlock_fetch_returns_absent_without_raising() -> None:
     assert cache.writes == []  # nothing poisoned the cache
 
 
-async def test_protocols_and_fees_are_parsed_into_lists_and_maps() -> None:
+async def test_protocols_are_returned_as_a_list() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/protocols":
-            return httpx.Response(
-                200, json=[{"slug": "aave", "gecko_id": "aave", "tvl": 1.0}]
-            )
-        if request.url.path == "/overview/fees":
-            return httpx.Response(
-                200,
-                json={
-                    "protocols": [
-                        {"gecko_id": "aave", "total24h": 42.0, "change_7dover7d": 1.5}
-                    ]
-                },
-            )
-        raise AssertionError(f"unexpected {request.url}")
+        assert request.url.path == "/protocols"
+        return httpx.Response(
+            200, json=[{"slug": "aave-v3", "gecko_id": "aave", "tvl": 1.0}]
+        )
 
-    client = _client(handler, FakeCache())
-    assert (await client.protocols())[0]["slug"] == "aave"
-    assert (await client.fees())["aave"]["total24h"] == 42.0
+    rows = await _client(handler, FakeCache()).protocols()
+    assert rows[0]["slug"] == "aave-v3"
+
+
+async def test_fees_are_keyed_by_slug_and_exclude_the_chart_series() -> None:
+    # The exclude params take the response from 24.6 MB to 3.7 MB. Dropping
+    # them would move 3.5 GB a day to read a handful of numbers, so they are
+    # asserted rather than trusted.
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["excludeTotalDataChart"] == "true"
+        assert request.url.params["excludeTotalDataChartBreakdown"] == "true"
+        return httpx.Response(
+            200,
+            json={
+                "protocols": [
+                    {"slug": "aave-v3", "total24h": 42.0, "total7d": 200.0},
+                    {"name": "no slug", "total24h": 1.0},
+                ]
+            },
+        )
+
+    fees = await _client(handler, FakeCache()).fees()
+    assert fees["aave-v3"]["total24h"] == 42.0
+    # A row without a slug cannot be joined to anything, so it is dropped
+    # rather than keyed under an empty string.
+    assert len(fees) == 1
 
 
 async def test_emission_slugs_are_returned_as_a_set() -> None:
@@ -1077,10 +1184,23 @@ class LlamaClient:
         return await self._get(f"{API_BASE}/protocols")
 
     async def fees(self) -> dict[str, dict[str, Any]]:
-        """Fee rows keyed by CoinGecko id, for the ones that carry it."""
-        payload = await self._get(f"{API_BASE}/overview/fees")
+        """Fee rows keyed by protocol **slug**.
+
+        Not by gecko_id: the fees payload carries none — verified against the
+        live API, 0 of 2,514 rows have one. The caller joins slug -> gecko_id
+        through the protocols response.
+
+        The two exclude parameters are not optional. Without them the response
+        embeds full historical chart series and weighs 24.6 MB, which at a 600s
+        cadence is 3.5 GB a day to read a handful of numbers. With them it is
+        3.7 MB.
+        """
+        payload = await self._get(
+            f"{API_BASE}/overview/fees"
+            "?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true"
+        )
         rows = payload.get("protocols", []) if isinstance(payload, dict) else []
-        return {row["gecko_id"]: row for row in rows if row.get("gecko_id")}
+        return {row["slug"]: row for row in rows if row.get("slug")}
 
     async def emission_slugs(self) -> set[str]:
         """The protocol slugs that have a published unlock schedule (~4 KB)."""
@@ -1181,8 +1301,23 @@ class FakeClient:
         self._slugs = slugs if slugs is not None else {"aave"}
 
     async def protocols(self) -> list[dict[str, Any]]:
+        # Shaped like the live payload: deployment slugs under a parent, which
+        # is what the emissions list is actually keyed by.
         return [
-            {"slug": "aave", "gecko_id": "aave", "tvl": 5_000_000.0, "change_7d": 3.5},
+            {
+                "slug": "aave-v3",
+                "parentProtocol": "parent#aave",
+                "gecko_id": "aave",
+                "tvl": 3_000_000.0,
+                "change_7d": 3.5,
+            },
+            {
+                "slug": "aave-v2",
+                "parentProtocol": "parent#aave",
+                "gecko_id": "aave",
+                "tvl": 2_000_000.0,
+                "change_7d": 3.5,
+            },
             {"slug": "uniswap", "gecko_id": "uniswap", "tvl": 4.0, "change_7d": 1.0},
         ]
 
@@ -1214,6 +1349,31 @@ async def test_only_protocols_with_a_schedule_are_ever_fetched() -> None:
     # ~320 of the 359 scheduled protocols are outside our universe, and the
     # other direction matters more: fetching a 2.25 MB document for a token with
     # no schedule at all would be pure waste.
+    client = FakeClient(slugs={"aave"})
+    collector = collector_mod.DefiLlamaCollector(
+        client, FakeProducer(), known_tokens=lambda: KNOWN
+    )
+    await collector.poll_once()
+    assert client.unlock_calls == ["aave"]
+
+
+async def test_the_parent_slug_is_what_the_emissions_list_is_matched_on() -> None:
+    # The failure this prevents: matching on the deployment slug finds nothing
+    # for "aave" and the token silently reports no unlock schedule at all.
+    # Measured on the live data, slug-matching loses 139 of 359 protocols.
+    client = FakeClient(slugs={"aave"})
+    producer = FakeProducer()
+    collector = collector_mod.DefiLlamaCollector(
+        client, producer, known_tokens=lambda: KNOWN
+    )
+    await collector.poll_once()
+    aave = next(e for _, e in producer.published if e.symbol == "AAVE")
+    assert aave.has_unlock_schedule is True
+
+
+async def test_deployments_sharing_a_parent_are_fetched_once() -> None:
+    # Aave is seven rows on the live API. One 2.25 MB document per deployment
+    # would multiply the cost by the deployment count for no new information.
     client = FakeClient(slugs={"aave"})
     collector = collector_mod.DefiLlamaCollector(
         client, FakeProducer(), known_tokens=lambda: KNOWN
@@ -1269,7 +1429,7 @@ from collections.abc import Callable
 from cmi_common.kafka import EventProducer, Topic
 from cmi_common.observability import EVENTS_PRODUCED
 
-from ..domain.mapper import to_fundamentals_events
+from ..domain.mapper import emission_key, to_fundamentals_events
 from ..domain.unlocks import Unlock
 from ..infrastructure.llama_client import LlamaClient
 
@@ -1330,12 +1490,18 @@ class DefiLlamaCollector:
         event reports "no schedule known" rather than "no unlock coming".
         """
         scheduled = await self._client.emission_slugs()
+        # emission_key, not row["slug"] — the emissions list is keyed by parent
+        # slug. Several deployment rows collapse onto the same key (Aave is
+        # seven), hence the dedupe: fetching a 2.25 MB document once per
+        # deployment would multiply the cost by the deployment count.
         eligible = sorted(
-            (row["slug"], row["gecko_id"])
-            for row in protocols
-            if row.get("slug") in scheduled
-            and row.get("gecko_id")
-            and row["gecko_id"] in known
+            {
+                (key, row["gecko_id"])
+                for row in protocols
+                if (key := emission_key(row)) in scheduled
+                and row.get("gecko_id")
+                and row["gecko_id"] in known
+            }
         )
         if not eligible:
             return {}

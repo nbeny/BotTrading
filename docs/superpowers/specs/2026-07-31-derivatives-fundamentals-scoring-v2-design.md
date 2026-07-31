@@ -73,8 +73,8 @@ Cadence 600 s (`DEFILLAMA_POLL_INTERVAL`).
 
 | Endpoint | Per cycle | Yields |
 |---|---|---|
-| `GET api.llama.fi/protocols` | 1 | TVL, `change_1d`, `change_7d`, `gecko_id`, `slug` |
-| `GET api.llama.fi/overview/fees` | 1 | 24h and 7d fees / revenue |
+| `GET api.llama.fi/protocols` | 1 | TVL, `change_1d`, `change_7d`, `gecko_id`, `slug`, `parentProtocol` (8.5 MB) |
+| `GET api.llama.fi/overview/fees?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true` | 1 | `total24h`, `total7d`, `total14dto7d` per `slug` (3.7 MB; 24.6 MB without the params) |
 | `GET defillama-datasets.llama.fi/emissionsProtocolsList` | 1 | the 359 slugs that have an unlock schedule (4 KB) |
 | `GET defillama-datasets.llama.fi/emissions/{slug}` | ≤ 3, round-robin | `metadata.events` + `supplyMetrics.maxSupply` |
 
@@ -100,11 +100,38 @@ unlocks going back years, so the future filter is not optional.
 
 **Symbol mapping is by `gecko_id` → `Token.coin_id`, never by ticker.** A protocol without a
 `gecko_id` is dropped rather than guessed. This deliberately sidesteps the ambiguity that
-`collector-kraken`'s `ambiguous_symbols` exists to record.
+`collector-kraken`'s `ambiguous_symbols` exists to record. Measured: 2,325 of the 7,974
+protocol rows carry a `gecko_id`.
 
-When a protocol appears under several entries (parent/child protocols on DefiLlama), TVL is
-summed at the `gecko_id` level before emission, so a token's TVL is the token's, not one
-deployment's.
+When a protocol appears under several entries, TVL is summed at the `gecko_id` level before
+emission, so a token's TVL is the token's, not one deployment's. This is the common case, not
+an edge case: Aave is seven rows (`aave-v1` … `aave-v4`, `aave-horizon-rwa`, `aave-aptos`)
+sharing one `gecko_id`, totalling $14.3B.
+
+**Three different join keys are in play, and conflating them silently loses data.** All three
+were verified against the live API:
+
+| From | To | Key |
+|---|---|---|
+| `/protocols` row | our `tokens` table | `gecko_id` → `Token.coin_id` |
+| `/overview/fees` row | `/protocols` row | `slug` — the fees payload carries **no** `gecko_id` (0 of 2,514 rows) |
+| `emissionsProtocolsList` entry | `/protocols` row | `parentProtocol` minus its `parent#` prefix, falling back to `slug` |
+
+The third one is the trap. Emission slugs are *parent* slugs: the list contains `aave`, while
+`/protocols` only ever contains `aave-v2`, `aave-v3` and so on. Matching emission slugs against
+`slug` alone covers 220 of 359 protocols and drops Aave entirely; going through
+`parentProtocol` covers 335, of which 224 carry a `gecko_id` and are therefore reachable at
+all. The remaining 24 are naming variants that resolve to no protocol row; they degrade to
+"no schedule known", which is the correct answer rather than a silent zero.
+
+**Fees carry no 7-day change field either.** There is `change_30dover30d` but no
+`change_7dover7d`, so the 7-day figure is derived: `100 × (total7d − total14dto7d) /
+total14dto7d`, both of which are present. Fees are summed across a token's deployments exactly
+as TVL is, before the change is computed.
+
+`/overview/fees` must be requested with `excludeTotalDataChart=true` and
+`excludeTotalDataChartBreakdown=true`. Without them the response is **24.6 MB** — 3.5 GB/day at
+a 600 s cadence — because it embeds full historical chart series. With them it is 3.7 MB.
 
 ### `collector-binance-futures`
 

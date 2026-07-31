@@ -2330,10 +2330,27 @@ git commit -m "test(read-plane): assert data plausibility, not just response sha
 
 ### Task 13: Deploy and verify against production
 
-- [ ] **Step 1: Run the full local gate**
+- [ ] **Step 1: Run the local gate**
 
-Run: `make lint && make test`
-Expected: both green. Fix anything red before pushing.
+`make lint` cannot be the gate here: it runs `black --check libs services`, and ~40 files
+on `master` were already unformatted before this lot began (measured 2026-07-31). Gating on
+it would either block on unrelated debt or tempt a reformat-everything commit buried inside
+a feature branch. Gate on the surface this lot actually touches, plus the whole suite:
+
+```bash
+python -m ruff check libs services
+python -m black --check services/collector-kraken libs/cmi_common/cmi_common/sources/candles.py \
+  services/api-gateway/app/read_api.py services/api-gateway/app/persister.py \
+  scripts/verify_read_live.py tests/test_kraken_*.py tests/test_candle_reader.py \
+  tests/test_tokens_persistence.py
+python -m pytest tests/ -q
+```
+
+Expected: ruff clean, black clean on the listed files, suite green with no regression against
+the 558-test baseline this branch started from.
+
+Reformatting the pre-existing ~40 files is legitimate work, but it belongs in its own commit
+on its own branch — never mixed into a feature diff, where it would bury the real changes.
 
 - [ ] **Step 2: Deploy**
 

@@ -44,6 +44,7 @@ from .systems_pipeline import (
     DEFAULT_WINDOW,
     MAX_ITEMS,
     STAGE_BY_ID,
+    WINDOW_HOURS,
     StageCounts,
     build_pipeline_stages,
     fetch_stage_detail,
@@ -1187,7 +1188,10 @@ async def systems_funnel(
     session: AsyncSession = Depends(get_session_dep),
 ) -> dict:
     """Stage-by-stage survival of signals, plus why the rest were dropped."""
-    hours = {"1h": 1, "24h": 24, "7d": 168}[window]
+    # Shared with the graph's aggregates: the funnel and the pipeline panel
+    # must resolve a window to the same span, or the two disagree by
+    # construction while both look right.
+    hours = WINDOW_HOURS[window]
     since = _utcnow_naive() - timedelta(hours=hours)
 
     analyses = await session.scalar(

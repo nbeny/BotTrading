@@ -322,27 +322,34 @@ def _agg_queue():
         created_at=NOW, symbol="BTC", direction="long", status="filled",
         fill_price=101.5, pnl=12.0,
     )
+    # Every scalar below is distinct, and every one is asserted downstream. That
+    # is the whole point: the fake replays results positionally, so with
+    # repeated values a stage wired to the wrong table — or a reordering of the
+    # queries — hands back a plausible number that no assertion contradicts.
+    # Mutation-tested: pointing `decision.volume` at the risk count used to pass.
+    # The single deliberate 0 belongs to `senior`, which pins the measured-zero
+    # path (a counted zero, distinct from an unknown).
     return [
         _AggResult(scalar=3),  # collect: prices count
-        _AggResult(scalar=2),  # collect: content count
+        _AggResult(scalar=5),  # collect: content count
         _AggResult(rows=[content_row]),  # collect: last content row
-        _AggResult(scalar=4),  # sentiment: scored count
-        _AggResult(scalar=10),  # sentiment: backlog (unwindowed)
+        _AggResult(scalar=11),  # sentiment: scored count
+        _AggResult(scalar=13),  # sentiment: backlog (unwindowed queue depth)
         _AggResult(rows=[scored_row]),  # sentiment: last scored row
-        _AggResult(scalar=7),  # triage: analyses count
-        _AggResult(scalar=2),  # triage: not-escalated count
+        _AggResult(scalar=17),  # triage: analyses count
+        _AggResult(scalar=19),  # triage: not-escalated count
         _AggResult(rows=[signal_row]),  # triage: last signal row
         _AggResult(scalar=0),  # senior: escalated count (measured zero)
-        _AggResult(scalar=0),  # senior: budget-skipped count
+        _AggResult(scalar=23),  # senior: budget-skipped count
         _AggResult(rows=[]),  # senior: no journal row in the window
-        _AggResult(scalar=3),  # decision: decisions count
-        _AggResult(scalar=1),  # decision: rejected count
+        _AggResult(scalar=29),  # decision: decisions count
+        _AggResult(scalar=31),  # decision: rejected count
         _AggResult(rows=[decision_row]),  # decision: last decision row
-        _AggResult(scalar=2),  # risk: approved count
-        _AggResult(scalar=0),  # risk: rejected count
+        _AggResult(scalar=37),  # risk: approved count
+        _AggResult(scalar=41),  # risk: rejected count
         _AggResult(rows=[approved_row]),  # risk: last approved row
-        _AggResult(scalar=1),  # execute: executed count
-        _AggResult(scalar=0),  # execute: failed count
+        _AggResult(scalar=43),  # execute: executed count
+        _AggResult(scalar=47),  # execute: failed count
         _AggResult(rows=[executed_row]),  # execute: last executed row
     ]
 
@@ -352,9 +359,24 @@ async def test_fetch_stage_counts_reports_every_stage_from_real_and_zero_rows() 
 
     assert set(counts) == set(sp.STAGE_IDS)
 
-    # A stage with rows: real volume, and a last_summary built from the row.
-    assert counts["collect"].volume == 5  # 3 prices + 2 content rows
+    # Every count is pinned, not just a representative sample. An unasserted
+    # field is a place a wrong-table wire-up survives, and "the decision stage
+    # is quietly showing the risk stage's number" is precisely the silent
+    # failure this whole feature exists to eliminate.
+    assert (counts["collect"].volume, counts["collect"].dropped) == (8, None)
+    assert (counts["sentiment"].volume, counts["sentiment"].dropped) == (11, 13)
+    assert (counts["triage"].volume, counts["triage"].dropped) == (17, 19)
+    assert (counts["senior"].volume, counts["senior"].dropped) == (0, 23)
+    assert (counts["decision"].volume, counts["decision"].dropped) == (29, 31)
+    assert (counts["risk"].volume, counts["risk"].dropped) == (37, 41)
+    assert (counts["execute"].volume, counts["execute"].dropped) == (43, 47)
+
+    # Summaries are built from the row each stage actually read.
     assert counts["collect"].last_summary == "rss · news · BTC pumping"
+    assert counts["sentiment"].last_summary == "reddit · sentiment +0.42"
+    assert counts["triage"].last_summary == "SOL · score 72 · escaladé"
+    assert counts["decision"].last_summary == "BTC · long · confiance 81%"
+    assert counts["risk"].last_summary == "BTC · long · taille 5.0%"
     assert counts["execute"].last_summary == "BTC · long · filled @ 101.5 · PnL 12.0"
 
     # A stage with no rows: a genuine measured zero, not an absent value.

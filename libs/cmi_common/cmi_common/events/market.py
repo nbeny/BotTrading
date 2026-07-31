@@ -16,6 +16,7 @@ class PriceEvent(BaseEvent):
     event_type: Literal[EventType.PRICE] = EventType.PRICE
     symbol: str = Field(..., description="Ticker, upper-case, e.g. 'SOL'")
     coin_id: str = Field(..., description="Provider coin id, e.g. 'solana'")
+    name: str | None = Field(default=None, description="Display name, e.g. 'Solana'")
     price_usd: Decimal = Field(..., gt=0)
     market_cap_usd: Decimal | None = Field(default=None, ge=0)
     volume_24h_usd: Decimal | None = Field(default=None, ge=0)

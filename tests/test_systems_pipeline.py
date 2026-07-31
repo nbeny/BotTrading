@@ -255,3 +255,119 @@ async def test_a_caller_mutating_the_result_cannot_corrupt_the_cache() -> None:
     first.pop("triage")
     second, _ = await sp.stage_counts_cached(None, "24h", now=1.0, fetch=fetch)
     assert second["triage"].volume == 7
+
+
+def test_window_hours_covers_exactly_the_three_supported_windows() -> None:
+    assert sp.WINDOW_HOURS == {"1h": 1, "24h": 24, "7d": 168}
+
+
+def test_every_stage_reports_a_count_for_the_ids_in_the_catalog() -> None:
+    """A stage in the catalog with no aggregate would render a permanent blank
+    that looks exactly like a dead stage."""
+    assert set(sp.STAGE_IDS) == {
+        "collect", "sentiment", "triage", "senior", "decision", "risk", "execute",
+    }
+
+
+class _AggResult:
+    """Stands in for an `AsyncSession.execute` result: a count query reads
+    `scalar_one()`, a "latest row" query reads `scalars().first()`. Values are
+    fixed by the test, not derived from the statement, so an implementation
+    that queries the wrong table or the wrong predicate produces a wrong
+    number instead of being echoed back a right one."""
+
+    def __init__(self, *, scalar=None, rows=None):
+        self._scalar = scalar
+        self._rows = rows or []
+
+    def scalar_one(self):
+        return self._scalar
+
+    def scalars(self):
+        return self
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+
+class _FakeAggSession:
+    """Replays a fixed, ordered queue of query results. Order follows
+    `fetch_stage_counts`'s own call order (collect, sentiment, triage, senior,
+    decision, risk, execute — count(s) then "latest row" per stage); popping
+    from an emptied queue fails loudly rather than padding with silent zeros."""
+
+    def __init__(self, queue):
+        self._queue = list(queue)
+
+    async def execute(self, _stmt):
+        return self._queue.pop(0)
+
+
+def _agg_queue():
+    content_row = SimpleNamespace(
+        fetched_at=NOW, source="rss", kind="news", title="BTC pumping", text="",
+    )
+    scored_row = SimpleNamespace(scored_at=NOW, source="reddit", sentiment_score=0.42)
+    signal_row = SimpleNamespace(
+        time=NOW, symbol="SOL", opportunity_score=72, escalated=True,
+        block_reason="unknown",
+    )
+    decision_row = SimpleNamespace(
+        created_at=NOW, symbol="BTC", direction="long", confidence=0.81,
+    )
+    approved_row = SimpleNamespace(
+        created_at=NOW, symbol="BTC", direction="long", position_size_pct=0.05,
+    )
+    executed_row = SimpleNamespace(
+        created_at=NOW, symbol="BTC", direction="long", status="filled",
+        fill_price=101.5, pnl=12.0,
+    )
+    return [
+        _AggResult(scalar=3),  # collect: prices count
+        _AggResult(scalar=2),  # collect: content count
+        _AggResult(rows=[content_row]),  # collect: last content row
+        _AggResult(scalar=4),  # sentiment: scored count
+        _AggResult(scalar=10),  # sentiment: backlog (unwindowed)
+        _AggResult(rows=[scored_row]),  # sentiment: last scored row
+        _AggResult(scalar=7),  # triage: analyses count
+        _AggResult(scalar=2),  # triage: not-escalated count
+        _AggResult(rows=[signal_row]),  # triage: last signal row
+        _AggResult(scalar=0),  # senior: escalated count (measured zero)
+        _AggResult(scalar=0),  # senior: budget-skipped count
+        _AggResult(rows=[]),  # senior: no journal row in the window
+        _AggResult(scalar=3),  # decision: decisions count
+        _AggResult(scalar=1),  # decision: rejected count
+        _AggResult(rows=[decision_row]),  # decision: last decision row
+        _AggResult(scalar=2),  # risk: approved count
+        _AggResult(scalar=0),  # risk: rejected count
+        _AggResult(rows=[approved_row]),  # risk: last approved row
+        _AggResult(scalar=1),  # execute: executed count
+        _AggResult(scalar=0),  # execute: failed count
+        _AggResult(rows=[executed_row]),  # execute: last executed row
+    ]
+
+
+async def test_fetch_stage_counts_reports_every_stage_from_real_and_zero_rows() -> None:
+    counts = await sp.fetch_stage_counts(_FakeAggSession(_agg_queue()), "24h")
+
+    assert set(counts) == set(sp.STAGE_IDS)
+
+    # A stage with rows: real volume, and a last_summary built from the row.
+    assert counts["collect"].volume == 5  # 3 prices + 2 content rows
+    assert counts["collect"].last_summary == "rss · news · BTC pumping"
+    assert counts["execute"].last_summary == "BTC · long · filled @ 101.5 · PnL 12.0"
+
+    # A stage with no rows: a genuine measured zero, not an absent value.
+    assert counts["senior"].volume == 0
+    assert counts["senior"].last_at is None
+    assert counts["senior"].last_summary is None
+
+
+async def test_fetch_stage_counts_returns_a_fresh_dict_every_call() -> None:
+    first = await sp.fetch_stage_counts(_FakeAggSession(_agg_queue()), "24h")
+    second = await sp.fetch_stage_counts(_FakeAggSession(_agg_queue()), "24h")
+
+    assert first is not second
+    assert first == second  # same measured values...
+    first.pop("collect")
+    assert "collect" in second  # ...but popping one never touches the other

@@ -16,7 +16,19 @@ import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
+
+from sqlalchemy import and_, func, select
+
+from cmi_common.db.models import (
+    Decision,
+    DecisionJournal,
+    PipelineRejection,
+    Price,
+    RawContent,
+    Signal,
+    Trade,
+)
 
 
 @dataclass(frozen=True)
@@ -153,15 +165,159 @@ class _StageCache:
 
 STAGE_CACHE = _StageCache()
 
+WINDOW_HOURS = {"1h": 1, "24h": 24, "7d": 168}
+DEFAULT_WINDOW = "24h"
+
+# A trade is born "approved" and stamped with its execution kind once the
+# engine acts on it — mirrors read_api.systems_funnel's EXECUTED_STATUSES so
+# the funnel panel and this graph never disagree on what "executed" means.
+EXECUTED_STATUSES = ("submitted", "filled", "closed")
+FAILED_STATUSES = ("failed", "rejected")
+
+
+def _cutoffs(window: str) -> tuple[datetime, datetime]:
+    """(naive, aware) UTC cutoffs. `raw_content` is the one table with tz-aware
+    columns; mixing the two raises at query time, so both are computed once."""
+    hours = WINDOW_HOURS[window]
+    aware = datetime.now(tz=UTC) - timedelta(hours=hours)
+    return aware.replace(tzinfo=None), aware
+
+
+async def _count(session, model, *where) -> int:
+    stmt = select(func.count()).select_from(model).where(and_(*where))
+    return int((await session.execute(stmt)).scalar_one())
+
+
+async def _latest(session, model, order_col, *where):
+    stmt = select(model).order_by(order_col.desc()).limit(1)
+    if where:
+        stmt = stmt.where(and_(*where))
+    return (await session.execute(stmt)).scalars().first()
+
 
 async def fetch_stage_counts(session, window: str) -> dict[str, StageCounts]:
-    """Placeholder for the real Postgres aggregates, written in T6.
+    """One StageCounts per stage over `window`. Raises on DB failure —
+    `stage_counts_cached` decides what an operator should see."""
+    since, since_aware = _cutoffs(window)
 
-    Returns an empty mapping rather than fabricated counts: an empty mapping
-    shapes into `null` fields via `build_pipeline_stages`, which is the honest
-    "not measured yet" state this module exists to preserve.
-    """
-    return {}
+    prices = await _count(session, Price, Price.time >= since)
+    content = await _count(session, RawContent, RawContent.fetched_at >= since_aware)
+    last_content = await _latest(
+        session, RawContent, RawContent.fetched_at, RawContent.fetched_at >= since_aware
+    )
+
+    scored = await _count(session, RawContent, RawContent.scored_at >= since_aware)
+    # Unwindowed on purpose: this is the unscored queue depth, not a rate.
+    backlog = await _count(session, RawContent, RawContent.scored_at.is_(None))
+    last_scored = await _latest(
+        session, RawContent, RawContent.scored_at, RawContent.scored_at.is_not(None)
+    )
+
+    analyses = await _count(session, Signal, Signal.time >= since)
+    not_escalated = await _count(
+        session, Signal, Signal.time >= since, Signal.escalated.is_(False)
+    )
+    last_signal = await _latest(session, Signal, Signal.time, Signal.time >= since)
+
+    escalated = await _count(
+        session, Signal, Signal.time >= since, Signal.escalated.is_(True)
+    )
+    # The measured production bottleneck: escalated but never handed to Sonnet
+    # because the hourly budget was spent. Two separate numbers, on purpose.
+    budget_skipped = await _count(
+        session,
+        DecisionJournal,
+        DecisionJournal.time >= since,
+        DecisionJournal.escalated.is_(True),
+        DecisionJournal.sonnet_called.is_(False),
+    )
+    last_journal = await _latest(
+        session,
+        DecisionJournal,
+        DecisionJournal.time,
+        DecisionJournal.time >= since,
+        DecisionJournal.sonnet_called.is_(True),
+    )
+
+    decisions = await _count(session, Decision, Decision.created_at >= since)
+    decision_rejected = await _count(
+        session,
+        PipelineRejection,
+        PipelineRejection.time >= since,
+        PipelineRejection.stage == "decision_engine",
+    )
+    last_decision = await _latest(
+        session, Decision, Decision.created_at, Decision.created_at >= since
+    )
+
+    approved = await _count(session, Trade, Trade.created_at >= since)
+    risk_rejected = await _count(
+        session,
+        PipelineRejection,
+        PipelineRejection.time >= since,
+        PipelineRejection.stage == "risk_engine",
+    )
+    last_approved = await _latest(
+        session, Trade, Trade.created_at, Trade.created_at >= since
+    )
+
+    executed = await _count(
+        session, Trade, Trade.created_at >= since, Trade.status.in_(EXECUTED_STATUSES)
+    )
+    failed = await _count(
+        session, Trade, Trade.created_at >= since, Trade.status.in_(FAILED_STATUSES)
+    )
+    last_executed = await _latest(
+        session,
+        Trade,
+        Trade.created_at,
+        Trade.created_at >= since,
+        Trade.status.in_(EXECUTED_STATUSES),
+    )
+
+    return {
+        "collect": StageCounts(
+            volume=prices + content,
+            last_at=getattr(last_content, "fetched_at", None),
+            last_summary=summarize_content(last_content) if last_content else None,
+        ),
+        "sentiment": StageCounts(
+            volume=scored,
+            dropped=backlog,
+            last_at=getattr(last_scored, "scored_at", None),
+            last_summary=summarize_scored(last_scored) if last_scored else None,
+        ),
+        "triage": StageCounts(
+            volume=analyses,
+            dropped=not_escalated,
+            last_at=getattr(last_signal, "time", None),
+            last_summary=summarize_signal(last_signal) if last_signal else None,
+        ),
+        "senior": StageCounts(
+            volume=escalated,
+            dropped=budget_skipped,
+            last_at=getattr(last_journal, "time", None),
+            last_summary=summarize_journal(last_journal) if last_journal else None,
+        ),
+        "decision": StageCounts(
+            volume=decisions,
+            dropped=decision_rejected,
+            last_at=getattr(last_decision, "created_at", None),
+            last_summary=summarize_decision(last_decision) if last_decision else None,
+        ),
+        "risk": StageCounts(
+            volume=approved,
+            dropped=risk_rejected,
+            last_at=getattr(last_approved, "created_at", None),
+            last_summary=summarize_approved(last_approved) if last_approved else None,
+        ),
+        "execute": StageCounts(
+            volume=executed,
+            dropped=failed,
+            last_at=getattr(last_executed, "created_at", None),
+            last_summary=summarize_trade(last_executed) if last_executed else None,
+        ),
+    }
 
 
 async def stage_counts_cached(

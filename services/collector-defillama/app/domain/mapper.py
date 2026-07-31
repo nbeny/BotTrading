@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
@@ -9,6 +10,25 @@ from cmi_common.events import FundamentalsEvent
 from cmi_common.events.base import Source
 
 from .unlocks import Unlock
+
+
+@dataclass(slots=True)
+class _Bucket:
+    """Per-token accumulator.
+
+    The two `saw_*` flags are the whole point: a bucket that starts at 0.0
+    cannot otherwise tell "no deployment reported this" from "the deployments
+    reported zero", and collapsing those is precisely the unknown-vs-measured
+    confusion the platform already shipped once.
+    """
+
+    tvl: float = 0.0
+    weighted_change: float = 0.0
+    fees_24h: float = 0.0
+    fees_7d: float = 0.0
+    fees_prev_7d: float = 0.0
+    saw_tvl: bool = False
+    saw_fees: bool = False
 
 
 def emission_key(row: dict[str, Any]) -> str | None:
@@ -49,51 +69,61 @@ def to_fundamentals_events(
     schedule is known and empty. A key that is simply absent means DefiLlama
     publishes no schedule for that token, which is a different statement.
     """
-    aggregated: dict[str, dict[str, float]] = {}
+    aggregated: dict[str, _Bucket] = {}
     for row in protocols:
         coin_id = row.get("gecko_id")
         if not coin_id or coin_id not in known:
             continue
-        tvl = float(row.get("tvl") or 0.0)
-        bucket = aggregated.setdefault(
-            coin_id,
-            {"tvl": 0.0, "weighted_change": 0.0, "f24": 0.0, "f7": 0.0, "f14to7": 0.0},
-        )
-        bucket["tvl"] += tvl
-        # TVL-weighted: a $3M deployment flat and a $1M deployment up 8% is a 2%
-        # move for the token, not the 4% a plain mean would report.
-        change = row.get("change_7d")
-        if change is not None:
-            bucket["weighted_change"] += tvl * float(change)
+        bucket = aggregated.setdefault(coin_id, _Bucket())
+
+        raw_tvl = row.get("tvl")
+        if raw_tvl is not None:
+            bucket.saw_tvl = True
+            bucket.tvl += float(raw_tvl)
+            # TVL-weighted: a $3M deployment flat and a $1M deployment up 8% is
+            # a 2% move for the token, not the 4% a plain mean would report.
+            change = row.get("change_7d")
+            if change is not None:
+                bucket.weighted_change += float(raw_tvl) * float(change)
+
         # Fees aggregate the same way TVL does. Aave alone is seven deployment
         # rows sharing one gecko_id, so reading any single row would report a
         # fraction of the token's revenue as if it were all of it.
-        fee_row = fees.get(row.get("slug") or "") or {}
-        bucket["f24"] += float(fee_row.get("total24h") or 0.0)
-        bucket["f7"] += float(fee_row.get("total7d") or 0.0)
-        bucket["f14to7"] += float(fee_row.get("total14dto7d") or 0.0)
+        fee_row = fees.get(row.get("slug") or "")
+        if fee_row:
+            bucket.saw_fees = True
+            bucket.fees_24h += float(fee_row.get("total24h") or 0.0)
+            bucket.fees_7d += float(fee_row.get("total7d") or 0.0)
+            bucket.fees_prev_7d += float(fee_row.get("total14dto7d") or 0.0)
 
     events: list[FundamentalsEvent] = []
     for coin_id, bucket in aggregated.items():
-        tvl = bucket["tvl"]
-        baseline = bucket["f14to7"]
         unlock = unlocks.get(coin_id)
         events.append(
             FundamentalsEvent(
                 source=Source.DEFILLAMA,
                 symbol=known[coin_id],
                 coin_id=coin_id,
-                tvl_usd=Decimal(str(tvl)) if tvl > 0 else None,
+                tvl_usd=Decimal(str(bucket.tvl)) if bucket.saw_tvl else None,
                 tvl_change_pct_7d=(
-                    round(bucket["weighted_change"] / tvl, 4) if tvl > 0 else None
+                    round(bucket.weighted_change / bucket.tvl, 4)
+                    if bucket.tvl > 0
+                    else None
                 ),
-                fees_24h_usd=Decimal(str(bucket["f24"])) if bucket["f24"] else None,
+                fees_24h_usd=(
+                    Decimal(str(bucket.fees_24h)) if bucket.saw_fees else None
+                ),
                 # Derived: the payload has change_30dover30d but no 7d-over-7d.
                 # A zero baseline yields None, not a division and not a 0.0 that
                 # would read as "fees held flat".
                 fees_change_pct_7d=(
-                    round(100.0 * (bucket["f7"] - baseline) / baseline, 4)
-                    if baseline > 0
+                    round(
+                        100.0
+                        * (bucket.fees_7d - bucket.fees_prev_7d)
+                        / bucket.fees_prev_7d,
+                        4,
+                    )
+                    if bucket.fees_prev_7d > 0
                     else None
                 ),
                 next_unlock_at=unlock.at if unlock else None,

@@ -94,7 +94,9 @@ def test_fees_are_joined_by_slug_not_by_gecko_id() -> None:
     # would find nothing and report every protocol as fee-less.
     events = mapper.to_fundamentals_events(
         [_protocol("aave-v3", "aave", 1.0, 0.0)],
-        fees={"aave-v3": {"total24h": 42_000.0, "total7d": 200.0, "total14dto7d": 160.0}},
+        fees={
+            "aave-v3": {"total24h": 42_000.0, "total7d": 200.0, "total14dto7d": 160.0}
+        },
         unlocks={},
         known=KNOWN,
     )
@@ -138,6 +140,36 @@ def test_a_protocol_with_no_fee_row_reports_no_fees() -> None:
     )
     assert events[0].fees_24h_usd is None
     assert events[0].fees_change_pct_7d is None
+
+
+def test_a_measured_zero_tvl_is_a_number_not_an_absence() -> None:
+    # A protocol that reports zero TVL has been measured. Reporting None would
+    # make it indistinguishable from one DefiLlama does not cover, and the
+    # scoring model excludes an absent axis rather than penalising it -- so the
+    # dead protocol would score better than a live one.
+    events = mapper.to_fundamentals_events(
+        [_protocol("aave-v3", "aave", 0.0, 0.0)], fees={}, unlocks={}, known=KNOWN
+    )
+    assert events[0].tvl_usd == Decimal("0")
+
+
+def test_a_measured_zero_fee_day_is_a_number_not_an_absence() -> None:
+    events = mapper.to_fundamentals_events(
+        [_protocol("aave-v3", "aave", 1.0, 0.0)],
+        fees={"aave-v3": {"total24h": 0.0, "total7d": 0.0, "total14dto7d": 100.0}},
+        unlocks={},
+        known=KNOWN,
+    )
+    assert events[0].fees_24h_usd == Decimal("0")
+    # And the 7d change is a real -100%, not an absence.
+    assert events[0].fees_change_pct_7d == -100.0
+
+
+def test_a_protocol_row_without_a_tvl_key_reports_unknown_not_zero() -> None:
+    events = mapper.to_fundamentals_events(
+        [{"slug": "aave-v3", "gecko_id": "aave"}], fees={}, unlocks={}, known=KNOWN
+    )
+    assert events[0].tvl_usd is None
 
 
 def test_a_known_schedule_with_a_pending_unlock_is_carried() -> None:

@@ -291,6 +291,21 @@ In `_emit()`, replace line 299:
         EVENTS_PRODUCED.labels(SERVICE, Topic.EXECUTION.value, ev.event_type).inc()
 ```
 
+`_emit()` is **not** the only publisher on `Topic.EXECUTION`, contrary to what an
+earlier draft of this plan asserted. `services/trading-engine/app/reconcile.py`
+publishes `ExecutionEvent(kind=ExecutionKind.CLOSED)` directly from
+`Reconciler._on_closed()`, on every position close. Add the same increment after
+that publish too, importing `SERVICE` from `.engine` (no cycle — `engine.py` never
+references `reconcile`):
+
+```python
+        EVENTS_PRODUCED.labels(SERVICE, Topic.EXECUTION.value, ev.event_type).inc()
+```
+
+Before moving on, grep the whole service for `publish(` and confirm no third
+`Topic.EXECUTION` path exists. `account.py` publishes on `Topic.ACCOUNT_SNAPSHOT`,
+which is not an edge of the pipeline graph and stays uncounted here.
+
 In `services/trading-engine/app/control.py`, add the import
 
 ```python

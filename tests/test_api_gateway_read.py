@@ -83,17 +83,57 @@ def test_map_price_point() -> None:
     assert map_price_point(row) == {"t": NOW.isoformat(), "price": 100.5, "volume": 2000.0}
 
 
-def test_map_news_epoch_conversion() -> None:
-    epoch = int(NOW.timestamp())
+def test_map_news_timestamptz_conversion() -> None:
     row = SimpleNamespace(
-        id=7, title="ETF approved", url="http://x", source_name="CoinDesk",
-        symbols=["BTC"], provider_sentiment=0.3, published_at=epoch,
+        id=7,
+        title="ETF approved",
+        url="http://x",
+        source="CoinDesk",
+        symbols=["BTC"],
+        sentiment_score=0.3,
+        published_at=NOW,
     )
     d = map_news(row)
     assert d["id"] == "7"
     assert d["source"] == "CoinDesk"
     assert d["symbols"] == ["BTC"]
     assert d["published_at"].startswith("2026-07-25")
+
+
+def test_map_news_reads_raw_content_columns():
+    """raw_content.published_at is timestamptz, unlike the old epoch BigInteger."""
+    row = SimpleNamespace(
+        id=42,
+        title="ETF approved",
+        url="https://example.com/a",
+        source="rss",
+        symbols=["BTC"],
+        sentiment_score=0.42,
+        published_at=datetime(2026, 7, 29, 10, 0, tzinfo=timezone.utc),
+    )
+    out = map_news(row)
+    assert out["id"] == "42"
+    assert out["title"] == "ETF approved"
+    assert out["source"] == "rss"
+    assert out["symbols"] == ["BTC"]
+    assert out["sentiment"] == 0.42
+    assert out["published_at"] == "2026-07-29T10:00:00+00:00"
+
+
+def test_map_news_tolerates_unscored_and_untagged_rows():
+    row = SimpleNamespace(
+        id=7,
+        title="t",
+        url="u",
+        source="gdelt",
+        symbols=None,
+        sentiment_score=None,
+        published_at=None,
+    )
+    out = map_news(row)
+    assert out["symbols"] == []
+    assert out["sentiment"] == 0.0
+    assert out["published_at"] is None
 
 
 def test_map_signal_event_shape() -> None:
@@ -482,10 +522,14 @@ def test_endpoint_systems_overview_wiring() -> None:
 
 
 def test_endpoint_market_news_wiring() -> None:
-    epoch = int(NOW.timestamp())
     row = SimpleNamespace(
-        id=1, title="x", url="u", source_name="RSS", symbols=[], provider_sentiment=0.0,
-        published_at=epoch,
+        id=1,
+        title="x",
+        url="u",
+        source="RSS",
+        symbols=[],
+        sentiment_score=0.0,
+        published_at=NOW,
     )
     client = _client([_Result(rows=[row])])
     r = client.get("/market/news?limit=5")

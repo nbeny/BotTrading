@@ -28,7 +28,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cmi_common.db import (
     AccountSnapshot,
     Decision,
-    News,
     Price,
     Sentiment,
     ServiceHealth,
@@ -157,17 +156,19 @@ def map_price_point(row: Any) -> dict:
 
 
 def map_news(row: Any) -> dict:
+    """A raw_content news row as the terminal's NewsItem.
+
+    Sourced from raw_content, not the `news` table: collector-news has always
+    written the former, and the latter has never had a writer at all.
+    """
     return {
         "id": str(row.id),
         "title": row.title,
         "url": row.url,
-        "source": row.source_name,
+        "source": row.source,
         "symbols": list(row.symbols or []),
-        "sentiment": _num(row.provider_sentiment),
-        # News.published_at is a unix-epoch BigInteger
-        "published_at": datetime.fromtimestamp(row.published_at, tz=UTC).isoformat()
-        if row.published_at
-        else None,
+        "sentiment": _num(row.sentiment_score),
+        "published_at": _iso(row.published_at),
     }
 
 
@@ -338,7 +339,12 @@ async def market_news(
     limit: int = Query(20, ge=1, le=200),
     session: AsyncSession = Depends(get_session_dep),
 ) -> list[dict]:
-    stmt = select(News).order_by(News.published_at.desc()).limit(limit)
+    stmt = (
+        select(RawContent)
+        .where(RawContent.kind == "news")
+        .order_by(RawContent.published_at.desc().nullslast())
+        .limit(limit)
+    )
     rows = (await session.execute(stmt)).scalars().all()
     return [map_news(r) for r in rows]
 

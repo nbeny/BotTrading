@@ -21,8 +21,8 @@ HORIZON_DAYS = 30
 
 @dataclass(frozen=True, slots=True)
 class Unlock:
-    at: datetime
-    pct_supply: float
+    at: datetime       # earliest contributing event in the window
+    pct_supply: float  # percentage points of max supply, summed over the window
 
 
 def next_unlock(
@@ -30,16 +30,26 @@ def next_unlock(
 ) -> Unlock | None:
     """Total supply unlocking within the horizon, dated at its earliest event.
 
-    Returns None when nothing is scheduled in the window, and also when the
-    supply denominator is missing — an unlock whose size cannot be expressed as
-    a fraction of supply is not a measurement, and must not be served as one.
-    """
-    now = now or datetime.now(tz=UTC)
-    horizon = now + timedelta(days=HORIZON_DAYS)
+    Returns None when nothing is scheduled in the window — a measurement, and
+    the good news.
 
-    max_supply = float(document.get("supplyMetrics", {}).get("maxSupply") or 0.0)
-    if max_supply <= 0:
-        return None
+    Raises ValueError when something *is* scheduled but cannot be sized, because
+    the supply denominator is missing. Returning None there would be read one
+    layer up as "we looked, nothing is coming": the client inserts the coin id
+    on any non-raising call, the mapper turns that into
+    ``has_unlock_schedule=True``, and the scorer turns *that* into a perfect
+    fundamentals score. Raising leaves the key absent instead, so the axis
+    reports unknown and is excluded from the score.
+
+    A malformed document — a non-numeric timestamp, a null token count — raises
+    for the same reason, and by design. Do not add a tolerant `except: continue`
+    to this loop: it would convert "unknown" into "nothing is coming", which is
+    the failure this whole module is shaped to avoid. The caller must let the
+    exception leave the key absent.
+    """
+    if now is None:
+        now = datetime.now(tz=UTC)
+    horizon = now + timedelta(days=HORIZON_DAYS)
 
     earliest: datetime | None = None
     tokens = 0.0
@@ -50,10 +60,18 @@ def next_unlock(
         at = datetime.fromtimestamp(int(raw_ts), tz=UTC)
         if not (now < at <= horizon):
             continue
-        tokens += sum(float(n) for n in event.get("noOfTokens") or [])
+        contributed = sum(float(n) for n in event.get("noOfTokens") or [])
+        if contributed <= 0:
+            # A zero-size marker must not date an unlock it did not cause.
+            continue
+        tokens += contributed
         if earliest is None or at < earliest:
             earliest = at
 
-    if earliest is None or tokens <= 0:
+    if earliest is None:
         return None
+
+    max_supply = float(document.get("supplyMetrics", {}).get("maxSupply") or 0.0)
+    if max_supply <= 0:
+        raise ValueError("unlock scheduled but maxSupply is missing or zero")
     return Unlock(at=earliest, pct_supply=round(100.0 * tokens / max_supply, 4))

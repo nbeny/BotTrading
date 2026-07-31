@@ -1222,7 +1222,7 @@ def split_regimes(
 async def priced_symbols(session: AsyncSession, *, hours: int = 24) -> set[str]:
     since = datetime.now(tz=UTC) - timedelta(hours=hours)
     stmt = select(Price.symbol).where(Price.time >= since).distinct()
-    return {row for row in (await session.execute(stmt)).scalars().all()}
+    return set((await session.execute(stmt)).scalars().all())
 
 
 async def mention_counts(session: AsyncSession, *, days: int = 7) -> dict[str, int]:

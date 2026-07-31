@@ -256,11 +256,20 @@ function infra(): InfraResource[] {
 // volume of 0: the mock has to exercise both "not measured" (—) and "measured,
 // nothing happened" (0), because conflating them is the bug this panel fixes.
 function pipeline(svc: ServiceNode[]): PipelineStage[] {
-  const tp = (id: string) => svc.find((s) => s.id === id)?.throughput_per_min ?? 0;
+  // A service this mock cannot find is unmeasured, not idle. Returning 0 here
+  // would make a mistyped id render as a confident "0/m" — the exact lie this
+  // panel was rebuilt to stop telling, in the fixture meant to demonstrate it.
+  const tp = (id: string) => svc.find((s) => s.id === id)?.throughput_per_min ?? null;
+  // Mirrors the backend's _roll_up_throughput: sum what was measured, and
+  // report null only when nothing in the group was.
+  const tpSum = (...ids: string[]) => {
+    const known = ids.map(tp).filter((v): v is number => v != null);
+    return known.length ? known.reduce((a, b) => a + b, 0) : null;
+  };
   return [
     {
       id: 'collect', label: 'Collecte', sublabel: 'Marché · Social · News', status: 'degraded',
-      throughput_per_min: tp('coingecko') + tp('dexscreener') + tp('collector-social') + tp('collector-news'),
+      throughput_per_min: tpSum('coingecko', 'dexscreener', 'collector-social', 'collector-news'),
       volume: 8420, dropped: null, conversion_pct: null,
       last_at: minutesAgo(1), last_summary: 'reddit · social · BTC breaking 70k',
     },

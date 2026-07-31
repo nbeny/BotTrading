@@ -1208,6 +1208,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -1289,22 +1290,32 @@ class LlamaClient:
     async def unlock(self, slug: str, coin_id: str) -> Unlock | None:
         """The pending unlock for a protocol, cached for a day.
 
-        Returns None both when the schedule is known and empty and when the
-        fetch failed. The caller distinguishes the two by whether the coin id is
-        present in the map it builds — a failure must leave the key absent so the
-        axis reports "unknown" rather than "nothing coming".
+        Returns None for exactly one thing: the schedule was read and nothing is
+        scheduled. **Any failure to read raises** — a transport error, an HTTP
+        error, an exhausted request budget, or the ValueError ``next_unlock``
+        throws on an unsizable schedule.
+
+        That asymmetry is the whole contract. The caller inserts the coin id
+        into its map on a non-raising call, the mapper turns membership into
+        ``has_unlock_schedule=True``, and the scorer turns that into its *best*
+        fundamentals reading. So swallowing a failure here does not degrade
+        gracefully — it awards a perfect score to a token whose dilution we
+        simply failed to read. An earlier version caught fetch errors and
+        returned None, which made this exact inversion the routine outcome of a
+        throttled cycle: the rate-limit budget is one shared key covering the
+        bulk endpoints *and* every 2.25 MB document, so exhaustion is steady
+        state rather than an edge case.
         """
         key = UNLOCK_KEY.format(coin_id=coin_id)
         cached = await self._cache.get_json(key)
         if cached is not None:
             return self._from_cache(cached)
-        try:
-            document = await self._get(
-                f"{DATASETS_BASE}/emissions/{slug}", timeout=self._unlock_timeout
-            )
-        except Exception:
-            logger.warning("unlock fetch failed for %s", slug, exc_info=True)
-            return None
+        # Deliberately unguarded: see the docstring. The caller's except is what
+        # leaves the key absent, and it can only do that if this raises.
+        document = await self._get(
+            f"{DATASETS_BASE}/emissions/{quote(slug, safe='')}",
+            timeout=self._unlock_timeout,
+        )
         unlock = next_unlock(document)
         await self._cache.set_json(
             key,

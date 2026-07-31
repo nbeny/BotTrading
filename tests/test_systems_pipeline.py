@@ -235,3 +235,23 @@ async def test_a_failed_query_with_no_cache_reports_unknown_not_zero() -> None:
     assert stale is True
     stages = sp.build_pipeline_stages(counts, _services())
     assert all(s["volume"] is None for s in stages)
+
+
+async def test_the_ttl_boundary_expires_rather_than_extends() -> None:
+    """Exactly TTL-old counts as expired. Either choice is defensible, so the
+    point is that it is pinned: an off-by-one here decides whether a poller at
+    the 30s mark re-queries or serves a value it can no longer vouch for."""
+    fetch = _Recorder({"triage": sp.StageCounts(volume=7)})
+    await sp.stage_counts_cached(None, "24h", now=0.0, fetch=fetch)
+    await sp.stage_counts_cached(None, "24h", now=sp.CACHE_TTL_S, fetch=fetch)
+    assert fetch.calls == 2
+
+
+async def test_a_caller_mutating_the_result_cannot_corrupt_the_cache() -> None:
+    """The cache hands out copies. Without that, one caller dropping a stage key
+    would silently narrow what every other open terminal reads next."""
+    fetch = _Recorder({"triage": sp.StageCounts(volume=7)})
+    first, _ = await sp.stage_counts_cached(None, "24h", now=0.0, fetch=fetch)
+    first.pop("triage")
+    second, _ = await sp.stage_counts_cached(None, "24h", now=1.0, fetch=fetch)
+    assert second["triage"].volume == 7

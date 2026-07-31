@@ -410,3 +410,37 @@ async def test_a_real_query_failure_still_degrades_rather_than_raising() -> None
     counts, stale = await sp.stage_counts_cached(None, "24h", now=0.0, fetch=broken)
     assert stale is True
     assert counts == {}
+
+
+def _signal_row(**kw):
+    base = dict(
+        symbol="SOL", opportunity_score=72, confidence=0.81, factors_present=3,
+        escalated=True, block_reason="unknown", time=NOW,
+        payload={"correlation_id": "cid-9"},
+    )
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_stage_item_shape_is_stable() -> None:
+    item = sp.signal_item(_signal_row())
+    assert set(item) == {"at", "symbol", "summary", "detail", "correlation_id"}
+    assert item["correlation_id"] == "cid-9"
+    assert item["at"] == NOW.isoformat()
+
+
+def test_stage_item_tolerates_a_payload_without_a_correlation_id() -> None:
+    assert sp.signal_item(_signal_row(payload={}))["correlation_id"] is None
+
+
+def test_breakdown_collapses_reasons_that_differ_only_by_a_number() -> None:
+    rows = [("score 13 below threshold 70", 4), ("score 14 below threshold 70", 6)]
+    assert sp.reason_breakdown(rows) == [
+        {"key": "score N below threshold N", "count": 10}
+    ]
+
+
+def test_every_catalog_stage_has_a_detail_builder() -> None:
+    """A stage in the graph with no builder would open an empty drawer, which
+    reads exactly like a stage nothing ever crossed."""
+    assert set(sp.STAGE_IDS) == set(sp.DETAIL_BUILDERS)

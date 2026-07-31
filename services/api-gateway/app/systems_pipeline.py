@@ -17,6 +17,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import and_, func, select
 
@@ -29,6 +30,8 @@ from cmi_common.db.models import (
     Signal,
     Trade,
 )
+
+from .funnel import collapse_reason
 
 
 @dataclass(frozen=True)
@@ -405,3 +408,235 @@ def summarize_trade(row) -> str:
     if row.pnl is not None:
         out += f" · PnL {row.pnl}"
     return out
+
+
+# Per-stage drawer: the last N items that crossed one stage, plus a breakdown.
+MAX_ITEMS = 50
+DEFAULT_ITEMS = 20
+
+
+def _item(at, symbol, summary, detail, correlation_id=None) -> dict:
+    return {
+        "at": at.isoformat() if at else None,
+        "symbol": symbol,
+        "summary": summary,
+        "detail": detail,
+        "correlation_id": correlation_id,
+    }
+
+
+def content_item(row) -> dict:
+    return _item(row.fetched_at, (row.symbols or [None])[0], summarize_content(row),
+                 {"source": row.source, "kind": row.kind, "url": row.url})
+
+
+def scored_item(row) -> dict:
+    return _item(row.scored_at, (row.symbols or [None])[0], summarize_scored(row),
+                 {"score": row.sentiment_score, "model": row.sentiment_model})
+
+
+def signal_item(row) -> dict:
+    return _item(
+        row.time, row.symbol, summarize_signal(row),
+        {"score": row.opportunity_score, "confidence": row.confidence,
+         "factors_present": row.factors_present, "block_reason": row.block_reason},
+        (row.payload or {}).get("correlation_id"),
+    )
+
+
+def journal_item(row) -> dict:
+    return _item(
+        row.time, row.symbol, summarize_journal(row),
+        {"score": row.score, "sonnet_score": row.sonnet_score,
+         "sonnet_validated": row.sonnet_validated, "skip_reason": row.skip_reason},
+        row.correlation_id,
+    )
+
+
+def decision_item(row) -> dict:
+    return _item(
+        row.created_at, row.symbol, summarize_decision(row),
+        {"direction": row.direction, "score": row.opportunity_score,
+         "ai_validated": row.ai_validated},
+        row.correlation_id,
+    )
+
+
+def approved_item(row) -> dict:
+    return _item(
+        row.created_at, row.symbol, summarize_approved(row),
+        {"size_pct": row.position_size_pct, "stop_loss": row.stop_loss,
+         "take_profit": row.take_profit, "rr": row.risk_reward_ratio},
+        row.correlation_id,
+    )
+
+
+def trade_item(row) -> dict:
+    return _item(
+        row.created_at, row.symbol, summarize_trade(row),
+        {"status": row.status, "fill_price": row.fill_price, "pnl": row.pnl},
+        row.correlation_id,
+    )
+
+
+def reason_breakdown(rows) -> list[dict]:
+    """Group rejection reasons the way the funnel does, biggest first."""
+    totals: dict[str, int] = {}
+    for reason, count in rows:
+        key = collapse_reason(str(reason))
+        totals[key] = totals.get(key, 0) + int(count)
+    return [
+        {"key": k, "count": v}
+        for k, v in sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
+    ]
+
+
+async def _grouped(session, col, *where) -> list[dict]:
+    rows = (
+        await session.execute(
+            select(col, func.count()).where(and_(*where)).group_by(col)
+        )
+    ).all()
+    return [
+        {"key": str(k), "count": int(c)}
+        for k, c in sorted(rows, key=lambda r: r[1], reverse=True)
+    ]
+
+
+async def _rejection_breakdown(session, stage_name, since) -> list[dict]:
+    rows = (
+        await session.execute(
+            select(PipelineRejection.reason, func.count())
+            .where(
+                and_(
+                    PipelineRejection.time >= since,
+                    PipelineRejection.stage == stage_name,
+                )
+            )
+            .group_by(PipelineRejection.reason)
+        )
+    ).all()
+    return reason_breakdown(rows)
+
+
+@dataclass(frozen=True)
+class _DetailCtx:
+    """Everything a per-stage builder needs, so each one stays a two-liner."""
+
+    session: Any  # AsyncSession; typed loosely so this module stays import-light
+    since: datetime
+    since_aware: datetime
+    limit: int
+    counts: StageCounts
+
+    async def rows(self, model, order_col, *where):
+        stmt = (
+            select(model)
+            .where(and_(*where))
+            .order_by(order_col.desc())
+            .limit(self.limit)
+        )
+        return (await self.session.execute(stmt)).scalars().all()
+
+
+async def _detail_collect(ctx) -> tuple[list[dict], list[dict]]:
+    rows = await ctx.rows(
+        RawContent, RawContent.fetched_at, RawContent.fetched_at >= ctx.since_aware
+    )
+    breakdown = await _grouped(
+        ctx.session, RawContent.source, RawContent.fetched_at >= ctx.since_aware
+    )
+    breakdown.append(
+        {"key": "prices", "count": await _count(ctx.session, Price, Price.time >= ctx.since)}
+    )
+    return [content_item(r) for r in rows], breakdown
+
+
+async def _detail_sentiment(ctx) -> tuple[list[dict], list[dict]]:
+    rows = await ctx.rows(
+        RawContent, RawContent.scored_at, RawContent.scored_at >= ctx.since_aware
+    )
+    return [scored_item(r) for r in rows], [
+        {"key": "scoré", "count": ctx.counts.volume or 0},
+        {"key": "en attente", "count": ctx.counts.dropped or 0},
+    ]
+
+
+async def _detail_triage(ctx) -> tuple[list[dict], list[dict]]:
+    rows = await ctx.rows(Signal, Signal.time, Signal.time >= ctx.since)
+    breakdown = await _grouped(
+        ctx.session, Signal.block_reason,
+        Signal.time >= ctx.since, Signal.escalated.is_(False),
+    )
+    return [signal_item(r) for r in rows], breakdown
+
+
+async def _detail_senior(ctx) -> tuple[list[dict], list[dict]]:
+    rows = await ctx.rows(
+        DecisionJournal, DecisionJournal.time,
+        DecisionJournal.time >= ctx.since, DecisionJournal.sonnet_called.is_(True),
+    )
+    breakdown = await _grouped(
+        ctx.session, DecisionJournal.skip_reason,
+        DecisionJournal.time >= ctx.since,
+        DecisionJournal.escalated.is_(True),
+        DecisionJournal.sonnet_called.is_(False),
+    )
+    return [journal_item(r) for r in rows], breakdown
+
+
+async def _detail_decision(ctx) -> tuple[list[dict], list[dict]]:
+    rows = await ctx.rows(Decision, Decision.created_at, Decision.created_at >= ctx.since)
+    breakdown = await _rejection_breakdown(ctx.session, "decision_engine", ctx.since)
+    return [decision_item(r) for r in rows], breakdown
+
+
+async def _detail_risk(ctx) -> tuple[list[dict], list[dict]]:
+    rows = await ctx.rows(Trade, Trade.created_at, Trade.created_at >= ctx.since)
+    breakdown = await _rejection_breakdown(ctx.session, "risk_engine", ctx.since)
+    return [approved_item(r) for r in rows], breakdown
+
+
+async def _detail_execute(ctx) -> tuple[list[dict], list[dict]]:
+    rows = await ctx.rows(
+        Trade, Trade.created_at,
+        Trade.created_at >= ctx.since, Trade.status.in_(EXECUTED_STATUSES),
+    )
+    breakdown = await _grouped(ctx.session, Trade.status, Trade.created_at >= ctx.since)
+    return [trade_item(r) for r in rows], breakdown
+
+
+# Explicit dispatch rather than an if/elif chain: a stage added to STAGE_SPECS
+# without a builder here is caught by a test, not by an operator staring at an
+# empty drawer that reads like a stage nothing ever crossed.
+DETAIL_BUILDERS = {
+    "collect": _detail_collect,
+    "sentiment": _detail_sentiment,
+    "triage": _detail_triage,
+    "senior": _detail_senior,
+    "decision": _detail_decision,
+    "risk": _detail_risk,
+    "execute": _detail_execute,
+}
+
+
+async def fetch_stage_detail(session, stage_id: str, window: str, limit: int) -> dict:
+    """Items + breakdown for one stage. `stage_id` is validated by the caller."""
+    spec = STAGE_BY_ID[stage_id]
+    since, since_aware = _cutoffs(window)
+    counts = (await stage_counts_cached(session, window))[0].get(
+        stage_id, StageCounts()
+    )
+    ctx = _DetailCtx(session, since, since_aware, limit, counts)
+    items, breakdown = await DETAIL_BUILDERS[stage_id](ctx)
+
+    return {
+        "id": spec.id,
+        "label": spec.label,
+        "window": window,
+        "volume": counts.volume,
+        "dropped": counts.dropped,
+        "breakdown": breakdown,
+        "items": items,
+        "updated_at": datetime.now(tz=UTC).isoformat(),
+    }

@@ -21,7 +21,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,9 +40,13 @@ from cmi_common.sources import SqlCandleReader, SqlSentimentAggReader
 from .funnel import SCORE_BUCKET_WIDTH, build_funnel
 from .routers import get_session_dep
 from .systems_pipeline import (
+    DEFAULT_ITEMS,
     DEFAULT_WINDOW,
+    MAX_ITEMS,
+    STAGE_BY_ID,
     StageCounts,
     build_pipeline_stages,
+    fetch_stage_detail,
     stage_counts_cached,
 )
 
@@ -1267,3 +1271,21 @@ async def systems_funnel(
         block_reasons=block_reasons,
         factors_presence={int(f): int(c) for f, c in factor_rows},
     )
+
+
+@router.get("/systems/stage/{stage_id}")
+async def systems_stage(
+    stage_id: str,
+    window: str = Query(DEFAULT_WINDOW, pattern="^(1h|24h|7d)$"),
+    limit: int = Query(DEFAULT_ITEMS, ge=1, le=MAX_ITEMS),
+    session: AsyncSession = Depends(get_session_dep),
+) -> dict:
+    """The items behind one stage of the pipeline graph.
+
+    An unknown id is a 404, not an empty payload: an empty list would read as
+    "this stage processed nothing", which is the confusion this whole panel
+    exists to remove.
+    """
+    if stage_id not in STAGE_BY_ID:
+        raise HTTPException(status_code=404, detail=f"unknown stage {stage_id!r}")
+    return await fetch_stage_detail(session, stage_id, window, limit)

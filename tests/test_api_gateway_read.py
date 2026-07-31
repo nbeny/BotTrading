@@ -730,6 +730,55 @@ def test_endpoint_systems_overview_wiring() -> None:
     assert body["summary"]["ai_cost_today_usd"] > 0
 
 
+def test_endpoint_systems_stage_404_for_unknown_stage() -> None:
+    """An unknown stage id is a 404, not an empty drawer — an empty item list
+    would read as "this stage processed nothing", a different statement."""
+    client = _client([])
+    r = client.get("/systems/stage/bogus")
+    assert r.status_code == 404
+
+
+def test_endpoint_systems_stage_decision_wiring() -> None:
+    # fetch_stage_detail first runs the same 21-query fan-out as
+    # /systems/overview (2 counts + 1 latest-row per of the 7 stages, in
+    # collect/sentiment/triage/senior/decision/risk/execute order), then the
+    # stage's own builder: decision's is one row query + one rejection-reason
+    # group-by. decision's own counts (29, 31) are distinct from every other
+    # placeholder below so a builder reading the wrong stage's aggregate would
+    # surface as a wrong `volume`/`dropped` in the assertions.
+    stage_count_queries = (
+        [_Result(scalar=1), _Result(scalar=2), _Result(rows=[])]  # collect
+        + [_Result(scalar=3), _Result(scalar=4), _Result(rows=[])]  # sentiment
+        + [_Result(scalar=5), _Result(scalar=6), _Result(rows=[])]  # triage
+        + [_Result(scalar=7), _Result(scalar=8), _Result(rows=[])]  # senior
+        + [_Result(scalar=29), _Result(scalar=31), _Result(rows=[])]  # decision
+        + [_Result(scalar=9), _Result(scalar=10), _Result(rows=[])]  # risk
+        + [_Result(scalar=11), _Result(scalar=12), _Result(rows=[])]  # execute
+    )
+    decision_row = SimpleNamespace(
+        created_at=NOW, symbol="ETH", direction="short", opportunity_score=55,
+        confidence=0.66, ai_validated=True, correlation_id="corr-77",
+    )
+    rejection_rows = [("score 12 too low", 3), ("score 45 too low", 2)]
+    client = _client(
+        stage_count_queries
+        + [_Result(rows=[decision_row]), _Result(rows=rejection_rows)]
+    )
+    r = client.get("/systems/stage/decision")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["id"] == "decision"
+    assert body["volume"] == 29
+    assert body["dropped"] == 31
+    assert len(body["items"]) == 1
+    item = body["items"][0]
+    assert item["summary"] == "ETH · short · confiance 66%"
+    assert item["correlation_id"] == "corr-77"
+    assert item["detail"] == {"direction": "short", "score": 55, "ai_validated": True}
+    # "score 12 too low" and "score 45 too low" collapse into one bucket.
+    assert body["breakdown"] == [{"key": "score N too low", "count": 5}]
+
+
 def test_endpoint_market_news_wiring() -> None:
     row = SimpleNamespace(
         id=1,

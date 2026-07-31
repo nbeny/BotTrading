@@ -579,8 +579,8 @@ HORIZON_DAYS = 30
 
 @dataclass(frozen=True, slots=True)
 class Unlock:
-    at: datetime
-    pct_supply: float
+    at: datetime       # earliest contributing event in the window
+    pct_supply: float  # percentage points of max supply, summed over the window
 
 
 def next_unlock(
@@ -588,16 +588,28 @@ def next_unlock(
 ) -> Unlock | None:
     """Total supply unlocking within the horizon, dated at its earliest event.
 
-    Returns None when nothing is scheduled in the window, and also when the
-    supply denominator is missing — an unlock whose size cannot be expressed as
-    a fraction of supply is not a measurement, and must not be served as one.
-    """
-    now = now or datetime.now(tz=UTC)
-    horizon = now + timedelta(days=HORIZON_DAYS)
+    Returns None when nothing is scheduled in the window — a measurement, and
+    the good news.
 
-    max_supply = float(document.get("supplyMetrics", {}).get("maxSupply") or 0.0)
-    if max_supply <= 0:
-        return None
+    Raises ValueError when something *is* scheduled but cannot be sized, because
+    the supply denominator is missing. Returning None there would be read one
+    layer up as "we looked, nothing is coming": the client inserts the coin id
+    on any non-raising call, the mapper turns that into
+    ``has_unlock_schedule=True``, and the scorer turns *that* into a perfect
+    fundamentals score — so a token about to dilute 10% of its supply would read
+    as impeccably healthy. Raising leaves the key absent instead, so the axis
+    reports unknown and is excluded from the score.
+
+    A malformed document — a non-numeric timestamp, a null token count — raises
+    for the same reason, and by design. Do not add a tolerant ``except: continue``
+    to this loop: it would convert "unknown" into "nothing is coming", which is
+    the failure this whole module is shaped to avoid. The caller must let the
+    exception leave the key absent, which means ``next_unlock`` has to stay
+    *outside* the client's try/except around the fetch.
+    """
+    if now is None:
+        now = datetime.now(tz=UTC)
+    horizon = now + timedelta(days=HORIZON_DAYS)
 
     earliest: datetime | None = None
     tokens = 0.0
@@ -608,12 +620,23 @@ def next_unlock(
         at = datetime.fromtimestamp(int(raw_ts), tz=UTC)
         if not (now < at <= horizon):
             continue
-        tokens += sum(float(n) for n in event.get("noOfTokens") or [])
+        contributed = sum(float(n) for n in event.get("noOfTokens") or [])
+        if contributed <= 0:
+            # A zero-size marker must not date an unlock it did not cause: the
+            # date is surfaced to the frontend beside a size from another event.
+            continue
+        tokens += contributed
         if earliest is None or at < earliest:
             earliest = at
 
-    if earliest is None or tokens <= 0:
+    if earliest is None:
         return None
+
+    # Checked only now: with nothing scheduled, the denominator is irrelevant
+    # and None is the honest answer rather than a failure.
+    max_supply = float(document.get("supplyMetrics", {}).get("maxSupply") or 0.0)
+    if max_supply <= 0:
+        raise ValueError("unlock scheduled but maxSupply is missing or zero")
     return Unlock(at=earliest, pct_supply=round(100.0 * tokens / max_supply, 4))
 ```
 
@@ -850,6 +873,7 @@ Create `services/collector-defillama/app/domain/mapper.py`:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
@@ -857,6 +881,25 @@ from cmi_common.events import FundamentalsEvent
 from cmi_common.events.base import Source
 
 from .unlocks import Unlock
+
+
+@dataclass(slots=True)
+class _Bucket:
+    """Per-token accumulator.
+
+    The two ``saw_*`` flags are the whole point: a bucket that starts at 0.0
+    cannot otherwise tell "no deployment reported this" from "the deployments
+    reported zero", and collapsing those is precisely the unknown-vs-measured
+    confusion this platform already shipped once.
+    """
+
+    tvl: float = 0.0
+    weighted_change: float = 0.0
+    fees_24h: float = 0.0
+    fees_7d: float = 0.0
+    fees_prev_7d: float = 0.0
+    saw_tvl: bool = False
+    saw_fees: bool = False
 
 
 def emission_key(row: dict[str, Any]) -> str | None:
@@ -897,50 +940,60 @@ def to_fundamentals_events(
     schedule is known and empty. A key that is simply absent means DefiLlama
     publishes no schedule for that token, which is a different statement.
     """
-    aggregated: dict[str, dict[str, float]] = {}
+    aggregated: dict[str, _Bucket] = {}
     for row in protocols:
         coin_id = row.get("gecko_id")
         if not coin_id or coin_id not in known:
             continue
-        tvl = float(row.get("tvl") or 0.0)
-        bucket = aggregated.setdefault(
-            coin_id,
-            {"tvl": 0.0, "weighted_change": 0.0, "f24": 0.0, "f7": 0.0, "f14to7": 0.0},
-        )
-        bucket["tvl"] += tvl
-        # TVL-weighted: a $3M deployment flat and a $1M deployment up 8% is a 2%
-        # move for the token, not the 4% a plain mean would report.
-        change = row.get("change_7d")
-        if change is not None:
-            bucket["weighted_change"] += tvl * float(change)
+        bucket = aggregated.setdefault(coin_id, _Bucket())
+        raw_tvl = row.get("tvl")
+        if raw_tvl is not None:
+            bucket.saw_tvl = True
+            bucket.tvl += float(raw_tvl)
+            # TVL-weighted: a $3M deployment flat and a $1M deployment up 8% is
+            # a 2% move for the token, not the 4% a plain mean would report.
+            change = row.get("change_7d")
+            if change is not None:
+                bucket.weighted_change += float(raw_tvl) * float(change)
         # Fees aggregate the same way TVL does. Aave alone is seven deployment
         # rows sharing one gecko_id, so reading any single row would report a
         # fraction of the token's revenue as if it were all of it.
-        fee_row = fees.get(row.get("slug") or "") or {}
-        bucket["f24"] += float(fee_row.get("total24h") or 0.0)
-        bucket["f7"] += float(fee_row.get("total7d") or 0.0)
-        bucket["f14to7"] += float(fee_row.get("total14dto7d") or 0.0)
+        fee_row = fees.get(row.get("slug") or "")
+        if fee_row:
+            bucket.saw_fees = True
+            bucket.fees_24h += float(fee_row.get("total24h") or 0.0)
+            bucket.fees_7d += float(fee_row.get("total7d") or 0.0)
+            bucket.fees_prev_7d += float(fee_row.get("total14dto7d") or 0.0)
 
     events: list[FundamentalsEvent] = []
     for coin_id, bucket in aggregated.items():
-        tvl = bucket["tvl"]
-        baseline = bucket["f14to7"]
+        baseline = bucket.fees_prev_7d
         unlock = unlocks.get(coin_id)
         events.append(
             FundamentalsEvent(
                 source=Source.DEFILLAMA,
                 symbol=known[coin_id],
                 coin_id=coin_id,
-                tvl_usd=Decimal(str(tvl)) if tvl > 0 else None,
+                # saw_*, not truthiness. A protocol that genuinely earned $0 in
+                # fees has been measured; reporting None would make it
+                # indistinguishable from one DefiLlama does not cover — and
+                # since the scorer *excludes* an absent axis rather than
+                # penalising it, the dead protocol would outscore the live one.
+                tvl_usd=Decimal(str(bucket.tvl)) if bucket.saw_tvl else None,
                 tvl_change_pct_7d=(
-                    round(bucket["weighted_change"] / tvl, 4) if tvl > 0 else None
+                    round(bucket.weighted_change / bucket.tvl, 4)
+                    if bucket.tvl > 0
+                    else None
                 ),
-                fees_24h_usd=Decimal(str(bucket["f24"])) if bucket["f24"] else None,
+                fees_24h_usd=(
+                    Decimal(str(bucket.fees_24h)) if bucket.saw_fees else None
+                ),
                 # Derived: the payload has change_30dover30d but no 7d-over-7d.
                 # A zero baseline yields None, not a division and not a 0.0 that
-                # would read as "fees held flat".
+                # would read as "fees held flat" — that ratio is genuinely
+                # undefined, unlike the value fields above.
                 fees_change_pct_7d=(
-                    round(100.0 * (bucket["f7"] - baseline) / baseline, 4)
+                    round(100.0 * (bucket.fees_7d - baseline) / baseline, 4)
                     if baseline > 0
                     else None
                 ),
@@ -2939,6 +2992,17 @@ Expected: FAIL with `AttributeError: module has no attribute '_norm_positioning'
 In `services/decision-engine/app/scoring.py`, add `import math` is already present; append these functions after `_norm_liquidity`:
 
 ```python
+#: Funding rate at which the crowding read saturates, measured rather than
+#: guessed: across all 854 Binance perps on 2026-07-31 the 5th percentile sits
+#: at -0.000156 and the 95th at +0.000159, with a median of +0.000050. An
+#: earlier draft used 0.0004 and spanned only 0.19 between those percentiles —
+#: an axis that varies by a fifth of its range over 90% of the book is not
+#: discriminating, it is decoration. This scale spans 0.66.
+#:
+#: Note the median lands at 0.378, below neutral: positive funding is the
+#: normal state of crypto perps, so the typical symbol reads mildly crowded.
+#: That is a property of the market, not a bias to correct out.
+_FUNDING_SCALE = 0.0001
 #: An unlock of this share of supply is treated as maximally severe.
 _UNLOCK_FULL_SEVERITY_PCT = 5.0
 #: Unlocks further out than this do not bear on a position opened today.
@@ -2970,7 +3034,7 @@ def _norm_positioning(
     """
     return _mean_present(
         [
-            None if funding is None else _sigmoid(-funding / 0.0004),
+            None if funding is None else _sigmoid(-funding / _FUNDING_SCALE),
             None if not ratio or ratio <= 0 else _sigmoid(-math.log(ratio), k=1.5),
             None if oi_change is None else _sigmoid(oi_change / 20.0),
         ]

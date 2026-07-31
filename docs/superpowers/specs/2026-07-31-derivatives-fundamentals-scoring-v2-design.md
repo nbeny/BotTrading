@@ -233,7 +233,7 @@ broad-tier symbols and sharpens on majors, without a missing term dragging it do
 
 ```python
 # positioning — contrarian on crowding, confirmatory on engagement
-funding_term  = _sigmoid(-funding_rate_8h / 0.0004)      # +0.1% → 0.08 ; 0 → 0.5 ; -0.1% → 0.92
+funding_term  = _sigmoid(-funding_rate_8h / 0.0001)      # p05 → 0.83 ; 0 → 0.5 ; p95 → 0.17
 crowding_term = _sigmoid(-log(long_short_account_ratio), k=1.5)   # 2:1 long → 0.26 ; 1:1 → 0.5
 oi_term       = _sigmoid(open_interest_change_pct_24h / 20)       # +20% → 0.73 ; 0 → 0.5
 
@@ -257,6 +257,23 @@ not track produces no term at all.
 Funding is contrarian by construction: positive funding means longs are paying shorts, which
 is the crowded side. The sign convention must be asserted in a test, because getting it
 backwards produces a model that is confidently wrong rather than obviously broken.
+
+**The funding scale is measured, not guessed.** Across all 854 Binance perps on 2026-07-31 the
+distribution is far tighter than intuition suggests: p05 = −0.000156, median = +0.000050,
+p95 = +0.000159, with extremes at −0.0025 and +0.0019. A first draft used a 0.0004 divisor,
+calibrated on the belief that ±0.001 was the working range; that spans only **0.19** between
+p05 and p95. An axis that moves by a fifth of its range across 90% of the book is decoration,
+not signal — the term would have been effectively constant and the axis carried entirely by
+open interest and the long/short ratio. At 0.0001 the same percentiles span 0.66.
+
+One consequence worth stating rather than discovering later: the median symbol normalises to
+0.378, below neutral. Positive funding is the ordinary state of crypto perpetuals, so the
+typical symbol genuinely reads as mildly crowded-long. That is a property of the market, not a
+bias to calibrate away.
+
+The same discipline has not been applied to the long/short and open-interest terms; their
+scales (`k=1.5` on log-ratio, `/20.0` on 24h OI change) remain reasoned rather than measured,
+and are the obvious first candidates if the axis underperforms.
 
 ### Weights
 

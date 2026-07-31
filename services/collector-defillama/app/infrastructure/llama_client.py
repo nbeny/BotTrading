@@ -5,7 +5,9 @@ Unlock schedules are *not* on the free API — `api.llama.fi/emissions` answers
 402 Payment Required and belongs to the paid Pro tier — so they come from
 `defillama-datasets.llama.fi`, the dataset CDN the DefiLlama front-end itself
 reads. That CDN serves one document per protocol at roughly 2.25 MB, of which
-about 8 KB is useful.
+about 8 KB is useful. There is no single `base_url` this client can be built
+on top of the way the CoinGecko client is: the two hosts are genuinely
+different services on different payment tiers, not two paths under one API.
 
 Hence the cache: the extraction, never the body, is stored for 24 hours.
 Schedules are near-static, so this loses nothing and turns a 2.25 MB fetch into
@@ -17,6 +19,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -30,12 +33,18 @@ logger = logging.getLogger(__name__)
 SERVICE = "collector-defillama"
 API_BASE = "https://api.llama.fi"
 DATASETS_BASE = "https://defillama-datasets.llama.fi"
+# Keyed by coin_id, not slug: the caller collapses every deployment of a
+# protocol (Aave is seven rows on the live API) onto the one coin id they
+# share. Keying this cache by slug instead would fetch and cache the same
+# 2.25 MB document once per deployment for no new information.
 UNLOCK_KEY = "defillama:unlock:{coin_id}"
 #: Schedules are published well in advance and change rarely.
 UNLOCK_TTL_SECONDS = 86_400
 
 
 class LlamaClient:
+    """Async wrapper over DefiLlama's free TVL/fees API and dataset CDN."""
+
     def __init__(
         self,
         cache: Cache,
@@ -43,7 +52,7 @@ class LlamaClient:
         timeout: float = 15.0,
         unlock_timeout: float = 30.0,
         rate_limit_per_min: int = 60,
-        transport: httpx.BaseTransport | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._cache = cache
         self._unlock_timeout = unlock_timeout
@@ -53,14 +62,28 @@ class LlamaClient:
     async def close(self) -> None:
         await self._client.aclose()
 
-    async def _get(self, url: str, *, timeout: float | None = None) -> Any:
+    async def _get(
+        self,
+        url: str,
+        *,
+        params: dict[str, Any] | None = None,
+        # httpx read timeout override, not an asyncio cancellation scope.
+        timeout: float | None = None,  # noqa: ASYNC109
+    ) -> Any:
         if not await self._cache.allow("defillama", self._rate_limit, 60):
+            # Expected steady state, not exceptional: one shared "defillama"
+            # bucket covers /protocols, /overview/fees, the emissions list and
+            # every 2.25 MB per-protocol document. Label it distinctly from a
+            # real fetch failure before raising, so a throttled cycle is
+            # visible in metrics rather than looking identical to a clean one.
+            UPSTREAM_REQUESTS.labels(SERVICE, "defillama", "throttled").inc()
             raise RuntimeError("DefiLlama rate limit exceeded")
-        # httpx reads an explicit timeout=None as "no timeout at all", not as
-        # "use the client default", so the override is passed only when set.
-        overrides = {"timeout": timeout} if timeout is not None else {}
+        # An explicit timeout=None would tell httpx "no timeout at all" rather
+        # than "use the client default", so USE_CLIENT_DEFAULT is the sentinel
+        # that actually means "unset" here.
+        effective_timeout = timeout if timeout is not None else httpx.USE_CLIENT_DEFAULT
         try:
-            resp = await self._client.get(url, **overrides)
+            resp = await self._client.get(url, params=params, timeout=effective_timeout)
             resp.raise_for_status()
             UPSTREAM_REQUESTS.labels(SERVICE, "defillama", "ok").inc()
             return resp.json()
@@ -85,8 +108,11 @@ class LlamaClient:
         3.7 MB.
         """
         payload = await self._get(
-            f"{API_BASE}/overview/fees"
-            "?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true"
+            f"{API_BASE}/overview/fees",
+            params={
+                "excludeTotalDataChart": "true",
+                "excludeTotalDataChartBreakdown": "true",
+            },
         )
         rows = payload.get("protocols", []) if isinstance(payload, dict) else []
         return {row["slug"]: row for row in rows if row.get("slug")}
@@ -98,22 +124,31 @@ class LlamaClient:
     async def unlock(self, slug: str, coin_id: str) -> Unlock | None:
         """The pending unlock for a protocol, cached for a day.
 
-        Returns None both when the schedule is known and empty and when the
-        fetch failed. The caller distinguishes the two by whether the coin id is
-        present in the map it builds — a failure must leave the key absent so the
-        axis reports "unknown" rather than "nothing coming".
+        Returns None only when the schedule was actually read and turned out
+        to be empty. Any failure to read it — a network error, a throttled
+        request, or `next_unlock` raising because an unlock is scheduled but
+        cannot be sized — propagates instead of being swallowed here.
+
+        That is deliberate: the caller's own try/except around this call is
+        what leaves the coin id out of its result map, and that omission is
+        the only signal that distinguishes "unknown" from "measured, nothing
+        coming". If every failure became a `None` return here, the caller
+        could no longer tell the two apart, and a throttled fetch would be
+        reported as a clean, empty unlock schedule — the same inversion
+        `next_unlock`'s own `ValueError` exists to prevent, reached through a
+        different door.
         """
         key = UNLOCK_KEY.format(coin_id=coin_id)
         cached = await self._cache.get_json(key)
         if cached is not None:
-            return self._from_cache(cached)
-        try:
-            document = await self._get(
-                f"{DATASETS_BASE}/emissions/{slug}", timeout=self._unlock_timeout
-            )
-        except Exception:
-            logger.warning("unlock fetch failed for %s", slug, exc_info=True)
-            return None
+            hit, unlock = self._from_cache(cached)
+            if hit:
+                return unlock
+            logger.warning("unrecognised cache entry for %s, treating as a miss", key)
+        document = await self._get(
+            f"{DATASETS_BASE}/emissions/{quote(slug, safe='')}",
+            timeout=self._unlock_timeout,
+        )
         unlock = next_unlock(document)
         await self._cache.set_json(
             key,
@@ -126,9 +161,23 @@ class LlamaClient:
         return unlock
 
     @staticmethod
-    def _from_cache(cached: dict[str, Any]) -> Unlock | None:
-        at = cached.get("at")
-        pct = cached.get("pct_supply")
-        if not at or pct is None:
-            return None
-        return Unlock(at=datetime.fromisoformat(at), pct_supply=float(pct))
+    def _from_cache(cached: dict[str, Any]) -> tuple[bool, Unlock | None]:
+        """Parse a cached extraction, or report a miss for anything unrecognised.
+
+        Entries live 24h under a key that carries no schema version, so a
+        future change to the payload shape would otherwise leave this reader
+        parsing a day of the previous writer's rows — and, worst case, serving
+        a confident absence for data it never actually read. Anything that is
+        not recognisably one of the two shapes this module itself writes is
+        therefore treated as a cache miss (falls through to a fetch), not as
+        "nothing coming".
+        """
+        if "at" not in cached or "pct_supply" not in cached:
+            return False, None
+        at = cached["at"]
+        pct = cached["pct_supply"]
+        if at is None and pct is None:
+            return True, None
+        if isinstance(at, str) and isinstance(pct, (int, float)):
+            return True, Unlock(at=datetime.fromisoformat(at), pct_supply=float(pct))
+        return False, None

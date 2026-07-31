@@ -256,5 +256,9 @@ Clicking a node opens `StageDetailDrawer`.
   by commit `981b08f`.
 - **Cache behaviour:** a failing aggregate query yields `pipeline_stale: true` with the
   previous values, and `null` (never `0`) when no cache exists.
-- **Frontend:** mock BFF fixtures for both routes, plus a test asserting `volume: null`
-  renders `—` and `volume: 0` renders the "aucun élément" copy.
+- **Frontend:** the repo has no JS test runner (`frontend/package.json` exposes only
+  `dev`/`build`/`lint`/`typecheck`), and adding one is out of scope here. Verification is
+  therefore `npm run typecheck` + `npm run lint`, plus a mock-mode check: the mock BFF
+  fixtures deliberately emit one stage with `volume: null` and one with `volume: 0`, so
+  `NEXT_PUBLIC_USE_MOCK=1` renders both `—` and the "aucun élément" copy on every run.
+  The null-vs-zero decision lives in a single pure formatter so it stays reviewable.

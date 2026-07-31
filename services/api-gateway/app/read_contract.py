@@ -72,7 +72,20 @@ CONTRACT: dict[str, set[str]] = {
     # systems.ts
     "systems/overview": {
         "summary", "services", "pipeline", "kafka", "collectors", "workers",
-        "infra",
+        "infra", "pipeline_window", "pipeline_stale",
+    },
+    # Nested shapes: the graph reads these per node, so drift here is invisible
+    # to a top-level key check and shows up only as `undefined` in the browser.
+    "systems/overview.pipeline[]": {
+        "id", "label", "sublabel", "status", "throughput_per_min", "volume",
+        "dropped", "conversion_pct", "last_at", "last_summary",
+    },
+    "systems/stage": {
+        "id", "label", "window", "volume", "dropped", "breakdown", "items",
+        "updated_at",
+    },
+    "systems/stage.items[]": {
+        "at", "symbol", "summary", "detail", "correlation_id",
     },
     "systems/funnel": {
         "window", "stages", "score_histogram", "factors_presence",

@@ -15,6 +15,7 @@ from service_modules import load_service_module
 read_api = load_service_module("api-gateway", "read_api")
 journal_api = load_service_module("api-gateway", "journal_api")
 events_api = load_service_module("api-gateway", "events_api")
+systems_pipeline = load_service_module("api-gateway", "systems_pipeline")
 
 compute_exposure = read_api.compute_exposure
 compute_portfolio = read_api.compute_portfolio
@@ -206,6 +207,41 @@ async def test_systems_funnel_contract() -> None:
 async def test_systems_journal_summary_contract() -> None:
     resp = await journal_api.journal_summary(window="30d", session=_FakeSession(40))
     _assert_keys("systems/journal/summary", resp)
+
+
+def test_systems_overview_declares_the_pipeline_window_and_staleness() -> None:
+    snap = read_api.assemble_systems_snapshot([])
+    assert set(snap) >= CONTRACT["systems/overview"]
+
+
+def test_pipeline_stage_shape_matches_the_contract() -> None:
+    # Exact match, not _assert_keys' >=: an extra field the frontend does not
+    # know about is drift too, and every node in the graph must carry it.
+    _ASSERTED.add("systems/overview.pipeline[]")
+    snap = read_api.assemble_systems_snapshot([])
+    assert len(snap["pipeline"]) == 7  # the static stage catalog, not DB rows
+    for stage in snap["pipeline"]:
+        assert set(stage) == CONTRACT["systems/overview.pipeline[]"]
+
+
+def test_stage_detail_item_shape_matches_the_contract() -> None:
+    _ASSERTED.add("systems/stage.items[]")
+    row = SimpleNamespace(
+        symbol="SOL", opportunity_score=72, confidence=0.8, factors_present=3,
+        escalated=True, block_reason="unknown", time=NOW,
+        payload={"correlation_id": "cid-1"},
+    )
+    assert set(systems_pipeline.signal_item(row)) == CONTRACT["systems/stage.items[]"]
+
+
+async def test_systems_stage_contract() -> None:
+    # window/limit passed explicitly: calling the handler directly bypasses
+    # FastAPI, so Query(...) defaults would arrive as sentinel objects, and
+    # stage_counts_cached raises ValueError on an unrecognised window.
+    resp = await read_api.systems_stage(
+        stage_id="collect", window="24h", limit=20, session=_FakeSession(40)
+    )
+    _assert_keys("systems/stage", resp)
 
 
 async def test_events_contract() -> None:

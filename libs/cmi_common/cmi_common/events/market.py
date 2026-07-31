@@ -1,4 +1,5 @@
-"""Market data events: price, volume and DEX activity."""
+"""Market data events: price, volume, DEX activity, derivatives positioning
+and protocol fundamentals."""
 
 from __future__ import annotations
 
@@ -87,9 +88,14 @@ class DerivativesEvent(BaseEvent):
     symbol: str
     #: Raw fraction as Binance returns it: 0.0001 == 0.01% per 8h period.
     funding_rate_8h: float | None = None
+    #: Derived from funding_rate_8h (producer-side arithmetic, not an
+    #: independent measurement) purely so a human reads "10.95%" instead of
+    #: "0.0001". The two can disagree if only one is ever updated.
     funding_annualized_pct: float | None = None
     open_interest_usd: Decimal | None = Field(default=None, ge=0)
     open_interest_change_pct_24h: float | None = None
+    #: gt=0, not ge=0: the scorer computes _sigmoid(-log(ratio)), so a zero
+    #: would be log(0). Rejected at construction, not in the scorer.
     long_short_account_ratio: float | None = Field(default=None, gt=0)
 
     def partition_key(self) -> str:
@@ -108,7 +114,15 @@ class FundamentalsEvent(BaseEvent):
 
     event_type: Literal[EventType.FUNDAMENTALS] = EventType.FUNDAMENTALS
     symbol: str
-    coin_id: str
+    coin_id: str = Field(
+        ...,
+        description=(
+            "CoinGecko id, e.g. 'aave' -- not a DefiLlama id. This is "
+            "DefiLlama's 'gecko_id', kept in our CoinGecko namespace so it "
+            "joins directly to Token.coin_id; a wrong-namespace join here "
+            "fails by returning nothing, not by erroring."
+        ),
+    )
     tvl_usd: Decimal | None = Field(default=None, ge=0)
     tvl_change_pct_7d: float | None = None
     fees_24h_usd: Decimal | None = Field(default=None, ge=0)

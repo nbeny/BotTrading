@@ -69,14 +69,34 @@ Kafka producer, no database. They are *not* built on `AdaptivePollLoop`, which i
 
 ### `collector-defillama`
 
-Cadence 600 s (`DEFILLAMA_POLL_INTERVAL`). Three bulk requests per cycle, independent of
-universe size:
+Cadence 600 s (`DEFILLAMA_POLL_INTERVAL`).
 
-| Endpoint | Yields |
-|---|---|
-| `GET api.llama.fi/protocols` | TVL, `change_1d`, `change_7d`, `gecko_id` for all protocols |
-| `GET api.llama.fi/api/emissions` | unlock schedules per token |
-| `GET api.llama.fi/overview/fees` | 24h and 7d fees / revenue |
+| Endpoint | Per cycle | Yields |
+|---|---|---|
+| `GET api.llama.fi/protocols` | 1 | TVL, `change_1d`, `change_7d`, `gecko_id`, `slug` |
+| `GET api.llama.fi/overview/fees` | 1 | 24h and 7d fees / revenue |
+| `GET defillama-datasets.llama.fi/emissionsProtocolsList` | 1 | the 359 slugs that have an unlock schedule (4 KB) |
+| `GET defillama-datasets.llama.fi/emissions/{slug}` | ≤ 3, round-robin | `metadata.events` + `supplyMetrics.maxSupply` |
+
+**Unlocks are not a bulk endpoint, and this was verified rather than assumed.** The obvious
+candidates fail: `api.llama.fi/api/emissions` is a 404 and `api.llama.fi/emissions` answers
+**402 Payment Required** — it belongs to the paid Pro tier. The free source is the dataset CDN
+the DefiLlama front-end itself consumes, which serves **one document per protocol, ~2.25 MB
+each**, of which only ~8 KB is useful (`metadata.events`, `supplyMetrics.maxSupply`); the rest
+is `documentedData` and chart series.
+
+Hence the round-robin: at most 3 protocol documents per cycle, each parsed down to
+`{next_unlock_at, next_unlock_pct_supply}` and cached under `defillama:unlock:{slug}` with a
+24 h TTL. The 2.25 MB is discarded immediately. Unlock schedules are near-static, so a 24 h
+refresh loses nothing. At 6 cycles/hour a ~40-protocol universe refreshes fully in about two
+hours, well inside the TTL, and no single cycle pulls more than ~7 MB.
+
+Only protocols in the intersection of `emissionsProtocolsList` and our own universe are ever
+fetched — the other ~320 are never touched.
+
+`next_unlock_pct_supply = 100 × Σ noOfTokens / supplyMetrics.maxSupply`, computed over events
+whose `timestamp` is in the future and within 30 days. The `events` array contains historical
+unlocks going back years, so the future filter is not optional.
 
 **Symbol mapping is by `gecko_id` → `Token.coin_id`, never by ticker.** A protocol without a
 `gecko_id` is dropped rather than guessed. This deliberately sidesteps the ambiguity that
@@ -303,6 +323,12 @@ absent and renormalisation absorbs it, which is precisely what the `None` change
 - `UPSTREAM_REQUESTS{service,provider,ok|error|ratelimit}`, same metric as the poll loops.
 - Binance: read `X-MBX-USED-WEIGHT-1M` to self-throttle; honour `Retry-After` on 418/429.
 - DefiLlama publishes no documented rate limit — fixed conservative cadence, no bursts.
+- The emissions documents are large enough to deserve their own guards: a hard
+  `max_bytes` ceiling on the response and a streaming JSON parse are *not* used — a 2.25 MB
+  body is small enough to buffer — but the fetch carries a longer timeout (30 s) than the
+  other calls, and a failure to fetch one protocol must not abort the cycle for the others.
+  Stale-but-cached unlock data is served until the TTL expires; past the TTL the field goes
+  absent rather than stale, per the unknown-vs-zero rule.
 
 **Geo-blocking watch.** Binance blocks some IP ranges. The Hostinger VPS is in the EU and
 should be fine, but if the broad tier returns an empty set for three consecutive cycles the

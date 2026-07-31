@@ -52,8 +52,12 @@ NOW = datetime(2026, 7, 25, 12, 0, tzinfo=timezone.utc)
 # ── pure mappers ──────────────────────────────────────────────────────────────
 def test_map_token_enriched() -> None:
     price = SimpleNamespace(
-        symbol="BTC", price_usd=66800, price_change_pct_24h=6.2,
-        volume_24h_usd=1_000_000, market_cap_usd=1_300_000_000_000, time=NOW,
+        symbol="BTC",
+        price_usd=66800,
+        price_change_pct_24h=6.2,
+        volume_24h_usd=1_000_000,
+        market_cap_usd=1_300_000_000_000,
+        time=NOW,
     )
     meta = SimpleNamespace(coin_id="bitcoin", name="Bitcoin")
     d = map_token(price, meta=meta, opportunity_score=88, sentiment_score=0.42)
@@ -68,8 +72,12 @@ def test_map_token_enriched() -> None:
 
 def test_map_token_defaults_without_meta() -> None:
     price = SimpleNamespace(
-        symbol="SOL", price_usd=142, price_change_pct_24h=1.1,
-        volume_24h_usd=None, market_cap_usd=None, time=NOW,
+        symbol="SOL",
+        price_usd=142,
+        price_change_pct_24h=1.1,
+        volume_24h_usd=None,
+        market_cap_usd=None,
+        time=NOW,
     )
     d = map_token(price)
     assert d["coin_id"] == "sol"
@@ -80,14 +88,22 @@ def test_map_token_defaults_without_meta() -> None:
 
 def test_map_price_point() -> None:
     row = SimpleNamespace(time=NOW, price_usd=100.5, volume_24h_usd=2000)
-    assert map_price_point(row) == {"t": NOW.isoformat(), "price": 100.5, "volume": 2000.0}
+    assert map_price_point(row) == {
+        "t": NOW.isoformat(),
+        "price": 100.5,
+        "volume": 2000.0,
+    }
 
 
-def test_map_news_epoch_conversion() -> None:
-    epoch = int(NOW.timestamp())
+def test_map_news_timestamptz_conversion() -> None:
     row = SimpleNamespace(
-        id=7, title="ETF approved", url="http://x", source_name="CoinDesk",
-        symbols=["BTC"], provider_sentiment=0.3, published_at=epoch,
+        id=7,
+        title="ETF approved",
+        url="http://x",
+        source="CoinDesk",
+        symbols=["BTC"],
+        sentiment_score=0.3,
+        published_at=NOW,
     )
     d = map_news(row)
     assert d["id"] == "7"
@@ -96,10 +112,50 @@ def test_map_news_epoch_conversion() -> None:
     assert d["published_at"].startswith("2026-07-25")
 
 
+def test_map_news_reads_raw_content_columns():
+    """raw_content.published_at is timestamptz, unlike the old epoch BigInteger."""
+    row = SimpleNamespace(
+        id=42,
+        title="ETF approved",
+        url="https://example.com/a",
+        source="rss",
+        symbols=["BTC"],
+        sentiment_score=0.42,
+        published_at=datetime(2026, 7, 29, 10, 0, tzinfo=timezone.utc),
+    )
+    out = map_news(row)
+    assert out["id"] == "42"
+    assert out["title"] == "ETF approved"
+    assert out["source"] == "rss"
+    assert out["symbols"] == ["BTC"]
+    assert out["sentiment"] == 0.42
+    assert out["published_at"] == "2026-07-29T10:00:00+00:00"
+
+
+def test_map_news_tolerates_unscored_and_untagged_rows():
+    row = SimpleNamespace(
+        id=7,
+        title="t",
+        url="u",
+        source="gdelt",
+        symbols=None,
+        sentiment_score=None,
+        published_at=None,
+    )
+    out = map_news(row)
+    assert out["symbols"] == []
+    assert out["sentiment"] == 0.0
+    assert out["published_at"] is None
+
+
 def test_map_signal_event_shape() -> None:
     row = SimpleNamespace(
-        symbol="ETH", opportunity_score=82, confidence=0.7,
-        reason="momentum", escalated=True, time=NOW,
+        symbol="ETH",
+        opportunity_score=82,
+        confidence=0.7,
+        reason="momentum",
+        escalated=True,
+        time=NOW,
     )
     d = map_signal_event(row)
     assert d["event_type"] == "AnalysisEvent"
@@ -109,8 +165,13 @@ def test_map_signal_event_shape() -> None:
 
 def test_map_decision_shape() -> None:
     row = SimpleNamespace(
-        event_id="evt1", symbol="BTC", direction="long", opportunity_score=87,
-        confidence=0.9, rationale="strong", created_at=NOW,
+        event_id="evt1",
+        symbol="BTC",
+        direction="long",
+        opportunity_score=87,
+        confidence=0.9,
+        rationale="strong",
+        created_at=NOW,
     )
     d = map_decision(row)
     assert d["id"] == "evt1"
@@ -121,9 +182,18 @@ def test_map_decision_shape() -> None:
 
 def _content(**kw):
     base = dict(
-        id=1, source="Reddit", kind="social", url="http://x", title="t", text="body $BTC",
-        symbols=["BTC"], published_at=NOW, fetched_at=NOW, sentiment_score=0.7,
-        sentiment_confidence=0.8, sentiment_model="cryptobert",
+        id=1,
+        source="Reddit",
+        kind="social",
+        url="http://x",
+        title="t",
+        text="body $BTC",
+        symbols=["BTC"],
+        published_at=NOW,
+        fetched_at=NOW,
+        sentiment_score=0.7,
+        sentiment_confidence=0.8,
+        sentiment_model="cryptobert",
     )
     base.update(kw)
     return SimpleNamespace(**base)
@@ -146,12 +216,27 @@ def test_map_content_unscored() -> None:
 # ── stats aggregation ─────────────────────────────────────────────────────────
 def test_compute_content_stats_counts_and_buckets() -> None:
     rows = [
-        _content(kind="social", source="Reddit", symbols=["BTC"], sentiment_score=0.5,
-                 published_at=NOW - timedelta(hours=1)),
-        _content(kind="news", source="CoinDesk", symbols=["ETH", "BTC"], sentiment_score=-0.2,
-                 published_at=NOW - timedelta(hours=1)),
-        _content(kind="social", source="Reddit", symbols=["BTC"], sentiment_score=0.1,
-                 published_at=NOW - timedelta(hours=3)),
+        _content(
+            kind="social",
+            source="Reddit",
+            symbols=["BTC"],
+            sentiment_score=0.5,
+            published_at=NOW - timedelta(hours=1),
+        ),
+        _content(
+            kind="news",
+            source="CoinDesk",
+            symbols=["ETH", "BTC"],
+            sentiment_score=-0.2,
+            published_at=NOW - timedelta(hours=1),
+        ),
+        _content(
+            kind="social",
+            source="Reddit",
+            symbols=["BTC"],
+            sentiment_score=0.1,
+            published_at=NOW - timedelta(hours=3),
+        ),
     ]
     s = compute_content_stats(rows, now=NOW)
     assert s["total_24h"] == 3
@@ -238,14 +323,36 @@ def test_endpoint_data_content_wiring() -> None:
 
 def test_assemble_trace_full_chain() -> None:
     sig = SimpleNamespace(
-        symbol="BTC", time=NOW, opportunity_score=82, confidence=0.7, escalated=True,
-        payload={"price_change_pct_24h": 6.0, "sentiment_score": 0.4, "social_growth": 0.8,
-                 "volume_spike_ratio": 2.1},
+        symbol="BTC",
+        time=NOW,
+        opportunity_score=82,
+        confidence=0.7,
+        escalated=True,
+        payload={
+            "price_change_pct_24h": 6.0,
+            "sentiment_score": 0.4,
+            "social_growth": 0.8,
+            "volume_spike_ratio": 2.1,
+        },
     )
-    dec = SimpleNamespace(symbol="BTC", created_at=NOW, direction="long", confidence=0.9, ai_validated=True)
+    dec = SimpleNamespace(
+        symbol="BTC",
+        created_at=NOW,
+        direction="long",
+        confidence=0.9,
+        ai_validated=True,
+    )
     trd = SimpleNamespace(
-        symbol="BTC", created_at=NOW, updated_at=NOW, status="filled", position_size_pct=0.04,
-        stop_loss=63000, take_profit=74000, risk_reward_ratio=2.4, fill_price=66800, pnl=120,
+        symbol="BTC",
+        created_at=NOW,
+        updated_at=NOW,
+        status="filled",
+        position_size_pct=0.04,
+        stop_loss=63000,
+        take_profit=74000,
+        risk_reward_ratio=2.4,
+        fill_price=66800,
+        pnl=120,
     )
     t = assemble_trace("corr-1", sig, dec, trd)
     assert t["correlation_id"] == "corr-1"
@@ -259,7 +366,14 @@ def test_assemble_trace_full_chain() -> None:
 
 
 def test_assemble_trace_partial_chain() -> None:
-    sig = SimpleNamespace(symbol="ETH", time=NOW, opportunity_score=60, confidence=0.6, escalated=False, payload={})
+    sig = SimpleNamespace(
+        symbol="ETH",
+        time=NOW,
+        opportunity_score=60,
+        confidence=0.6,
+        escalated=False,
+        payload={},
+    )
     t = assemble_trace("corr-2", sig, None, None)
     kinds = {s["kind"]: s for s in t["stages"]}
     assert kinds["analysis"]["reached"] is True
@@ -269,10 +383,33 @@ def test_assemble_trace_partial_chain() -> None:
 
 
 def test_endpoint_trace_wiring() -> None:
-    sig = SimpleNamespace(symbol="BTC", time=NOW, opportunity_score=80, confidence=0.7, escalated=True, payload={})
-    dec = SimpleNamespace(symbol="BTC", created_at=NOW, direction="long", confidence=0.9, ai_validated=True)
-    trd = SimpleNamespace(symbol="BTC", created_at=NOW, updated_at=NOW, status="filled", position_size_pct=0.04,
-                          stop_loss=1, take_profit=2, risk_reward_ratio=2.0, fill_price=100, pnl=None)
+    sig = SimpleNamespace(
+        symbol="BTC",
+        time=NOW,
+        opportunity_score=80,
+        confidence=0.7,
+        escalated=True,
+        payload={},
+    )
+    dec = SimpleNamespace(
+        symbol="BTC",
+        created_at=NOW,
+        direction="long",
+        confidence=0.9,
+        ai_validated=True,
+    )
+    trd = SimpleNamespace(
+        symbol="BTC",
+        created_at=NOW,
+        updated_at=NOW,
+        status="filled",
+        position_size_pct=0.04,
+        stop_loss=1,
+        take_profit=2,
+        risk_reward_ratio=2.0,
+        fill_price=100,
+        pnl=None,
+    )
     client = _client([_Result(rows=[sig]), _Result(rows=[dec]), _Result(rows=[trd])])
     r = client.get("/trace/corr-1")
     assert r.status_code == 200
@@ -283,9 +420,20 @@ def test_endpoint_trace_wiring() -> None:
 
 def _trade(**kw):
     base = dict(
-        event_id="t1", symbol="BTC", direction="long", entry_price=66800.0, stop_loss=63000.0,
-        take_profit=74000.0, confidence=0.9, position_size_pct=0.04, risk_reward_ratio=2.4,
-        status="filled", fill_price=66800.0, pnl=None, created_at=NOW, updated_at=NOW,
+        event_id="t1",
+        symbol="BTC",
+        direction="long",
+        entry_price=66800.0,
+        stop_loss=63000.0,
+        take_profit=74000.0,
+        confidence=0.9,
+        position_size_pct=0.04,
+        risk_reward_ratio=2.4,
+        status="filled",
+        fill_price=66800.0,
+        pnl=None,
+        created_at=NOW,
+        updated_at=NOW,
     )
     base.update(kw)
     return SimpleNamespace(**base)
@@ -303,7 +451,13 @@ def test_map_position_reprices_and_pnl() -> None:
 
 
 def test_map_position_short_and_unprotected() -> None:
-    trade = _trade(entry_price=100.0, position_size_pct=0.10, direction="short", stop_loss=0, take_profit=0)
+    trade = _trade(
+        entry_price=100.0,
+        position_size_pct=0.10,
+        direction="short",
+        stop_loss=0,
+        take_profit=0,
+    )
     p = map_position(trade, SimpleNamespace(price_usd=90.0), base_capital=100000.0)
     assert p["unrealized_pnl_usd"] == 1000.0  # short gains when price drops
     assert p["protected"] is False
@@ -311,7 +465,9 @@ def test_map_position_short_and_unprotected() -> None:
 
 
 def test_map_portfolio_trade_shape() -> None:
-    d = map_portfolio_trade(_trade(direction="long", fill_price=66800.0), base_capital=100000.0)
+    d = map_portfolio_trade(
+        _trade(direction="long", fill_price=66800.0), base_capital=100000.0
+    )
     assert d["side"] == "buy"
     assert d["status"] == "filled"
     assert d["order_type"] == "market"
@@ -319,10 +475,22 @@ def test_map_portfolio_trade_shape() -> None:
 
 def test_compute_portfolio_aggregates() -> None:
     positions = [
-        {"value_usd": 11000.0, "quantity": 100.0, "entry_price": 100.0, "unrealized_pnl_usd": 1000.0},
-        {"value_usd": 5000.0, "quantity": 50.0, "entry_price": 100.0, "unrealized_pnl_usd": 0.0},
+        {
+            "value_usd": 11000.0,
+            "quantity": 100.0,
+            "entry_price": 100.0,
+            "unrealized_pnl_usd": 1000.0,
+        },
+        {
+            "value_usd": 5000.0,
+            "quantity": 50.0,
+            "entry_price": 100.0,
+            "unrealized_pnl_usd": 0.0,
+        },
     ]
-    pf = compute_portfolio(positions, realized_24h=250.0, base_capital=100000.0, now=NOW)
+    pf = compute_portfolio(
+        positions, realized_24h=250.0, base_capital=100000.0, now=NOW
+    )
     assert pf["invested_usd"] == 16000.0
     # cash = base - cost_basis(100*100 + 50*100 = 15000) = 85000
     assert pf["cash_usd"] == 85000.0
@@ -357,13 +525,20 @@ def test_endpoint_portfolio_wiring() -> None:
     # the positions are then sized against; an empty result is the production
     # state today, with no exchange key configured.
     client = _client(
-        [_Result(rows=[]), _Result(rows=[trade]), _Result(rows=[price]), _Result(rows=[])]
+        [
+            _Result(rows=[]),
+            _Result(rows=[trade]),
+            _Result(rows=[price]),
+            _Result(rows=[]),
+        ]
     )
     r = client.get("/portfolio")
     assert r.status_code == 200
     body = r.json()
     assert body["invested_usd"] == 11000.0
-    assert body["total_value_usd"] == 100000.0 + 1000.0  # base + unrealized (cash+invested)
+    assert (
+        body["total_value_usd"] == 100000.0 + 1000.0
+    )  # base + unrealized (cash+invested)
     # No snapshot: a declared absence, never a number.
     assert body["kraken_balance_usd"] is None
     assert body["balance_source"] == "unavailable"
@@ -372,9 +547,20 @@ def test_endpoint_portfolio_wiring() -> None:
 
 def test_assemble_systems_snapshot() -> None:
     rows = [
-        SimpleNamespace(service="api-gateway", status="healthy", healthy=True, latency_ms=12.0, detail={}),
-        SimpleNamespace(service="trading-engine", status="degraded", healthy=False, latency_ms=310.0,
-                        detail={"cpu_pct": 70, "mem_mb": 200}),
+        SimpleNamespace(
+            service="api-gateway",
+            status="healthy",
+            healthy=True,
+            latency_ms=12.0,
+            detail={},
+        ),
+        SimpleNamespace(
+            service="trading-engine",
+            status="degraded",
+            healthy=False,
+            latency_ms=310.0,
+            detail={"cpu_pct": 70, "mem_mb": 200},
+        ),
     ]
     snap = assemble_systems_snapshot(rows, now=NOW)
     assert len(snap["services"]) == len(SERVICE_CATALOG)
@@ -416,8 +602,11 @@ def test_compute_detail_rates() -> None:
     assert detail1["mem_mb"] == 210  # 2.097152e8 / 1e6 ≈ 209.7 → 210
     assert "cpu_pct" not in detail1
     # second sample 10s later, cpu +5s, events +170 → cpu 50%, throughput 1020/min
-    text2 = _METRICS.replace("process_cpu_seconds_total 10.0", "process_cpu_seconds_total 15.0").replace(
-        'events_produced_total{service="api-gateway"} 20.0', 'events_produced_total{service="api-gateway"} 190.0'
+    text2 = _METRICS.replace(
+        "process_cpu_seconds_total 10.0", "process_cpu_seconds_total 15.0"
+    ).replace(
+        'events_produced_total{service="api-gateway"} 20.0',
+        'events_produced_total{service="api-gateway"} 190.0',
     )
     detail2, _ = compute_detail(parse_prometheus(text2), sample1, now_ts=1010.0)
     assert detail2["cpu_pct"] == 50.0  # 5s / 10s * 100
@@ -460,15 +649,29 @@ def test_build_infra_postgres() -> None:
 
 
 def test_endpoint_systems_overview_wiring() -> None:
-    health = [SimpleNamespace(service="api-gateway", status="healthy", healthy=True, latency_ms=10.0, detail={})]
+    health = [
+        SimpleNamespace(
+            service="api-gateway",
+            status="healthy",
+            healthy=True,
+            latency_ms=10.0,
+            detail={},
+        )
+    ]
     # execute order: health, coll_rows, workers(Signal,Decision), kafka(Price,Sentiment,
     # Signal,Decision,Trade), pg_stat_activity, pg_database_size
     results = [
         _Result(rows=health),
         _Result(rows=[("Reddit", "social", 50)]),
-        _Result(scalar=100), _Result(scalar=20),
-        _Result(scalar=600), _Result(scalar=60), _Result(scalar=100), _Result(scalar=20), _Result(scalar=5),
-        _Result(scalar=12), _Result(scalar=42_000_000_000),
+        _Result(scalar=100),
+        _Result(scalar=20),
+        _Result(scalar=600),
+        _Result(scalar=60),
+        _Result(scalar=100),
+        _Result(scalar=20),
+        _Result(scalar=5),
+        _Result(scalar=12),
+        _Result(scalar=42_000_000_000),
     ]
     client = _client(results)
     r = client.get("/systems/overview")
@@ -482,12 +685,58 @@ def test_endpoint_systems_overview_wiring() -> None:
 
 
 def test_endpoint_market_news_wiring() -> None:
-    epoch = int(NOW.timestamp())
     row = SimpleNamespace(
-        id=1, title="x", url="u", source_name="RSS", symbols=[], provider_sentiment=0.0,
-        published_at=epoch,
+        id=1,
+        title="x",
+        url="u",
+        source="RSS",
+        symbols=[],
+        sentiment_score=0.0,
+        published_at=NOW,
     )
     client = _client([_Result(rows=[row])])
     r = client.get("/market/news?limit=5")
     assert r.status_code == 200
     assert r.json()[0]["source"] == "RSS"
+
+
+def _price_row(symbol="BTC", change=1.0):
+    return SimpleNamespace(
+        symbol=symbol,
+        price_usd=100.0,
+        market_cap_usd=1000.0,
+        volume_24h_usd=500.0,
+        price_change_pct_24h=change,
+        time=datetime(2026, 7, 29, 10, 0, tzinfo=timezone.utc),
+    )
+
+
+def test_map_token_uses_measured_liquidity_when_present():
+    out = map_token(_price_row(), liquidity_usd=250_000.0)
+    assert out["liquidity_usd"] == 250_000.0
+
+
+def test_map_token_reports_zero_liquidity_when_unmeasured():
+    """The TS contract requires the key; None must not leak to the wire."""
+    out = map_token(_price_row(), liquidity_usd=None)
+    assert out["liquidity_usd"] == 0.0
+
+
+def test_map_token_carries_sentiment_through():
+    out = map_token(_price_row(), sentiment_score=0.383)
+    assert out["sentiment_score"] == 0.38
+
+
+def test_map_token_prefers_the_real_trending_flag_over_the_heuristic():
+    meta = SimpleNamespace(
+        coin_id="bitcoin", name="Bitcoin", metadata_={"is_trending": True}
+    )
+    out = map_token(_price_row(change=0.1), meta=meta)
+    assert out["name"] == "Bitcoin"
+    assert out["coin_id"] == "bitcoin"
+    assert out["is_trending"] is True
+
+
+def test_map_token_falls_back_to_the_change_heuristic_without_metadata():
+    assert map_token(_price_row(change=7.0))["is_trending"] is True
+    assert map_token(_price_row(change=1.0))["is_trending"] is False

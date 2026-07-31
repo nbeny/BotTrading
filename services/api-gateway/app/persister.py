@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -18,6 +19,7 @@ from cmi_common.db import (
     PipelineRejection,
     Price,
     Signal,
+    Token,
     Trade,
 )
 from cmi_common.events import (
@@ -73,9 +75,32 @@ def stage_for(source: str) -> str:
     return _STAGE_BY_SOURCE.get(source, str(source))
 
 
+class TokenMetaCache:
+    """Throttle for token reference writes.
+
+    221 price events land every minute carrying metadata that changes about once
+    a day. Writing on each one is pure write amplification, so a write happens
+    only when the metadata actually changed, or once per interval to heal drift.
+    """
+
+    def __init__(self, min_interval_s: float = 3600.0) -> None:
+        self._min_interval = min_interval_s
+        self._seen: dict[str, tuple[tuple, float]] = {}
+
+    def should_write(self, coin_id: str, meta: tuple, *, now: float) -> bool:
+        previous = self._seen.get(coin_id)
+        if previous is not None:
+            last_meta, last_at = previous
+            if last_meta == meta and now - last_at < self._min_interval:
+                return False
+        self._seen[coin_id] = (meta, now)
+        return True
+
+
 class Persister:
     def __init__(self, db: Database) -> None:
         self._db = db
+        self._token_meta = TokenMetaCache()
 
     async def handle(self, event: BaseEvent) -> None:
         if isinstance(event, PriceEvent):
@@ -113,6 +138,32 @@ class Persister:
                 price_change_pct_24h=e.price_change_pct_24h,
                 source="coingecko",
             ).on_conflict_do_nothing()
+            await s.execute(stmt)
+            await s.commit()
+        await self._save_token(e)
+
+    async def _save_token(self, e: PriceEvent) -> None:
+        meta = (e.name, e.market_cap_rank, e.is_trending)
+        if not self._token_meta.should_write(e.coin_id, meta, now=time.monotonic()):
+            return
+        async with self._db._sessionmaker() as s:
+            stmt = insert(Token).values(
+                symbol=e.symbol,
+                coin_id=e.coin_id,
+                name=e.name,
+                metadata_={
+                    "market_cap_rank": e.market_cap_rank,
+                    "is_trending": e.is_trending,
+                },
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["coin_id"],
+                set_={
+                    "symbol": stmt.excluded.symbol,
+                    "name": stmt.excluded.name,
+                    "metadata": stmt.excluded.metadata,
+                },
+            )
             await s.execute(stmt)
             await s.commit()
 

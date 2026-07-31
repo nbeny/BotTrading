@@ -222,6 +222,26 @@ services:
       - traefik.http.routers.news.tls=true
       - traefik.http.services.news.loadbalancer.server.port=8000
 
+  collector-kraken:
+    <<: *service-defaults
+    build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/collector-kraken } }
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      KRAKEN_BROAD_CADENCE: ${KRAKEN_BROAD_CADENCE:-900}
+      KRAKEN_MAJORS_CADENCE: ${KRAKEN_MAJORS_CADENCE:-300}
+      KRAKEN_MAJOR_MIN_MENTIONS_7D: ${KRAKEN_MAJOR_MIN_MENTIONS_7D:-10}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.krakencol.rule=Host(`kraken.cmi.localhost`)
+      - traefik.http.routers.krakencol.entrypoints=websecure
+      - traefik.http.routers.krakencol.tls=true
+      - traefik.http.services.krakencol.loadbalancer.server.port=8000
+
   # ----------------------------------------------------------- analytics
   sentiment-service:
     <<: *service-defaults

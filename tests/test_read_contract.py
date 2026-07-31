@@ -49,9 +49,15 @@ def _trade(**kw):
 
 
 def _news(**kw):
-    base = dict(id=1, title="t", url="http://x", source_name="CoinDesk",
-                symbols=["BTC"], provider_sentiment=0.3,
-                published_at=int(NOW.timestamp()))
+    base = dict(
+        id=1,
+        title="t",
+        url="http://x",
+        source="CoinDesk",
+        symbols=["BTC"],
+        sentiment_score=0.3,
+        published_at=NOW,
+    )
     base.update(kw)
     return SimpleNamespace(**base)
 

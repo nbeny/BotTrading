@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+from .candles import (
+    INTERVALS,
+    Candle,
+    Depth,
+    SqlCandleReader,
+    interval_delta,
+    is_closed,
+)
 from .cascade import CircuitBreaker, RateLimitedError
 from .lexicon import LEXICON_KEY, SEED_LEXICON, LexiconLoader, SymbolLexicon
 from .loop import AdaptivePollLoop
@@ -35,6 +43,7 @@ from .runtime import (
 )
 
 __all__ = [
+    "INTERVALS",
     "KNOWN_PLATFORMS",
     "LEXICON_KEY",
     "MARKET_SYMBOL",
@@ -42,9 +51,11 @@ __all__ = [
     "WINDOWS",
     "AdaptivePollLoop",
     "BucketRow",
+    "Candle",
     "CircuitBreaker",
     "ContentNormalizer",
     "ContentRepository",
+    "Depth",
     "FakeContentRepository",
     "LexiconLoader",
     "LexiconNormalizer",
@@ -52,12 +63,15 @@ __all__ = [
     "Provider",
     "RateLimitedError",
     "RawItem",
+    "SqlCandleReader",
     "SqlContentRepository",
     "SqlSentimentAggReader",
     "SymbolLexicon",
     "aggregate_buckets",
     "default_runtime",
     "get_runtime",
+    "interval_delta",
+    "is_closed",
     "is_enabled",
     "parse_retry_after",
     "raw_item_to_row",

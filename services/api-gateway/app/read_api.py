@@ -28,16 +28,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cmi_common.db import (
     AccountSnapshot,
     Decision,
-    News,
     Price,
-    Sentiment,
     ServiceHealth,
     Signal,
     Token,
     Trade,
 )
-from cmi_common.db.models import PipelineRejection, RawContent
-from cmi_common.sources import SqlSentimentAggReader
+from cmi_common.db.models import ContentSentimentAgg, PipelineRejection, RawContent
+from cmi_common.sources import SqlCandleReader, SqlSentimentAggReader
 
 from .funnel import SCORE_BUCKET_WIDTH, build_funnel
 from .routers import get_session_dep
@@ -129,9 +127,18 @@ def map_token(
     meta: Any | None = None,
     opportunity_score: float | None = None,
     sentiment_score: float | None = None,
+    liquidity_usd: float | None = None,
 ) -> dict:
-    """Build a MarketToken from the latest price row (+ optional enrichments)."""
+    """Build a MarketToken from the latest price row (+ optional enrichments).
+
+    `liquidity_usd` is None when the book was never measured — a symbol Kraken
+    does not list, or one the sweep has not reached yet. The TS contract requires
+    the key, so it is coerced to 0.0 here, at the HTTP edge and nowhere else:
+    downstream scoring must keep "unmeasured" distinct from "thin".
+    """
     change = price.price_change_pct_24h
+    meta_extra = getattr(meta, "metadata_", None) or {}
+    trending = meta_extra.get("is_trending")
     return {
         "symbol": price.symbol,
         "coin_id": getattr(meta, "coin_id", None) or price.symbol.lower(),
@@ -139,11 +146,19 @@ def map_token(
         "price_usd": _num(price.price_usd),
         "price_change_pct_24h": _num(change),
         "volume_24h_usd": _num(price.volume_24h_usd),
-        "liquidity_usd": 0.0,  # not persisted (DexEvent liquidity is transient)
+        "liquidity_usd": _num(liquidity_usd),
         "market_cap_usd": _num(price.market_cap_usd),
-        "sentiment_score": round(sentiment_score, 2) if sentiment_score is not None else 0.0,
-        "opportunity_score": round(_num(opportunity_score) / 100, 2) if opportunity_score else 0.0,
-        "is_trending": bool(change is not None and change >= 5),
+        "sentiment_score": (
+            round(sentiment_score, 2) if sentiment_score is not None else 0.0
+        ),
+        "opportunity_score": (
+            round(_num(opportunity_score) / 100, 2) if opportunity_score else 0.0
+        ),
+        "is_trending": (
+            bool(trending)
+            if trending is not None
+            else bool(change is not None and change >= 5)
+        ),
         "updated_at": _iso(price.time),
     }
 
@@ -157,17 +172,19 @@ def map_price_point(row: Any) -> dict:
 
 
 def map_news(row: Any) -> dict:
+    """A raw_content news row as the terminal's NewsItem.
+
+    Sourced from raw_content, not the `news` table: collector-news has always
+    written the former, and the latter has never had a writer at all.
+    """
     return {
         "id": str(row.id),
         "title": row.title,
         "url": row.url,
-        "source": row.source_name,
+        "source": row.source,
         "symbols": list(row.symbols or []),
-        "sentiment": _num(row.provider_sentiment),
-        # News.published_at is a unix-epoch BigInteger
-        "published_at": datetime.fromtimestamp(row.published_at, tz=UTC).isoformat()
-        if row.published_at
-        else None,
+        "sentiment": _num(row.sentiment_score),
+        "published_at": _iso(row.published_at),
     }
 
 
@@ -290,31 +307,91 @@ def _latest_per_symbol(model: Any, value_col: Any, time_col: Any):
     )
 
 
+async def _sentiment_by_symbol(
+    session: AsyncSession, *, hours: int = 24
+) -> dict[str, float]:
+    """Confidence-weighted mean sentiment per symbol over the window, in one query.
+
+    Reads content_sentiment_agg, which sentiment-service actually maintains. The
+    former source (`sentiments`) had no writer and returned 0.0 for every token.
+    """
+    since = _utcnow() - timedelta(hours=hours)
+    stmt = (
+        select(
+            ContentSentimentAgg.symbol,
+            func.sum(ContentSentimentAgg.weighted_score_sum),
+            func.sum(ContentSentimentAgg.confidence_sum),
+        )
+        .where(ContentSentimentAgg.bucket_start >= since)
+        .group_by(ContentSentimentAgg.symbol)
+    )
+    out: dict[str, float] = {}
+    for symbol, weighted, confidence in (await session.execute(stmt)).all():
+        if confidence:
+            out[symbol] = float(weighted) / float(confidence)
+    return out
+
+
 # ── market endpoints ──────────────────────────────────────────────────────────
 @router.get("/market/tokens")
 async def market_tokens(session: AsyncSession = Depends(get_session_dep)) -> list[dict]:
-    prices = (await session.execute(_latest_per_symbol(Price, Price.price_usd, Price.time))).scalars().all()
+    prices = (
+        (await session.execute(_latest_per_symbol(Price, Price.price_usd, Price.time)))
+        .scalars()
+        .all()
+    )
     tokens = (await session.execute(select(Token))).scalars().all()
     meta = {t.symbol: t for t in tokens}
-    sigs = (await session.execute(_latest_per_symbol(Signal, Signal.opportunity_score, Signal.time))).scalars().all()
+    sigs = (
+        (
+            await session.execute(
+                _latest_per_symbol(Signal, Signal.opportunity_score, Signal.time)
+            )
+        )
+        .scalars()
+        .all()
+    )
     opp = {s.symbol: s.opportunity_score for s in sigs}
-    sents = (await session.execute(_latest_per_symbol(Sentiment, Sentiment.sentiment_score, Sentiment.time))).scalars().all()
-    sent = {s.symbol: s.sentiment_score for s in sents}
+    sent = await _sentiment_by_symbol(session)
+    depth = await SqlCandleReader(session).latest_depth(
+        symbols=[p.symbol for p in prices]
+    )
     return [
-        map_token(p, meta=meta.get(p.symbol), opportunity_score=opp.get(p.symbol), sentiment_score=sent.get(p.symbol))
+        map_token(
+            p,
+            meta=meta.get(p.symbol),
+            opportunity_score=opp.get(p.symbol),
+            sentiment_score=sent.get(p.symbol),
+            liquidity_usd=(
+                float(depth[p.symbol].total_depth_usd) if p.symbol in depth else None
+            ),
+        )
         for p in prices
     ]
 
 
 @router.get("/market/tokens/{symbol}")
-async def market_token(symbol: str, session: AsyncSession = Depends(get_session_dep)) -> dict:
+async def market_token(
+    symbol: str, session: AsyncSession = Depends(get_session_dep)
+) -> dict:
     sym = symbol.upper()
     stmt = select(Price).where(Price.symbol == sym).order_by(Price.time.desc()).limit(1)
     price = (await session.execute(stmt)).scalars().first()
     if price is None:
         return {}
-    meta = (await session.execute(select(Token).where(Token.symbol == sym))).scalars().first()
-    return map_token(price, meta=meta)
+    meta = (
+        (await session.execute(select(Token).where(Token.symbol == sym)))
+        .scalars()
+        .first()
+    )
+    sent = await _sentiment_by_symbol(session)
+    depth = await SqlCandleReader(session).latest_depth(symbols=[sym])
+    return map_token(
+        price,
+        meta=meta,
+        sentiment_score=sent.get(sym),
+        liquidity_usd=float(depth[sym].total_depth_usd) if sym in depth else None,
+    )
 
 
 @router.get("/market/tokens/{symbol}/prices")
@@ -338,7 +415,12 @@ async def market_news(
     limit: int = Query(20, ge=1, le=200),
     session: AsyncSession = Depends(get_session_dep),
 ) -> list[dict]:
-    stmt = select(News).order_by(News.published_at.desc()).limit(limit)
+    stmt = (
+        select(RawContent)
+        .where(RawContent.kind == "news")
+        .order_by(RawContent.published_at.desc().nullslast())
+        .limit(limit)
+    )
     rows = (await session.execute(stmt)).scalars().all()
     return [map_news(r) for r in rows]
 
@@ -1042,8 +1124,8 @@ async def systems_overview(session: AsyncSession = Depends(get_session_dep)) -> 
     hour = _utcnow_naive() - timedelta(hours=1)  # naive time-series columns
     hour_aware = _utcnow() - timedelta(hours=1)  # raw_content.fetched_at is tz-aware
 
-    async def count(model, time_col) -> int:
-        return int((await session.execute(select(func.count()).select_from(model).where(time_col >= hour))).scalar_one())
+    async def count(model, time_col, cutoff=hour) -> int:
+        return int((await session.execute(select(func.count()).select_from(model).where(time_col >= cutoff))).scalar_one())
 
     coll_rows = (
         await session.execute(
@@ -1057,7 +1139,12 @@ async def systems_overview(session: AsyncSession = Depends(get_session_dep)) -> 
     snap["kafka"] = build_kafka(
         {
             "price.events": await count(Price, Price.time),
-            "sentiment.events": await count(Sentiment, Sentiment.time),
+            # raw_content.scored_at, not the `sentiments` table: that table never
+            # had a writer, so this panel reported a flat zero while
+            # sentiment-service was scoring thousands of rows.
+            "sentiment.events": await count(
+                RawContent, RawContent.scored_at, hour_aware
+            ),
             "analysis.events": await count(Signal, Signal.time),
             "decision.events": await count(Decision, Decision.created_at),
             "risk.approved.events": await count(Trade, Trade.created_at),

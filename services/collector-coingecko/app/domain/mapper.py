@@ -25,6 +25,7 @@ def to_price_event(row: dict[str, Any], trending_ids: set[str]) -> PriceEvent:
         source=Source.COINGECKO,
         symbol=str(row["symbol"]).upper(),
         coin_id=row["id"],
+        name=str(row.get("name") or "") or None,
         price_usd=_dec(row["current_price"]) or Decimal("0"),
         market_cap_usd=_dec(row.get("market_cap")),
         volume_24h_usd=_dec(row.get("total_volume")),

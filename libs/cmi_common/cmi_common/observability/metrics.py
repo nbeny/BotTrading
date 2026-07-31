@@ -5,13 +5,19 @@ from __future__ import annotations
 from prometheus_client import Counter, Gauge, Histogram
 
 # Events consumed / produced, labeled by service + topic + event type.
+# The exposed sample names are constants because a second copy of these strings
+# is what broke the Command Center graph: the health collector scraped
+# `events_consumed_total` and always read 0.
+EVENTS_CONSUMED_METRIC = "cmi_events_consumed_total"
+EVENTS_PRODUCED_METRIC = "cmi_events_produced_total"
+
 EVENTS_CONSUMED = Counter(
-    "cmi_events_consumed_total",
+    EVENTS_CONSUMED_METRIC,
     "Number of events consumed",
     ["service", "topic", "event_type"],
 )
 EVENTS_PRODUCED = Counter(
-    "cmi_events_produced_total",
+    EVENTS_PRODUCED_METRIC,
     "Number of events produced",
     ["service", "topic", "event_type"],
 )

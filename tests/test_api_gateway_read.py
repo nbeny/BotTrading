@@ -581,18 +581,18 @@ _METRICS = """# HELP process_cpu_seconds_total Total user and system CPU time
 process_cpu_seconds_total 10.0
 # TYPE process_resident_memory_bytes gauge
 process_resident_memory_bytes 2.097152e+08
-# TYPE events_consumed_total counter
-events_consumed_total{service="api-gateway",topic="analysis.events"} 100.0
-events_consumed_total{service="api-gateway",topic="decision.events"} 50.0
-events_produced_total{service="api-gateway"} 20.0
+# TYPE cmi_events_consumed_total counter
+cmi_events_consumed_total{service="api-gateway",topic="analysis.events"} 100.0
+cmi_events_consumed_total{service="api-gateway",topic="decision.events"} 50.0
+cmi_events_produced_total{service="api-gateway"} 20.0
 """
 
 
 def test_parse_prometheus_and_sum() -> None:
     p = parse_prometheus(_METRICS)
     assert metric_sum(p, "process_resident_memory_bytes") == 2.097152e08
-    assert metric_sum(p, "events_consumed_total") == 150.0  # 100 + 50
-    assert p["events_consumed_total"][0][0]["topic"] == "analysis.events"
+    assert metric_sum(p, "cmi_events_consumed_total") == 150.0  # 100 + 50
+    assert p["cmi_events_consumed_total"][0][0]["topic"] == "analysis.events"
 
 
 def test_compute_detail_rates() -> None:
@@ -605,8 +605,8 @@ def test_compute_detail_rates() -> None:
     text2 = _METRICS.replace(
         "process_cpu_seconds_total 10.0", "process_cpu_seconds_total 15.0"
     ).replace(
-        'events_produced_total{service="api-gateway"} 20.0',
-        'events_produced_total{service="api-gateway"} 190.0',
+        'cmi_events_produced_total{service="api-gateway"} 20.0',
+        'cmi_events_produced_total{service="api-gateway"} 190.0',
     )
     detail2, _ = compute_detail(parse_prometheus(text2), sample1, now_ts=1010.0)
     assert detail2["cpu_pct"] == 50.0  # 5s / 10s * 100

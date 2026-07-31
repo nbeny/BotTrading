@@ -93,7 +93,7 @@ async def main() -> int:
                 ),
             ),
             ("data/stats", read_api.data_stats(session=s)),
-            ("systems/overview", read_api.systems_overview(session=s)),
+            ("systems/overview", read_api.systems_overview(window="24h", session=s)),
             # Every filter branch at once: the offline tests can only prove this
             # query *compiles*, and its two riskiest parts -- the expanding IN
             # and the CAST that works around text()'s bind-parameter regex --

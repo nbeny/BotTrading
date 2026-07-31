@@ -680,7 +680,6 @@ def test_endpoint_systems_overview_wiring() -> None:
     # Global across the whole test session (module-level in systems_pipeline);
     # a cached "24h" entry left over from another test would short-circuit
     # stage_counts_cached and desync every query below it.
-    systems_pipeline.STAGE_CACHE.clear()
     health = [
         SimpleNamespace(
             service="api-gateway",
@@ -691,9 +690,13 @@ def test_endpoint_systems_overview_wiring() -> None:
         )
     ]
     # fetch_stage_counts issues 2 counts + 1 "latest row" query per of the 7
-    # stages (collect, sentiment, triage, senior, decision, risk, execute) —
-    # 21 queries, none of whose values this test cares about.
-    stage_queries = ([_Result(scalar=0), _Result(scalar=0), _Result(rows=[])] * 7)
+    # stages (collect, sentiment, triage, senior, decision, risk, execute).
+    # collect's two counts are distinct and non-zero so the assertions below can
+    # tell "counts were threaded through" from "counts were silently dropped":
+    # build_pipeline_stages always returns 7 stages either way, so a length
+    # check alone proves nothing about the wiring.
+    stage_queries = [_Result(scalar=3), _Result(scalar=5), _Result(rows=[])]
+    stage_queries += ([_Result(scalar=0), _Result(scalar=0), _Result(rows=[])] * 6)
     # execute order: health, [stage counts], coll_rows, workers(Signal,Decision),
     # kafka(Price,Sentiment,Signal,Decision,Trade), pg_stat_activity, pg_database_size
     results = [
@@ -717,6 +720,10 @@ def test_endpoint_systems_overview_wiring() -> None:
     assert len(body["pipeline"]) == 7
     assert body["pipeline_window"] == "24h"
     assert body["pipeline_stale"] is False
+    collect = next(s for s in body["pipeline"] if s["id"] == "collect")
+    assert collect["volume"] == 8  # 3 prices + 5 content rows, threaded through
+    senior = next(s for s in body["pipeline"] if s["id"] == "senior")
+    assert senior["volume"] == 0  # a measured zero, not a dropped value (None)
     assert body["collectors"][0]["platform"] == "Reddit"
     assert len(body["workers"]) == 2
     assert body["infra"][0]["id"] == "postgres"

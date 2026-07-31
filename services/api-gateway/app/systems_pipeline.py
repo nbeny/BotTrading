@@ -333,6 +333,18 @@ async def stage_counts_cached(
     mapping — which shapes into `null` fields, never into zeros. Reporting 0 for
     a count we could not take is the exact defect this module exists to remove.
     """
+    # Validated before the try below, because the try exists to absorb a
+    # database hiccup — not to absorb a caller passing garbage. Calling a
+    # FastAPI handler directly (offline tests, scripts/verify_read_live.py)
+    # bypasses `Query(...)` resolution and hands `window` the sentinel object
+    # itself; without this guard that programming error is swallowed as
+    # "aggregates failed", and the endpoint degrades to stale on every single
+    # call while every test still reports green.
+    if window not in WINDOW_HOURS:
+        raise ValueError(
+            f"unknown window {window!r}; expected one of {sorted(WINDOW_HOURS)}"
+        )
+
     now = time.monotonic() if now is None else now
     fetch = fetch or fetch_stage_counts
 

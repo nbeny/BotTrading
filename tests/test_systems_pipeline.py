@@ -189,13 +189,6 @@ class _Recorder:
         return self.value
 
 
-@pytest.fixture(autouse=True)
-def _clear_cache():
-    sp.STAGE_CACHE.clear()
-    yield
-    sp.STAGE_CACHE.clear()
-
-
 async def test_a_second_poll_inside_the_ttl_does_not_query_again() -> None:
     fetch = _Recorder({"triage": sp.StageCounts(volume=7)})
     first, stale = await sp.stage_counts_cached(None, "24h", now=0.0, fetch=fetch)
@@ -393,3 +386,27 @@ async def test_fetch_stage_counts_returns_a_fresh_dict_every_call() -> None:
     assert first == second  # same measured values...
     first.pop("collect")
     assert "collect" in second  # ...but popping one never touches the other
+
+
+async def test_an_unknown_window_raises_instead_of_degrading_to_stale() -> None:
+    """A bad window is a caller bug, not a database hiccup.
+
+    Calling a FastAPI handler directly — offline tests, verify_read_live.py —
+    bypasses `Query(...)` resolution and passes the sentinel object itself.
+    Without this guard the broad `except Exception` swallowed it: the endpoint
+    degraded to stale on every call while the test suite stayed green. Found by
+    mutation-free inspection during the T7 review, after it had already been
+    shipping silently.
+    """
+    fetch = _Recorder({"triage": sp.StageCounts(volume=7)})
+    with pytest.raises(ValueError, match="unknown window"):
+        await sp.stage_counts_cached(None, "nonsense", now=0.0, fetch=fetch)
+    assert fetch.calls == 0
+
+
+async def test_a_real_query_failure_still_degrades_rather_than_raising() -> None:
+    """The guard above must not have turned the DB-hiccup path into a crash."""
+    broken = _Recorder(None, fail=True)
+    counts, stale = await sp.stage_counts_cached(None, "24h", now=0.0, fetch=broken)
+    assert stale is True
+    assert counts == {}

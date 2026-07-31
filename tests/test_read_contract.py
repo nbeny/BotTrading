@@ -187,7 +187,9 @@ async def test_data_content_contract() -> None:
 
 
 async def test_systems_overview_contract() -> None:
-    resp = await read_api.systems_overview(session=_FakeSession(40))
+    # window is passed explicitly: calling the handler directly bypasses
+    # FastAPI, so the Query(...) default would arrive as the sentinel object.
+    resp = await read_api.systems_overview(window="24h", session=_FakeSession(40))
     _assert_keys("systems/overview", resp)
 
 

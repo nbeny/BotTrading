@@ -41,7 +41,6 @@ from .funnel import SCORE_BUCKET_WIDTH, build_funnel
 from .routers import get_session_dep
 from .systems_pipeline import (
     DEFAULT_WINDOW,
-    STAGE_BY_ID,
     StageCounts,
     build_pipeline_stages,
     stage_counts_cached,

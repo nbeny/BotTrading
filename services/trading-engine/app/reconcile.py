@@ -13,6 +13,9 @@ import logging
 from cmi_common.events.decision import Direction
 from cmi_common.events.execution import ExecutionEvent, ExecutionKind
 from cmi_common.kafka import Topic
+from cmi_common.observability import EVENTS_PRODUCED
+
+from .engine import SERVICE
 
 logger = logging.getLogger(__name__)
 
@@ -77,4 +80,5 @@ class Reconciler:
             size=pos.get("size"),
         )
         await self._producer.publish(Topic.EXECUTION, ev)
+        EVENTS_PRODUCED.labels(SERVICE, Topic.EXECUTION.value, ev.event_type).inc()
         logger.info("CLOSED %s (event %s), exposure -> %s", pos["symbol"], event_id, freed)

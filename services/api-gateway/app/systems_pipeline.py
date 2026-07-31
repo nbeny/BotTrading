@@ -1,0 +1,119 @@
+"""Windowed, per-stage view of the pipeline behind the Command Center graph.
+
+The graph used to report `0/m` on every connector: the health collector scraped
+the wrong metric names, so `throughput_per_min` was never written and the read
+API fell back to a literal zero. An unknown that renders as zero is worse than
+no value at all — it says "the pipeline is dead" when it means "I did not
+measure". Nothing here converts an unknown into a number.
+
+Volumes come from Postgres rather than Prometheus: they survive a restart, and
+they reuse the funnel's stage definitions so the two panels never disagree.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import datetime
+
+
+@dataclass(frozen=True)
+class StageSpec:
+    id: str
+    label: str
+    sublabel: str
+    services: tuple[str, ...]
+
+
+STAGE_SPECS: tuple[StageSpec, ...] = (
+    StageSpec(
+        "collect", "Collecte", "Marché · Social · News",
+        ("collector-coingecko", "collector-dexscreener",
+         "collector-social", "collector-news"),
+    ),
+    StageSpec("sentiment", "Sentiment", "Scoring L1", ("sentiment-service",)),
+    StageSpec("triage", "Triage", "Haiku", ("ai-worker-haiku",)),
+    StageSpec("senior", "Analyse", "Sonnet", ("ai-worker-sonnet",)),
+    StageSpec("decision", "Décision", "Fusion signaux", ("decision-engine",)),
+    StageSpec("risk", "Risque", "Garde-fous", ("risk-engine",)),
+    StageSpec("execute", "Exécution", "Kraken Futures", ("trading-engine",)),
+)
+
+STAGE_IDS: tuple[str, ...] = tuple(s.id for s in STAGE_SPECS)
+STAGE_BY_ID: dict[str, StageSpec] = {s.id: s for s in STAGE_SPECS}
+
+# Conversion is reported only between stages that count the same unit.
+# `collect` counts price points *and* content rows, `sentiment` counts content
+# rows, `triage` counts per-token signals — a ratio across those is a number
+# with no meaning, and a meaningless percentage on a debugging panel is worse
+# than a blank.
+CONVERSION_FROM: dict[str, str] = {
+    "senior": "triage",
+    "decision": "senior",
+    "risk": "decision",
+    "execute": "risk",
+}
+
+# "idle" ranks above "healthy": a collector with no data is not fine, it is
+# quiet, and the stage roll-up must not hide that behind a healthy sibling.
+_STATUS_RANK = {"healthy": 0, "idle": 1, "degraded": 2, "down": 3}
+
+
+@dataclass(frozen=True)
+class StageCounts:
+    """What crossed one stage over the window. Every field defaults to unknown."""
+
+    volume: int | None = None
+    dropped: int | None = None
+    last_at: datetime | None = None
+    last_summary: str | None = None
+
+
+def _roll_up_status(statuses: Sequence[str]) -> str:
+    if not statuses:
+        return "idle"
+    return max(statuses, key=lambda s: _STATUS_RANK.get(s, len(_STATUS_RANK)))
+
+
+def _roll_up_throughput(values: Sequence[int | None]) -> int | None:
+    """Sum the measured collectors; None when none of them has been measured."""
+    known = [v for v in values if v is not None]
+    return sum(known) if known else None
+
+
+def _conversion(volume: int | None, previous: int | None) -> float | None:
+    if volume is None or not previous:
+        return None
+    return round(volume / previous * 100, 2)
+
+
+def build_pipeline_stages(
+    counts: Mapping[str, StageCounts],
+    services: Mapping[str, Mapping],
+) -> list[dict]:
+    """Assemble the seven graph nodes. Pure — no database, no clock."""
+    out: list[dict] = []
+    for spec in STAGE_SPECS:
+        c = counts.get(spec.id) or StageCounts()
+        nodes = [services[s] for s in spec.services if s in services]
+        previous_id = CONVERSION_FROM.get(spec.id)
+        previous = counts.get(previous_id) if previous_id else None
+        out.append(
+            {
+                "id": spec.id,
+                "label": spec.label,
+                "sublabel": spec.sublabel,
+                "status": _roll_up_status([n.get("status", "idle") for n in nodes]),
+                "throughput_per_min": _roll_up_throughput(
+                    [n.get("throughput_per_min") for n in nodes]
+                ),
+                "volume": c.volume,
+                "dropped": c.dropped,
+                "conversion_pct": _conversion(
+                    c.volume, previous.volume if previous else None
+                ),
+                "last_at": c.last_at.isoformat() if c.last_at else None,
+                "last_summary": c.last_summary,
+            }
+        )
+    return out

@@ -395,6 +395,66 @@ class ContentSentimentAggDaily(Base):
     )
 
 
+class Candle(Base):
+    """OHLC candles from the execution venue (Kraken spot).
+
+    `interval` is part of the key so one table serves both granularities; the
+    forming candle is rewritten on every sweep, so writers upsert with
+    ON CONFLICT DO UPDATE. Whether a candle is closed is derived from its
+    timestamp, never stored — a boolean column lies the moment a writer forgets it.
+    """
+
+    __tablename__ = "candles"
+
+    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    interval: Mapped[str] = mapped_column(String(8), primary_key=True)
+    open: Mapped[Decimal] = mapped_column(Numeric(38, 12))
+    high: Mapped[Decimal] = mapped_column(Numeric(38, 12))
+    low: Mapped[Decimal] = mapped_column(Numeric(38, 12))
+    close: Mapped[Decimal] = mapped_column(Numeric(38, 12))
+    vwap: Mapped[Decimal | None] = mapped_column(Numeric(38, 12), default=None)
+    volume: Mapped[Decimal] = mapped_column(Numeric(38, 12), default=0)
+    trades: Mapped[int] = mapped_column(Integer, default=0)
+    source: Mapped[str] = mapped_column(String(32), default="kraken")
+
+
+class MarketDepth(Base):
+    """Order-book snapshot: the measured liquidity that replaces the volume proxy."""
+
+    __tablename__ = "market_depth"
+
+    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    mid_price: Mapped[Decimal] = mapped_column(Numeric(38, 12))
+    spread_pct: Mapped[float] = mapped_column(Float)
+    bid_depth_usd: Mapped[Decimal] = mapped_column(Numeric(38, 2))
+    ask_depth_usd: Mapped[Decimal] = mapped_column(Numeric(38, 2))
+    source: Mapped[str] = mapped_column(String(32), default="kraken")
+
+
+class VenuePair(Base):
+    """Which symbols are actually tradable on which venue, and at what minimum.
+
+    Reference data, not a time series. `ambiguous` records that the CoinGecko
+    ticker resolved to more than one coin: tickers are not unique there, and
+    attaching a real Kraken pair's candles to a worthless homonym is a silent
+    correctness bug, so the ambiguity is stored rather than swallowed.
+    """
+
+    __tablename__ = "venue_pairs"
+
+    venue: Mapped[str] = mapped_column(String(32), primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    pair: Mapped[str] = mapped_column(String(64))
+    ordermin: Mapped[Decimal | None] = mapped_column(Numeric(38, 12), default=None)
+    tradable: Mapped[bool] = mapped_column(Boolean, default=True)
+    ambiguous: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 # Tables that become Timescale hypertables (time-partitioned).
 # raw_content is deliberately excluded: its dedup needs UNIQUE(source, external_id)
 # and Timescale requires the partitioning column in every unique index.

@@ -8,6 +8,7 @@ import {
   type ServiceGroup,
   type ServiceNode,
 } from '@/lib/types/systems';
+import { fmtRate } from '@/lib/format';
 
 const GROUP_ORDER: ServiceGroup[] = ['edge', 'collect', 'analyze', 'decide', 'execute'];
 const GROUP_ACCENT: Record<ServiceGroup, string> = {
@@ -76,7 +77,7 @@ function ServiceCard({ s, accent, delay }: { s: ServiceNode; accent: string; del
       </Stack>
 
       <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 1 }}>
-        <Metric label="Débit" value={`${s.throughput_per_min}/m`} color={accent} />
+        <Metric label="Débit" value={fmtRate(s.throughput_per_min)} color={accent} />
         <Metric label="Latence" value={`${s.latency_ms}ms`} color={latColor} />
         <Metric label="RAM" value={s.mem_mb >= 1000 ? `${(s.mem_mb / 1000).toFixed(1)}G` : `${s.mem_mb}M`} />
       </Box>

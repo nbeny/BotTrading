@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from sqlalchemy.dialects.postgresql import insert
 
 from cmi_common.db import Database, ServiceHealth
+from cmi_common.observability import EVENTS_CONSUMED_METRIC, EVENTS_PRODUCED_METRIC
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,9 @@ def compute_detail(
     """
     mem = metric_sum(parsed, "process_resident_memory_bytes")
     cpu_s = metric_sum(parsed, "process_cpu_seconds_total")
-    events = metric_sum(parsed, "events_consumed_total") + metric_sum(parsed, "events_produced_total")
+    events = metric_sum(parsed, EVENTS_CONSUMED_METRIC) + metric_sum(
+        parsed, EVENTS_PRODUCED_METRIC
+    )
     detail: dict = {}
     if mem:
         detail["mem_mb"] = round(mem / 1e6)

@@ -75,6 +75,19 @@ export function fmtRelative(iso: string | number | null | undefined, now: number
   return `il y a ${Math.round(h / 24)}j`;
 }
 
+/** Throughput. An unmeasured rate is "—/m", never "0/m": that confusion is what
+ *  made the Command Center graph read as a permanently dead pipeline. */
+export function fmtRate(v: number | null | undefined): string {
+  if (v == null || Number.isNaN(v)) return '—/m';
+  return `${Math.round(v)}/m`;
+}
+
+/** Stage-to-stage survival; blank when the two stages count different units. */
+export function fmtConversion(v: number | null | undefined): string {
+  if (v == null || Number.isNaN(v)) return '';
+  return `${v.toFixed(1)}%`;
+}
+
 export function scoreColor(score: number): 'success' | 'warning' | 'error' | 'default' {
   if (score >= 75) return 'success';
   if (score >= 50) return 'warning';

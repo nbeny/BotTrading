@@ -15,6 +15,7 @@ from service_modules import load_service_module
 read_api = load_service_module("api-gateway", "read_api")
 journal_api = load_service_module("api-gateway", "journal_api")
 events_api = load_service_module("api-gateway", "events_api")
+systems_pipeline = load_service_module("api-gateway", "systems_pipeline")
 
 compute_exposure = read_api.compute_exposure
 compute_portfolio = read_api.compute_portfolio
@@ -119,6 +120,24 @@ def _assert_keys(name: str, obj: dict) -> None:
     assert not missing, f"{name} missing keys: {sorted(missing)}"
 
 
+def _assert_exact_keys(name: str, obj: dict) -> None:
+    """Like `_assert_keys`, but forbids extra keys too.
+
+    Used for the nested shapes the graph reads per node, where a field the
+    frontend has never heard of is drift just as much as a missing one.
+
+    Registration and assertion live in one call on purpose: a bare
+    `_ASSERTED.add(...)` next to a hand-written assert would let someone later
+    register an entry without enforcing it, and the meta-test below would still
+    report the manifest as fully covered.
+    """
+    _ASSERTED.add(name)
+    assert set(obj) == CONTRACT[name], (
+        f"{name}: missing {sorted(CONTRACT[name] - set(obj))}, "
+        f"unexpected {sorted(set(obj) - CONTRACT[name])}"
+    )
+
+
 # ── item-shape endpoints (pure mappers) ───────────────────────────────────────
 def test_market_tokens_contract() -> None:
     item = map_token(_price(), meta=SimpleNamespace(coin_id="bitcoin", name="BTC"),
@@ -187,7 +206,9 @@ async def test_data_content_contract() -> None:
 
 
 async def test_systems_overview_contract() -> None:
-    resp = await read_api.systems_overview(session=_FakeSession(40))
+    # window is passed explicitly: calling the handler directly bypasses
+    # FastAPI, so the Query(...) default would arrive as the sentinel object.
+    resp = await read_api.systems_overview(window="24h", session=_FakeSession(40))
     _assert_keys("systems/overview", resp)
 
 
@@ -204,6 +225,39 @@ async def test_systems_funnel_contract() -> None:
 async def test_systems_journal_summary_contract() -> None:
     resp = await journal_api.journal_summary(window="30d", session=_FakeSession(40))
     _assert_keys("systems/journal/summary", resp)
+
+
+def test_systems_overview_declares_the_pipeline_window_and_staleness() -> None:
+    snap = read_api.assemble_systems_snapshot([])
+    assert set(snap) >= CONTRACT["systems/overview"]
+
+
+def test_pipeline_stage_shape_matches_the_contract() -> None:
+    # Exact match, not _assert_keys' >=: an extra field the frontend does not
+    # know about is drift too, and every node in the graph must carry it.
+    snap = read_api.assemble_systems_snapshot([])
+    assert len(snap["pipeline"]) == 7  # the static stage catalog, not DB rows
+    for stage in snap["pipeline"]:
+        _assert_exact_keys("systems/overview.pipeline[]", stage)
+
+
+def test_stage_detail_item_shape_matches_the_contract() -> None:
+    row = SimpleNamespace(
+        symbol="SOL", opportunity_score=72, confidence=0.8, factors_present=3,
+        escalated=True, block_reason="unknown", time=NOW,
+        payload={"correlation_id": "cid-1"},
+    )
+    _assert_exact_keys("systems/stage.items[]", systems_pipeline.signal_item(row))
+
+
+async def test_systems_stage_contract() -> None:
+    # window/limit passed explicitly: calling the handler directly bypasses
+    # FastAPI, so Query(...) defaults would arrive as sentinel objects, and
+    # stage_counts_cached raises ValueError on an unrecognised window.
+    resp = await read_api.systems_stage(
+        stage_id="collect", window="24h", limit=20, session=_FakeSession(40)
+    )
+    _assert_keys("systems/stage", resp)
 
 
 async def test_events_contract() -> None:

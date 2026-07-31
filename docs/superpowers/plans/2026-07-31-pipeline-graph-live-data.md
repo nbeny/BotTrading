@@ -291,6 +291,21 @@ In `_emit()`, replace line 299:
         EVENTS_PRODUCED.labels(SERVICE, Topic.EXECUTION.value, ev.event_type).inc()
 ```
 
+`_emit()` is **not** the only publisher on `Topic.EXECUTION`, contrary to what an
+earlier draft of this plan asserted. `services/trading-engine/app/reconcile.py`
+publishes `ExecutionEvent(kind=ExecutionKind.CLOSED)` directly from
+`Reconciler._on_closed()`, on every position close. Add the same increment after
+that publish too, importing `SERVICE` from `.engine` (no cycle — `engine.py` never
+references `reconcile`):
+
+```python
+        EVENTS_PRODUCED.labels(SERVICE, Topic.EXECUTION.value, ev.event_type).inc()
+```
+
+Before moving on, grep the whole service for `publish(` and confirm no third
+`Topic.EXECUTION` path exists. `account.py` publishes on `Topic.ACCOUNT_SNAPSHOT`,
+which is not an edge of the pipeline graph and stays uncounted here.
+
 In `services/trading-engine/app/control.py`, add the import
 
 ```python
@@ -2492,3 +2507,5 @@ git commit -m "fix(systems): address verification findings"
 - **Two time zones in one query set:** `raw_content.fetched_at` / `scored_at` are tz-aware; every other time column in this feature is naive UTC. `_cutoffs()` returns both — use the right one or SQLAlchemy raises at query time.
 - **Async tests need no marker** (`asyncio_mode = "auto"`), but never import a service's `app` package bare — `tests/conftest.py` fails the run if you do. Always use `service_modules.load_service_module`.
 - **Calling a handler directly bypasses FastAPI's defaults.** `window: str = Query("24h", …)` means a direct call like `read_api.systems_overview(session=s)` passes the `Query` object itself, not `"24h"` — and `_cutoffs()` then raises a `KeyError`. Offline tests and `scripts/verify_read_live.py` must pass `window="24h"` explicitly.
+- **The graph and the funnel render a zero denominator differently, on purpose.** `funnel._pct` returns `0.0` when the previous stage counted zero; `systems_pipeline._conversion` returns `None`. `0/0` is indeterminate, and `0.0%` would assert "nothing converted" where the truth is "nothing arrived to convert". The two panels sit side by side, so **T13 must render the node's `volume === 0` state as the words "aucun élément"** — a blank connector next to an explicit empty node reads as one coherent statement; a blank connector next to a bare number does not. Do not "fix" this by making `_conversion` return `0.0`.
+- **A service missing from the health map is not the same as a service reporting `down`.** `build_pipeline_stages` skips ids absent from `services`, so a stage whose collectors never appear at all rolls up from whichever ones do. When T7 wires the real map, confirm every id in `STAGE_SPECS` is actually a key that `assemble_systems_snapshot` produces — a typo there would silently narrow the roll-up instead of failing.

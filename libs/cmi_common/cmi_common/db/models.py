@@ -215,6 +215,8 @@ class Decision(Base, TimestampMixin):
     rationale: Mapped[str] = mapped_column(Text)
     payload: Mapped[dict] = mapped_column(JSONB, default=dict)
 
+    __table_args__ = (Index("ix_decisions_created_at", "created_at"),)
+
 
 class Trade(Base, TimestampMixin):
     """Risk-approved actionable signals (fed to the external trading engine)."""
@@ -240,6 +242,8 @@ class Trade(Base, TimestampMixin):
     pnl: Mapped[float | None] = mapped_column(Float, default=None)
 
     decision: Mapped[Decision | None] = relationship()
+
+    __table_args__ = (Index("ix_trades_created_at", "created_at"),)
 
 
 class RawContent(Base):
@@ -273,6 +277,10 @@ class RawContent(Base):
         ),
         Index("ix_raw_content_unscored", "fetched_at",
               postgresql_where=sa_text("scored_at IS NULL")),
+        Index("ix_raw_content_fetched_at", "fetched_at"),
+        # The existing ix_raw_content_unscored is partial (WHERE scored_at IS
+        # NULL) and cannot serve a `scored_at >= W` range scan.
+        Index("ix_raw_content_scored_at", "scored_at"),
     )
 
 

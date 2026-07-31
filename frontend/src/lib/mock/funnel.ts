@@ -9,20 +9,36 @@
  * like it, not like a demo.
  */
 import type { FunnelStats } from '@/lib/types/systems';
+import { FUNNEL_FROM_STAGE, STAGE_VOLUME_24H, scaleCount } from './window';
+
+function funnelStages(window: string) {
+  const order = Object.entries(FUNNEL_FROM_STAGE) as [
+    keyof typeof FUNNEL_FROM_STAGE,
+    keyof typeof STAGE_VOLUME_24H,
+  ][];
+  let previous: number | null = null;
+  return order.map(([stage, sourceStage]) => {
+    const count = scaleCount(STAGE_VOLUME_24H[sourceStage], window);
+    // The first stage converts from itself, matching funnel.build_funnel; a
+    // zero upstream reports 0.0 rather than dividing.
+    const conversion_pct = previous === null
+      ? (count ? 100.0 : 0.0)
+      : previous > 0
+        ? Math.round((count / previous) * 1000) / 10
+        : 0.0;
+    previous = count;
+    return { stage, count, conversion_pct };
+  });
+}
 
 export function getFunnelStats(window = '24h'): FunnelStats {
   return {
     window,
-    // Stalled at the very first gate: Haiku triage almost never escalates,
-    // so every stage downstream of it is starved to zero. This is the
-    // production reality, not a bug in the mock.
-    stages: [
-      { stage: 'analyses', count: 1000, conversion_pct: 100.0 },
-      { stage: 'escalated', count: 0, conversion_pct: 0.0 },
-      { stage: 'decisions', count: 0, conversion_pct: 0.0 },
-      { stage: 'approved', count: 0, conversion_pct: 0.0 },
-      { stage: 'executed', count: 0, conversion_pct: 0.0 },
-    ],
+    // Derived from the same canonical numbers as the graph's stages. These two
+    // panels sit side by side and the backend counts them with identical
+    // predicates, so a fixture that let them disagree would stage exactly the
+    // contradiction this feature exists to remove.
+    stages: funnelStages(window),
     // Scores skew low — almost everything sits well under the escalation
     // threshold, which is exactly why nothing escalates.
     score_histogram: [

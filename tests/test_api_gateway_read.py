@@ -18,6 +18,7 @@ from service_modules import load_service_module
 read_api = load_service_module("api-gateway", "read_api")
 _health_collector = load_service_module("api-gateway", "health_collector")
 _routers = load_service_module("api-gateway", "routers")
+systems_pipeline = load_service_module("api-gateway", "systems_pipeline")
 
 SERVICE_CATALOG = read_api.SERVICE_CATALOG
 assemble_systems_snapshot = read_api.assemble_systems_snapshot
@@ -281,17 +282,34 @@ class _Result:
 
 
 class _FakeSession:
+    """Replays canned results positionally, and records which tables were read.
+
+    The positional replay is table-agnostic, so a query pointed at the wrong
+    model still gets handed the right-looking result — mutation testing during
+    the T6 and T8 reviews confirmed such a swap goes undetected on values alone.
+    `tables` is what lets a test assert *where* the data came from, not only
+    what came back.
+    """
+
     def __init__(self, results):
         self._results = list(results)
+        self.tables: list[str] = []
 
-    async def execute(self, _stmt):
+    async def execute(self, stmt):
+        try:
+            self.tables.extend(sorted(t.name for t in stmt.get_final_froms()))
+        except Exception:  # raw text() statements have no resolvable froms
+            pass
         return self._results.pop(0)
 
 
-def _client(results) -> TestClient:
+def _client(results, capture: list | None = None) -> TestClient:
     api = FastAPI()
     api.include_router(read_api.router)
-    api.dependency_overrides[get_session_dep] = lambda: _FakeSession(results)
+    session = _FakeSession(results)
+    if capture is not None:
+        capture.append(session)
+    api.dependency_overrides[get_session_dep] = lambda: session
     return TestClient(api)
 
 
@@ -576,23 +594,50 @@ def test_assemble_systems_snapshot() -> None:
     assert snap["summary"]["services_degraded"] == 1
 
 
+def _health(service, status="healthy", throughput=None):
+    detail = {} if throughput is None else {"throughput_per_min": throughput}
+    return SimpleNamespace(
+        service=service, status=status, healthy=status == "healthy",
+        latency_ms=3.0, detail=detail,
+    )
+
+
+def test_unmeasured_service_throughput_is_null_not_zero() -> None:
+    """A service whose /metrics has only been scraped once has no rate yet.
+    Reporting 0 there is what made the whole graph look dead."""
+    snap = read_api.assemble_systems_snapshot([_health("ai-worker-haiku")])
+    haiku = next(s for s in snap["services"] if s["id"] == "ai-worker-haiku")
+    assert haiku["throughput_per_min"] is None
+
+
+def test_overview_pipeline_carries_the_stage_counts_it_is_given() -> None:
+    counts = {"triage": systems_pipeline.StageCounts(volume=42, dropped=40)}
+    snap = read_api.assemble_systems_snapshot(
+        [_health("ai-worker-haiku", throughput=9)], counts=counts
+    )
+    triage = next(s for s in snap["pipeline"] if s["id"] == "triage")
+    assert triage["volume"] == 42
+    assert triage["dropped"] == 40
+    assert triage["throughput_per_min"] == 9
+
+
 _METRICS = """# HELP process_cpu_seconds_total Total user and system CPU time
 # TYPE process_cpu_seconds_total counter
 process_cpu_seconds_total 10.0
 # TYPE process_resident_memory_bytes gauge
 process_resident_memory_bytes 2.097152e+08
-# TYPE events_consumed_total counter
-events_consumed_total{service="api-gateway",topic="analysis.events"} 100.0
-events_consumed_total{service="api-gateway",topic="decision.events"} 50.0
-events_produced_total{service="api-gateway"} 20.0
+# TYPE cmi_events_consumed_total counter
+cmi_events_consumed_total{service="api-gateway",topic="analysis.events"} 100.0
+cmi_events_consumed_total{service="api-gateway",topic="decision.events"} 50.0
+cmi_events_produced_total{service="api-gateway"} 20.0
 """
 
 
 def test_parse_prometheus_and_sum() -> None:
     p = parse_prometheus(_METRICS)
     assert metric_sum(p, "process_resident_memory_bytes") == 2.097152e08
-    assert metric_sum(p, "events_consumed_total") == 150.0  # 100 + 50
-    assert p["events_consumed_total"][0][0]["topic"] == "analysis.events"
+    assert metric_sum(p, "cmi_events_consumed_total") == 150.0  # 100 + 50
+    assert p["cmi_events_consumed_total"][0][0]["topic"] == "analysis.events"
 
 
 def test_compute_detail_rates() -> None:
@@ -605,8 +650,8 @@ def test_compute_detail_rates() -> None:
     text2 = _METRICS.replace(
         "process_cpu_seconds_total 10.0", "process_cpu_seconds_total 15.0"
     ).replace(
-        'events_produced_total{service="api-gateway"} 20.0',
-        'events_produced_total{service="api-gateway"} 190.0',
+        'cmi_events_produced_total{service="api-gateway"} 20.0',
+        'cmi_events_produced_total{service="api-gateway"} 190.0',
     )
     detail2, _ = compute_detail(parse_prometheus(text2), sample1, now_ts=1010.0)
     assert detail2["cpu_pct"] == 50.0  # 5s / 10s * 100
@@ -649,6 +694,9 @@ def test_build_infra_postgres() -> None:
 
 
 def test_endpoint_systems_overview_wiring() -> None:
+    # Global across the whole test session (module-level in systems_pipeline);
+    # a cached "24h" entry left over from another test would short-circuit
+    # stage_counts_cached and desync every query below it.
     health = [
         SimpleNamespace(
             service="api-gateway",
@@ -658,10 +706,19 @@ def test_endpoint_systems_overview_wiring() -> None:
             detail={},
         )
     ]
-    # execute order: health, coll_rows, workers(Signal,Decision), kafka(Price,Sentiment,
-    # Signal,Decision,Trade), pg_stat_activity, pg_database_size
+    # fetch_stage_counts issues 2 counts + 1 "latest row" query per of the 7
+    # stages (collect, sentiment, triage, senior, decision, risk, execute).
+    # collect's two counts are distinct and non-zero so the assertions below can
+    # tell "counts were threaded through" from "counts were silently dropped":
+    # build_pipeline_stages always returns 7 stages either way, so a length
+    # check alone proves nothing about the wiring.
+    stage_queries = [_Result(scalar=3), _Result(scalar=5), _Result(rows=[])]
+    stage_queries += ([_Result(scalar=0), _Result(scalar=0), _Result(rows=[])] * 6)
+    # execute order: health, [stage counts], coll_rows, workers(Signal,Decision),
+    # kafka(Price,Sentiment,Signal,Decision,Trade), pg_stat_activity, pg_database_size
     results = [
         _Result(rows=health),
+        *stage_queries,
         _Result(rows=[("Reddit", "social", 50)]),
         _Result(scalar=100),
         _Result(scalar=20),
@@ -678,10 +735,71 @@ def test_endpoint_systems_overview_wiring() -> None:
     assert r.status_code == 200
     body = r.json()
     assert len(body["pipeline"]) == 7
+    assert body["pipeline_window"] == "24h"
+    assert body["pipeline_stale"] is False
+    collect = next(s for s in body["pipeline"] if s["id"] == "collect")
+    assert collect["volume"] == 8  # 3 prices + 5 content rows, threaded through
+    senior = next(s for s in body["pipeline"] if s["id"] == "senior")
+    assert senior["volume"] == 0  # a measured zero, not a dropped value (None)
     assert body["collectors"][0]["platform"] == "Reddit"
     assert len(body["workers"]) == 2
     assert body["infra"][0]["id"] == "postgres"
     assert body["summary"]["ai_cost_today_usd"] > 0
+
+
+def test_endpoint_systems_stage_404_for_unknown_stage() -> None:
+    """An unknown stage id is a 404, not an empty drawer — an empty item list
+    would read as "this stage processed nothing", a different statement."""
+    client = _client([])
+    r = client.get("/systems/stage/bogus")
+    assert r.status_code == 404
+
+
+def test_endpoint_systems_stage_decision_wiring() -> None:
+    # fetch_stage_detail first runs the same 21-query fan-out as
+    # /systems/overview (2 counts + 1 latest-row per of the 7 stages, in
+    # collect/sentiment/triage/senior/decision/risk/execute order), then the
+    # stage's own builder: decision's is one row query + one rejection-reason
+    # group-by. decision's own counts (29, 31) are distinct from every other
+    # placeholder below so a builder reading the wrong stage's aggregate would
+    # surface as a wrong `volume`/`dropped` in the assertions.
+    stage_count_queries = (
+        [_Result(scalar=1), _Result(scalar=2), _Result(rows=[])]  # collect
+        + [_Result(scalar=3), _Result(scalar=4), _Result(rows=[])]  # sentiment
+        + [_Result(scalar=5), _Result(scalar=6), _Result(rows=[])]  # triage
+        + [_Result(scalar=7), _Result(scalar=8), _Result(rows=[])]  # senior
+        + [_Result(scalar=29), _Result(scalar=31), _Result(rows=[])]  # decision
+        + [_Result(scalar=9), _Result(scalar=10), _Result(rows=[])]  # risk
+        + [_Result(scalar=11), _Result(scalar=12), _Result(rows=[])]  # execute
+    )
+    decision_row = SimpleNamespace(
+        created_at=NOW, symbol="ETH", direction="short", opportunity_score=55,
+        confidence=0.66, ai_validated=True, correlation_id="corr-77",
+    )
+    rejection_rows = [("score 12 too low", 3), ("score 45 too low", 2)]
+    sessions: list = []
+    client = _client(
+        stage_count_queries
+        + [_Result(rows=[decision_row]), _Result(rows=rejection_rows)],
+        capture=sessions,
+    )
+    r = client.get("/systems/stage/decision")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["id"] == "decision"
+    assert body["volume"] == 29
+    assert body["dropped"] == 31
+    assert len(body["items"]) == 1
+    item = body["items"][0]
+    assert item["summary"] == "ETH · short · confiance 66%"
+    assert item["correlation_id"] == "corr-77"
+    assert item["detail"] == {"direction": "short", "score": 55, "ai_validated": True}
+    # "score 12 too low" and "score 45 too low" collapse into one bucket.
+    assert body["breakdown"] == [{"key": "score N too low", "count": 5}]
+    # Where the drawer read from, not just what it returned. Values alone cannot
+    # catch a builder pointed at the wrong model: the fake replays results
+    # positionally, so a swap still receives a plausible row.
+    assert sessions[0].tables[-2:] == ["decisions", "pipeline_rejections"]
 
 
 def test_endpoint_market_news_wiring() -> None:

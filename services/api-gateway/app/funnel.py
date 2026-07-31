@@ -111,6 +111,15 @@ def build_funnel(
     }
 
 
+def collapse_reason(reason: str) -> str:
+    """Group reasons that differ only by the value written into their text.
+
+    Public because the per-stage drawer groups the same rows; a second copy of
+    this rule would make the two panels disagree about the same rejections.
+    """
+    return _NUMBER.sub("N", reason)
+
+
 def _merge_block_reasons(
     block_reasons: list[tuple[str, str, int]],
 ) -> list[tuple[str, str, int]]:
@@ -122,7 +131,7 @@ def _merge_block_reasons(
     """
     totals: dict[tuple[str, str], int] = defaultdict(int)
     for stage, reason, count in block_reasons:
-        totals[(stage, _NUMBER.sub("N", reason))] += count
+        totals[(stage, collapse_reason(reason))] += count
     return sorted(
         ((stage, reason, count) for (stage, reason), count in totals.items()),
         key=lambda r: r[2],

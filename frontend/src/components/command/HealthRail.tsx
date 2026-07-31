@@ -6,7 +6,7 @@ import { SectionCard, HealthDot } from '@/components/systems/common';
 import { systemsApi } from '@/lib/api/endpoints';
 
 export function HealthRail() {
-  const { data } = useQuery({ queryKey: ['systems', 'overview'], queryFn: systemsApi.overview, refetchInterval: 8000 });
+  const { data } = useQuery({ queryKey: ['systems', 'overview'], queryFn: () => systemsApi.overview(), refetchInterval: 8000 });
   return (
     <SectionCard title="Santé technique" accent="#22d3ee"
       actions={<Typography component={Link} href="/systems" variant="caption" sx={{ color: 'primary.main' }}>voir tout →</Typography>}>

@@ -10,8 +10,11 @@ import logging
 
 from cmi_common.events import BaseEvent
 from cmi_common.events.control import ControlCommand, ControlCommandEvent
+from cmi_common.kafka import Topic
+from cmi_common.observability import EVENTS_CONSUMED
 
 from .config import TradingConfig
+from .engine import SERVICE
 from .runtime import RuntimeConfig
 
 logger = logging.getLogger(__name__)
@@ -30,6 +33,10 @@ class ControlHandler:
         self._defaults = defaults
 
     async def handle(self, event: BaseEvent) -> None:
+        # Counted for every event this consumer receives (control.commands is
+        # its only topic), matching engine.py's rule that receipt — not the
+        # type filter below — is what "consumed" means.
+        EVENTS_CONSUMED.labels(SERVICE, Topic.CONTROL.value, event.event_type).inc()
         if not isinstance(event, ControlCommandEvent):
             return
         cmd, p = event.command, event.payload

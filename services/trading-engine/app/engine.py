@@ -8,6 +8,7 @@ from cmi_common.events import BaseEvent, RiskApprovedEvent
 from cmi_common.events.decision import Direction
 from cmi_common.events.execution import ExecutionEvent, ExecutionKind
 from cmi_common.kafka import Topic
+from cmi_common.observability import EVENTS_CONSUMED, EVENTS_PRODUCED
 
 from . import symbols
 from .config import TradingConfig
@@ -16,6 +17,8 @@ from .runtime import RuntimeConfig
 from .sizing import compute_size
 
 logger = logging.getLogger(__name__)
+
+SERVICE = "trading-engine"
 
 SUBMITTED_KEY = "trading:submitted:{event_id}"
 POSITIONS_SET = "trading:positions"
@@ -48,6 +51,13 @@ class TradingEngine:
     async def handle(self, event: BaseEvent) -> None:
         if not isinstance(event, RiskApprovedEvent):
             return
+
+        # Counted before the idempotency check: a redelivery is still an event
+        # this service consumed, and dropping it would under-report precisely
+        # when Kafka is redelivering most.
+        EVENTS_CONSUMED.labels(
+            SERVICE, Topic.RISK_APPROVED.value, event.event_type
+        ).inc()
 
         # 1. Idempotency (Kafka is at-least-once). Checked before guards so a
         # redelivery of an already-processed event does not consume a rate-limit
@@ -297,3 +307,4 @@ class TradingEngine:
             kraken_order_id=kraken_order_id,
         )
         await self._producer.publish(Topic.EXECUTION, ev)
+        EVENTS_PRODUCED.labels(SERVICE, Topic.EXECUTION.value, ev.event_type).inc()

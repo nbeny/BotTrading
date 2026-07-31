@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Box, Chip, CircularProgress, Stack, Typography } from '@mui/material';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
@@ -19,13 +20,20 @@ import { CollectorsPanel } from '@/components/systems/CollectorsPanel';
 import { AiWorkersPanel } from '@/components/systems/AiWorkersPanel';
 import { InfraPanel } from '@/components/systems/InfraPanel';
 import { SectionCard } from '@/components/systems/common';
+import { StageDetailDrawer } from '@/components/command/StageDetailDrawer';
+import { DecisionTraceDrawer } from '@/components/command/DecisionTraceDrawer';
 
 export default function SystemsPage() {
   const { data, isLoading, dataUpdatedAt } = useQuery({
     queryKey: ['systems', 'overview'],
-    queryFn: systemsApi.overview,
+    queryFn: () => systemsApi.overview(),
     refetchInterval: 5_000,
   });
+  // This page has no window selector (out of scope here) — the drawer just
+  // uses the same 24h default as the overview query above, so the two never
+  // disagree.
+  const [stageId, setStageId] = useState<string | null>(null);
+  const [traceCid, setTraceCid] = useState<string | null>(null);
 
   return (
     <Box sx={{ p: { xs: 2, md: 3 } }}>
@@ -60,7 +68,7 @@ export default function SystemsPage() {
           accent="#4d9fff"
         >
           {data ? (
-            <PipelineFlow stages={data.pipeline} />
+            <PipelineFlow stages={data.pipeline} onSelect={setStageId} />
           ) : (
             <Box sx={{ height: 96 }} className="shimmer" />
           )}
@@ -144,6 +152,9 @@ export default function SystemsPage() {
           {data ? <InfraPanel infra={data.infra} /> : <Box sx={{ height: 260 }} className="shimmer" />}
         </SectionCard>
       </Box>
+
+      <StageDetailDrawer stageId={stageId} window="24h" onClose={() => setStageId(null)} onTrace={setTraceCid} />
+      <DecisionTraceDrawer correlationId={traceCid} onClose={() => setTraceCid(null)} />
     </Box>
   );
 }

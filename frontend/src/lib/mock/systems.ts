@@ -20,6 +20,7 @@ import type {
 
 const jitter = (base: number, pct = 0.12) => round(base * (1 + rand(-pct, pct)), 1);
 const spark = (base: number) => Array.from({ length: 12 }, () => round(base * rand(0.6, 1.4), 1));
+const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000).toISOString();
 
 // ── Services (nodes of the map + inputs to the flow) ──────────────────────────
 function services(): ServiceNode[] {
@@ -245,16 +246,71 @@ function infra(): InfraResource[] {
 }
 
 // ── Pipeline flow stages ────────────────────────────────────────────────────────
+// Numbers tell the real 24h production story (see CLAUDE.md): 7735 triaged →
+// 329 escalated to Sonnet → 12 decisions → 4 approved → 0 executed. Volume,
+// dropped and conversion_pct are held constant across polls (unlike the
+// service-level throughput below) so the flow graph and the stage drawer never
+// disagree on what happened in the window.
+//
+// `sentiment` deliberately ships throughput_per_min: null and `execute` a real
+// volume of 0: the mock has to exercise both "not measured" (—) and "measured,
+// nothing happened" (0), because conflating them is the bug this panel fixes.
 function pipeline(svc: ServiceNode[]): PipelineStage[] {
-  const tp = (id: string) => svc.find((s) => s.id === id)?.throughput_per_min ?? 0;
+  // A service this mock cannot find is unmeasured, not idle. Returning 0 here
+  // would make a mistyped id render as a confident "0/m" — the exact lie this
+  // panel was rebuilt to stop telling, in the fixture meant to demonstrate it.
+  const tp = (id: string) => svc.find((s) => s.id === id)?.throughput_per_min ?? null;
+  // Mirrors the backend's _roll_up_throughput: sum what was measured, and
+  // report null only when nothing in the group was.
+  const tpSum = (...ids: string[]) => {
+    const known = ids.map(tp).filter((v): v is number => v != null);
+    return known.length ? known.reduce((a, b) => a + b, 0) : null;
+  };
   return [
-    { id: 'collect', label: 'Collecte', sublabel: 'Marché · Social · News', status: 'degraded', throughput_per_min: tp('coingecko') + tp('collector-social') + tp('collector-news') },
-    { id: 'sentiment', label: 'Sentiment', sublabel: 'Scoring L1', status: 'healthy', throughput_per_min: tp('sentiment') },
-    { id: 'triage', label: 'Triage', sublabel: 'Haiku', status: 'healthy', throughput_per_min: tp('ai-haiku') },
-    { id: 'senior', label: 'Analyse', sublabel: 'Sonnet', status: 'healthy', throughput_per_min: tp('ai-sonnet') },
-    { id: 'decision', label: 'Décision', sublabel: 'Fusion signaux', status: 'healthy', throughput_per_min: tp('decision') },
-    { id: 'risk', label: 'Risque', sublabel: 'Garde-fous', status: 'healthy', throughput_per_min: tp('risk') },
-    { id: 'execute', label: 'Exécution', sublabel: 'Kraken Futures', status: 'healthy', throughput_per_min: tp('trading-engine') },
+    {
+      id: 'collect', label: 'Collecte', sublabel: 'Marché · Social · News', status: 'degraded',
+      throughput_per_min: tpSum('coingecko', 'dexscreener', 'collector-social', 'collector-news'),
+      volume: 8420, dropped: null, conversion_pct: null,
+      last_at: minutesAgo(1), last_summary: 'reddit · social · BTC breaking 70k',
+    },
+    {
+      id: 'sentiment', label: 'Sentiment', sublabel: 'Scoring L1', status: 'healthy',
+      // Not measured this poll — the health collector hasn't scraped it yet.
+      throughput_per_min: null,
+      volume: 6180, dropped: 240, conversion_pct: null,
+      last_at: minutesAgo(2), last_summary: 'bluesky · sentiment +0.42',
+    },
+    {
+      id: 'triage', label: 'Triage', sublabel: 'Haiku', status: 'healthy',
+      throughput_per_min: tp('ai-haiku'),
+      volume: 7735, dropped: 7406, conversion_pct: null,
+      last_at: minutesAgo(3), last_summary: 'SOL · score 72 · escaladé',
+    },
+    {
+      id: 'senior', label: 'Analyse', sublabel: 'Sonnet', status: 'healthy',
+      throughput_per_min: tp('ai-sonnet'),
+      volume: 329, dropped: 328, conversion_pct: 4.3,
+      last_at: minutesAgo(21), last_summary: 'SOL · Sonnet long · score 78',
+    },
+    {
+      id: 'decision', label: 'Décision', sublabel: 'Fusion signaux', status: 'healthy',
+      throughput_per_min: tp('decision'),
+      volume: 12, dropped: 317, conversion_pct: 3.6,
+      last_at: minutesAgo(46), last_summary: 'SOL · long · confiance 81%',
+    },
+    {
+      id: 'risk', label: 'Risque', sublabel: 'Garde-fous', status: 'healthy',
+      throughput_per_min: tp('risk'),
+      volume: 4, dropped: 8, conversion_pct: 33.3,
+      last_at: minutesAgo(52), last_summary: 'SOL · long · taille 5.0%',
+    },
+    {
+      id: 'execute', label: 'Exécution', sublabel: 'Kraken Futures', status: 'healthy',
+      throughput_per_min: tp('trading-engine'),
+      // Measured, and genuinely nothing happened — must render as "0", never "—".
+      volume: 0, dropped: 0, conversion_pct: 0,
+      last_at: null, last_summary: null,
+    },
   ];
 }
 
@@ -289,11 +345,14 @@ let _dataPoints = 0;
 
 function driftSnapshot(s: SystemsSnapshot): SystemsSnapshot {
   for (const n of s.services) {
-    n.throughput_per_min = walk(n.throughput_per_min, 0.06, 1, 5000, true);
+    // ServiceNode.throughput_per_min is nullable in the type (an unscraped
+    // /metrics is possible), but this mock's services() always seeds a real
+    // number — the `?? 0` only satisfies the type, it never actually fires.
+    n.throughput_per_min = walk(n.throughput_per_min ?? 0, 0.06, 1, 5000, true);
     n.latency_ms = walk(n.latency_ms, 0.08, 5, 900, true);
     n.cpu_pct = walk(n.cpu_pct, 0.08, 2, 99, true);
     n.mem_mb = walk(n.mem_mb, 0.02, 40, 4096, true);
-    n.spark = [...n.spark.slice(1), walk(n.spark[n.spark.length - 1] ?? n.throughput_per_min, 0.15, 1, 6000)];
+    n.spark = [...n.spark.slice(1), walk(n.spark[n.spark.length - 1] ?? n.throughput_per_min ?? 0, 0.15, 1, 6000)];
   }
   for (const t of s.kafka) {
     if (t.orphaned) continue;
@@ -335,6 +394,12 @@ export function getSystemsSnapshot(): SystemsSnapshot {
       collectors: collectors(),
       workers: wk,
       infra: infra(),
+      // Overridden per-request by the overview route (window echoed from the
+      // query string); a snapshot fetched directly (no route) still needs a
+      // value that satisfies the type, so it defaults to the same window the
+      // rest of this file's numbers already tell the story for.
+      pipeline_window: '24h',
+      pipeline_stale: false,
     };
     _dataPoints = _snap.summary.data_points_today;
     return _snap;

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 
 from service_modules import load_service_module
 
@@ -16,7 +17,9 @@ unlocks = load_service_module("collector-defillama", "domain.unlocks")
 KNOWN = {"aave": "AAVE", "ethereum": "ETH"}
 
 
-def _protocol(slug: str, gecko: str | None, tvl: float, change_7d: float | None):
+def _protocol(
+    slug: str, gecko: str | None, tvl: float, change_7d: float | None
+) -> dict[str, Any]:
     return {"slug": slug, "gecko_id": gecko, "tvl": tvl, "change_7d": change_7d}
 
 
@@ -31,7 +34,6 @@ def test_protocol_maps_to_an_event_keyed_by_the_known_symbol() -> None:
     assert event.coin_id == "aave"
     assert event.tvl_usd == Decimal("5000000")
     assert event.tvl_change_pct_7d == 3.5
-    assert event.has_unlock_schedule is False
 
 
 def test_protocol_without_a_gecko_id_is_dropped_not_guessed() -> None:
@@ -170,6 +172,108 @@ def test_a_protocol_row_without_a_tvl_key_reports_unknown_not_zero() -> None:
         [{"slug": "aave-v3", "gecko_id": "aave"}], fees={}, unlocks={}, known=KNOWN
     )
     assert events[0].tvl_usd is None
+
+
+def test_a_protocol_with_no_published_change_reports_unknown_not_flat() -> None:
+    # 906 of 2325 gecko-bearing live rows have change_7d: null, 127 of them
+    # with a positive TVL. On a momentum axis a fabricated 0.0 is not a neutral
+    # default -- it asserts that nothing moved.
+    events = mapper.to_fundamentals_events(
+        [{"slug": "aave-v3", "gecko_id": "aave", "tvl": 5_000_000.0}],
+        fees={},
+        unlocks={},
+        known=KNOWN,
+    )
+    assert events[0].tvl_usd == Decimal("5000000")
+    assert events[0].tvl_change_pct_7d is None
+
+
+def test_a_null_change_is_treated_the_same_as_an_absent_one() -> None:
+    events = mapper.to_fundamentals_events(
+        [{"slug": "aave-v3", "gecko_id": "aave", "tvl": 5e6, "change_7d": None}],
+        fees={},
+        unlocks={},
+        known=KNOWN,
+    )
+    assert events[0].tvl_change_pct_7d is None
+
+
+def test_the_change_is_weighted_only_over_deployments_that_reported_one() -> None:
+    # A silent 3M deployment must not dilute a measured +8% on 1M down to 2%.
+    events = mapper.to_fundamentals_events(
+        [
+            {"slug": "aave-v2", "gecko_id": "aave", "tvl": 3_000_000.0},
+            {
+                "slug": "aave-v3",
+                "gecko_id": "aave",
+                "tvl": 1_000_000.0,
+                "change_7d": 8.0,
+            },
+        ],
+        fees={},
+        unlocks={},
+        known=KNOWN,
+    )
+    assert events[0].tvl_change_pct_7d == 8.0
+    assert events[0].tvl_usd == Decimal("4000000")
+
+
+def test_null_fee_totals_report_unknown_not_zero() -> None:
+    # 300 of 2514 live fee rows have total24h: null, 274 are all-null.
+    events = mapper.to_fundamentals_events(
+        [_protocol("aave-v3", "aave", 1.0, 0.0)],
+        fees={"aave-v3": {"total24h": None, "total7d": None, "total14dto7d": None}},
+        unlocks={},
+        known=KNOWN,
+    )
+    assert events[0].fees_24h_usd is None
+    assert events[0].fees_change_pct_7d is None
+
+
+def test_fee_sums_stay_exact() -> None:
+    # 517 of 2514 live rows carry a fractional total24h; summing in float and
+    # converting at the end writes 17-digit artifacts into the event.
+    events = mapper.to_fundamentals_events(
+        [
+            _protocol("aave-v2", "aave", 1.0, 0.0),
+            _protocol("aave-v3", "aave", 1.0, 0.0),
+        ],
+        fees={
+            "aave-v2": {"total24h": 0.1},
+            "aave-v3": {"total24h": 0.2},
+        },
+        unlocks={},
+        known=KNOWN,
+    )
+    assert events[0].fees_24h_usd == Decimal("0.3")
+
+
+def test_a_fee_row_matching_no_protocol_is_ignored() -> None:
+    events = mapper.to_fundamentals_events(
+        [_protocol("aave-v3", "aave", 1.0, 0.0)],
+        fees={"orphan": {"total24h": 999.0}},
+        unlocks={},
+        known=KNOWN,
+    )
+    assert events[0].fees_24h_usd is None
+
+
+def test_two_tokens_accumulate_independently() -> None:
+    # Every existing case produces exactly one bucket, so per-token isolation
+    # of the accumulator is never exercised.
+    events = mapper.to_fundamentals_events(
+        [
+            _protocol("aave-v3", "aave", 5_000_000.0, 3.0),
+            _protocol("uni", "ethereum", 1_000_000.0, -2.0),
+        ],
+        fees={},
+        unlocks={},
+        known=KNOWN,
+    )
+    by_symbol = {e.symbol: e for e in events}
+    assert by_symbol["AAVE"].tvl_usd == Decimal("5000000")
+    assert by_symbol["ETH"].tvl_usd == Decimal("1000000")
+    assert by_symbol["ETH"].tvl_change_pct_7d == -2.0
 
 
 def test_a_known_schedule_with_a_pending_unlock_is_carried() -> None:

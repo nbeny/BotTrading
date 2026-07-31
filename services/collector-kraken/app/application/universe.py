@@ -2,8 +2,9 @@
 
 Both are derived from data on every cycle, never hard-coded: a token that starts
 being talked about joins the majors set on its own, and one that goes quiet
-leaves it. The pure selection functions are unit-tested; the two SQL helpers
-supply their inputs.
+leaves it. The SQL helpers and the mention floor now live in
+`cmi_common.db.universe` and are re-exported here so this module stays the
+single import site for Kraken's sweep.
 """
 
 from __future__ import annotations
@@ -12,7 +13,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cmi_common.db.models import Token
-from cmi_common.db.universe import DEFAULT_MIN_MENTIONS, mention_counts, priced_symbols
+from cmi_common.db.universe import (
+    DEFAULT_MIN_MENTIONS,
+    majors,
+    mention_counts,
+    priced_symbols,
+)
 
 from ..domain.pairs import VenuePairSpec
 
@@ -20,6 +26,7 @@ __all__ = [
     "DEFAULT_MIN_MENTIONS",
     "ambiguous_symbols",
     "intersect",
+    "majors",
     "mention_counts",
     "priced_symbols",
     "split_regimes",
@@ -28,11 +35,9 @@ __all__ = [
 ]
 
 
-def intersect(
-    specs: list[VenuePairSpec], priced_symbols: set[str]
-) -> list[VenuePairSpec]:
+def intersect(specs: list[VenuePairSpec], priced: set[str]) -> list[VenuePairSpec]:
     """Kraken-tradable pairs we also have prices for."""
-    return [s for s in specs if s.symbol in priced_symbols]
+    return [s for s in specs if s.symbol in priced]
 
 
 def split_regimes(
@@ -42,9 +47,13 @@ def split_regimes(
     min_mentions: int = DEFAULT_MIN_MENTIONS,
 ) -> tuple[list[VenuePairSpec], list[VenuePairSpec]]:
     """(majors, alts) — majors are sentiment-covered enough to fuse on."""
-    majors = [s for s in specs if mentions.get(s.symbol, 0) >= min_mentions]
-    major_symbols = {s.symbol for s in majors}
-    return majors, [s for s in specs if s.symbol not in major_symbols]
+    major_symbols = majors(
+        {s.symbol for s in specs}, mentions, min_mentions=min_mentions
+    )
+    return (
+        [s for s in specs if s.symbol in major_symbols],
+        [s for s in specs if s.symbol not in major_symbols],
+    )
 
 
 def ambiguous_symbols(rows: list[tuple[str, str, int | None]]) -> set[str]:

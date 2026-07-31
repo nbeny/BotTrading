@@ -21,9 +21,15 @@ DEFAULT_MIN_MENTIONS = 10
 
 
 def majors(
-    symbols: set[str], mentions: dict[str, int], min_mentions: int
+    symbols: set[str],
+    mentions: dict[str, int],
+    *,
+    min_mentions: int = DEFAULT_MIN_MENTIONS,
 ) -> set[str]:
-    """The subset with enough sentiment coverage to fuse on."""
+    """Majors have enough sentiment coverage to fuse on, and consequently are
+    the only symbols worth spending per-symbol API budget on — which is why a
+    second collector needs this same set.
+    """
     return {s for s in symbols if mentions.get(s, 0) >= min_mentions}
 
 

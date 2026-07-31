@@ -507,11 +507,6 @@ def test_missing_max_supply_yields_no_reading_rather_than_a_zero() -> None:
 
 def test_document_without_events_yields_no_unlock() -> None:
     assert unlocks.next_unlock(_doc([]), now=NOW) is None
-
-
-def test_gecko_id_is_read_from_the_document_root() -> None:
-    assert unlocks.gecko_id_of(_doc([])) == "aave"
-    assert unlocks.gecko_id_of({"name": "No Gecko"}) is None
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -551,12 +546,6 @@ HORIZON_DAYS = 30
 class Unlock:
     at: datetime
     pct_supply: float
-
-
-def gecko_id_of(document: dict[str, Any]) -> str | None:
-    """The CoinGecko id this document belongs to, or None if untracked."""
-    value = document.get("gecko_id")
-    return str(value) if value else None
 
 
 def next_unlock(

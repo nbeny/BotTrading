@@ -35,8 +35,8 @@ from cmi_common.db import (
     Token,
     Trade,
 )
-from cmi_common.db.models import PipelineRejection, RawContent
-from cmi_common.sources import SqlSentimentAggReader
+from cmi_common.db.models import ContentSentimentAgg, PipelineRejection, RawContent
+from cmi_common.sources import SqlCandleReader, SqlSentimentAggReader
 
 from .funnel import SCORE_BUCKET_WIDTH, build_funnel
 from .routers import get_session_dep
@@ -128,9 +128,18 @@ def map_token(
     meta: Any | None = None,
     opportunity_score: float | None = None,
     sentiment_score: float | None = None,
+    liquidity_usd: float | None = None,
 ) -> dict:
-    """Build a MarketToken from the latest price row (+ optional enrichments)."""
+    """Build a MarketToken from the latest price row (+ optional enrichments).
+
+    `liquidity_usd` is None when the book was never measured — a symbol Kraken
+    does not list, or one the sweep has not reached yet. The TS contract requires
+    the key, so it is coerced to 0.0 here, at the HTTP edge and nowhere else:
+    downstream scoring must keep "unmeasured" distinct from "thin".
+    """
     change = price.price_change_pct_24h
+    meta_extra = getattr(meta, "metadata_", None) or {}
+    trending = meta_extra.get("is_trending")
     return {
         "symbol": price.symbol,
         "coin_id": getattr(meta, "coin_id", None) or price.symbol.lower(),
@@ -138,11 +147,19 @@ def map_token(
         "price_usd": _num(price.price_usd),
         "price_change_pct_24h": _num(change),
         "volume_24h_usd": _num(price.volume_24h_usd),
-        "liquidity_usd": 0.0,  # not persisted (DexEvent liquidity is transient)
+        "liquidity_usd": _num(liquidity_usd),
         "market_cap_usd": _num(price.market_cap_usd),
-        "sentiment_score": round(sentiment_score, 2) if sentiment_score is not None else 0.0,
-        "opportunity_score": round(_num(opportunity_score) / 100, 2) if opportunity_score else 0.0,
-        "is_trending": bool(change is not None and change >= 5),
+        "sentiment_score": (
+            round(sentiment_score, 2) if sentiment_score is not None else 0.0
+        ),
+        "opportunity_score": (
+            round(_num(opportunity_score) / 100, 2) if opportunity_score else 0.0
+        ),
+        "is_trending": (
+            bool(trending)
+            if trending is not None
+            else bool(change is not None and change >= 5)
+        ),
         "updated_at": _iso(price.time),
     }
 
@@ -291,31 +308,91 @@ def _latest_per_symbol(model: Any, value_col: Any, time_col: Any):
     )
 
 
+async def _sentiment_by_symbol(
+    session: AsyncSession, *, hours: int = 24
+) -> dict[str, float]:
+    """Confidence-weighted mean sentiment per symbol over the window, in one query.
+
+    Reads content_sentiment_agg, which sentiment-service actually maintains. The
+    former source (`sentiments`) had no writer and returned 0.0 for every token.
+    """
+    since = _utcnow() - timedelta(hours=hours)
+    stmt = (
+        select(
+            ContentSentimentAgg.symbol,
+            func.sum(ContentSentimentAgg.weighted_score_sum),
+            func.sum(ContentSentimentAgg.confidence_sum),
+        )
+        .where(ContentSentimentAgg.bucket_start >= since)
+        .group_by(ContentSentimentAgg.symbol)
+    )
+    out: dict[str, float] = {}
+    for symbol, weighted, confidence in (await session.execute(stmt)).all():
+        if confidence:
+            out[symbol] = float(weighted) / float(confidence)
+    return out
+
+
 # ── market endpoints ──────────────────────────────────────────────────────────
 @router.get("/market/tokens")
 async def market_tokens(session: AsyncSession = Depends(get_session_dep)) -> list[dict]:
-    prices = (await session.execute(_latest_per_symbol(Price, Price.price_usd, Price.time))).scalars().all()
+    prices = (
+        (await session.execute(_latest_per_symbol(Price, Price.price_usd, Price.time)))
+        .scalars()
+        .all()
+    )
     tokens = (await session.execute(select(Token))).scalars().all()
     meta = {t.symbol: t for t in tokens}
-    sigs = (await session.execute(_latest_per_symbol(Signal, Signal.opportunity_score, Signal.time))).scalars().all()
+    sigs = (
+        (
+            await session.execute(
+                _latest_per_symbol(Signal, Signal.opportunity_score, Signal.time)
+            )
+        )
+        .scalars()
+        .all()
+    )
     opp = {s.symbol: s.opportunity_score for s in sigs}
-    sents = (await session.execute(_latest_per_symbol(Sentiment, Sentiment.sentiment_score, Sentiment.time))).scalars().all()
-    sent = {s.symbol: s.sentiment_score for s in sents}
+    sent = await _sentiment_by_symbol(session)
+    depth = await SqlCandleReader(session).latest_depth(
+        symbols=[p.symbol for p in prices]
+    )
     return [
-        map_token(p, meta=meta.get(p.symbol), opportunity_score=opp.get(p.symbol), sentiment_score=sent.get(p.symbol))
+        map_token(
+            p,
+            meta=meta.get(p.symbol),
+            opportunity_score=opp.get(p.symbol),
+            sentiment_score=sent.get(p.symbol),
+            liquidity_usd=(
+                float(depth[p.symbol].total_depth_usd) if p.symbol in depth else None
+            ),
+        )
         for p in prices
     ]
 
 
 @router.get("/market/tokens/{symbol}")
-async def market_token(symbol: str, session: AsyncSession = Depends(get_session_dep)) -> dict:
+async def market_token(
+    symbol: str, session: AsyncSession = Depends(get_session_dep)
+) -> dict:
     sym = symbol.upper()
     stmt = select(Price).where(Price.symbol == sym).order_by(Price.time.desc()).limit(1)
     price = (await session.execute(stmt)).scalars().first()
     if price is None:
         return {}
-    meta = (await session.execute(select(Token).where(Token.symbol == sym))).scalars().first()
-    return map_token(price, meta=meta)
+    meta = (
+        (await session.execute(select(Token).where(Token.symbol == sym)))
+        .scalars()
+        .first()
+    )
+    sent = await _sentiment_by_symbol(session)
+    depth = await SqlCandleReader(session).latest_depth(symbols=[sym])
+    return map_token(
+        price,
+        meta=meta,
+        sentiment_score=sent.get(sym),
+        liquidity_usd=float(depth[sym].total_depth_usd) if sym in depth else None,
+    )
 
 
 @router.get("/market/tokens/{symbol}/prices")

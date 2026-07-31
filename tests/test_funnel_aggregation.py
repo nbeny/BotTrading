@@ -219,3 +219,11 @@ def test_the_list_is_capped_and_says_so() -> None:
     )
     assert len(out["top_block_reasons"]) == funnel.MAX_BLOCK_REASONS
     assert out["block_reasons_truncated"] is True
+
+
+def test_collapse_reason_is_the_shared_number_normaliser() -> None:
+    """The stage drawer groups rejection reasons the same way the funnel does;
+    two different collapsers would make the two panels disagree on the same rows."""
+    assert funnel.collapse_reason("score 13 below threshold 70") == (
+        "score N below threshold N"
+    )

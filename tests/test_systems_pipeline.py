@@ -8,6 +8,7 @@ stays None all the way out, and is never smoothed into a zero.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from service_modules import load_service_module
 
@@ -102,3 +103,27 @@ def test_last_item_is_serialised_with_its_summary() -> None:
     by = {s["id"]: s for s in sp.build_pipeline_stages(counts, _services())}
     assert by["triage"]["last_at"] == NOW.isoformat()
     assert by["triage"]["last_summary"] == "SOL · score 72"
+
+
+def test_signal_summary_names_the_symbol_score_and_outcome() -> None:
+    row = SimpleNamespace(symbol="SOL", opportunity_score=72, escalated=True,
+                          block_reason="unknown")
+    assert sp.summarize_signal(row) == "SOL · score 72 · escaladé"
+
+
+def test_signal_summary_says_why_a_non_escalated_signal_stopped() -> None:
+    row = SimpleNamespace(symbol="SOL", opportunity_score=13, escalated=False,
+                          block_reason="score_below_threshold")
+    assert sp.summarize_signal(row) == "SOL · score 13 · score_below_threshold"
+
+
+def test_execution_summary_carries_status_and_fill() -> None:
+    row = SimpleNamespace(symbol="BTC", direction="long", status="filled",
+                          fill_price=101.5, pnl=12.0)
+    assert sp.summarize_trade(row) == "BTC · long · filled @ 101.5 · PnL 12.0"
+
+
+def test_execution_summary_omits_a_fill_it_does_not_have() -> None:
+    row = SimpleNamespace(symbol="BTC", direction="long", status="submitted",
+                          fill_price=None, pnl=None)
+    assert sp.summarize_trade(row) == "BTC · long · submitted"

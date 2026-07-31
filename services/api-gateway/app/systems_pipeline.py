@@ -117,3 +117,45 @@ def build_pipeline_stages(
             }
         )
     return out
+
+
+def summarize_content(row) -> str:
+    head = (row.title or row.text or "").strip().replace("\n", " ")
+    head = head[:60] + "…" if len(head) > 60 else head
+    return f"{row.source} · {row.kind}" + (f" · {head}" if head else "")
+
+
+def summarize_scored(row) -> str:
+    # scored_at can be set with a null score when the model abstained; "—" says
+    # that, where a formatted 0.00 would claim a neutral verdict we never made.
+    score = f"{row.sentiment_score:+.2f}" if row.sentiment_score is not None else "—"
+    return f"{row.source} · sentiment {score}"
+
+
+def summarize_signal(row) -> str:
+    outcome = "escaladé" if row.escalated else row.block_reason
+    return f"{row.symbol} · score {row.opportunity_score} · {outcome}"
+
+
+def summarize_journal(row) -> str:
+    return (
+        f"{row.symbol} · Sonnet {row.sonnet_direction or '—'} "
+        f"· score {row.sonnet_score if row.sonnet_score is not None else '—'}"
+    )
+
+
+def summarize_decision(row) -> str:
+    return f"{row.symbol} · {row.direction} · confiance {row.confidence:.0%}"
+
+
+def summarize_approved(row) -> str:
+    return f"{row.symbol} · {row.direction} · taille {row.position_size_pct:.1%}"
+
+
+def summarize_trade(row) -> str:
+    out = f"{row.symbol} · {row.direction} · {row.status}"
+    if row.fill_price is not None:
+        out += f" @ {row.fill_price}"
+    if row.pnl is not None:
+        out += f" · PnL {row.pnl}"
+    return out

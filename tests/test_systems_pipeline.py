@@ -461,3 +461,18 @@ async def test_a_null_group_key_is_labelled_rather_than_rendered_as_none() -> No
 
     out = await sp._grouped(_S(), sp.DecisionJournal.skip_reason)
     assert out == [{"key": "budget", "count": 6}, {"key": "non renseigné", "count": 4}]
+
+
+def test_an_unrecognised_status_is_reported_as_down_not_passed_through() -> None:
+    """The frontend types `status` as a closed union and nothing validates the
+    JSON at runtime, so a fifth value would make that type quietly false — and
+    the UI has neither a label nor a colour for it."""
+    svc = _services(**{"collector-social": {"status": "weird", "throughput_per_min": 1}})
+    by = {s["id"]: s for s in sp.build_pipeline_stages({}, svc)}
+    assert by["collect"]["status"] == "down"
+
+
+def test_a_known_worst_status_is_still_reported_verbatim() -> None:
+    svc = _services(**{"collector-news": {"status": "degraded", "throughput_per_min": 1}})
+    by = {s["id"]: s for s in sp.build_pipeline_stages({}, svc)}
+    assert by["collect"]["status"] == "degraded"

@@ -87,9 +87,18 @@ class StageCounts:
 
 
 def _roll_up_status(statuses: Sequence[str]) -> str:
+    """Worst status wins, and the result is always one of the four known values.
+
+    The frontend types this field as a closed union, and nothing validates the
+    JSON at runtime — so passing an unrecognised string through verbatim would
+    make that type quietly false. An unknown status already ranked as the worst
+    case here; reporting it as "down" just makes that reading explicit rather
+    than inventing a fifth state the UI has no label or colour for.
+    """
     if not statuses:
         return "idle"
-    return max(statuses, key=lambda s: _STATUS_RANK.get(s, len(_STATUS_RANK)))
+    worst = max(statuses, key=lambda s: _STATUS_RANK.get(s, len(_STATUS_RANK)))
+    return worst if worst in _STATUS_RANK else "down"
 
 
 def _roll_up_throughput(values: Sequence[int | None]) -> int | None:

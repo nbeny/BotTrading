@@ -12,7 +12,9 @@ they reuse the funnel's stage definitions so the two panels never disagree.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import logging
+import time
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -117,6 +119,82 @@ def build_pipeline_stages(
             }
         )
     return out
+
+
+logger = logging.getLogger(__name__)
+
+# /systems/overview is polled every 8s by every open terminal and these
+# aggregates scan four tables. 30s of staleness on a volume counter is invisible
+# to an operator; a fourfold query amplification is not.
+CACHE_TTL_S = 30.0
+
+
+class _StageCache:
+    def __init__(self, ttl_s: float = CACHE_TTL_S) -> None:
+        self._ttl = ttl_s
+        self._entries: dict[str, tuple[float, dict[str, StageCounts]]] = {}
+
+    def fresh(self, window: str, now: float) -> dict[str, StageCounts] | None:
+        entry = self._entries.get(window)
+        if entry and now - entry[0] < self._ttl:
+            return entry[1]
+        return None
+
+    def last(self, window: str) -> dict[str, StageCounts] | None:
+        entry = self._entries.get(window)
+        return entry[1] if entry else None
+
+    def put(self, window: str, now: float, value: dict[str, StageCounts]) -> None:
+        self._entries[window] = (now, value)
+
+    def clear(self) -> None:
+        self._entries.clear()
+
+
+STAGE_CACHE = _StageCache()
+
+
+async def fetch_stage_counts(session, window: str) -> dict[str, StageCounts]:
+    """Placeholder for the real Postgres aggregates, written in T6.
+
+    Returns an empty mapping rather than fabricated counts: an empty mapping
+    shapes into `null` fields via `build_pipeline_stages`, which is the honest
+    "not measured yet" state this module exists to preserve.
+    """
+    return {}
+
+
+async def stage_counts_cached(
+    session,
+    window: str,
+    *,
+    now: float | None = None,
+    fetch: Callable[..., Awaitable[dict[str, StageCounts]]] | None = None,
+) -> tuple[dict[str, StageCounts], bool]:
+    """Return (counts, stale).
+
+    A failed aggregate serves the last good value flagged stale, or an empty
+    mapping — which shapes into `null` fields, never into zeros. Reporting 0 for
+    a count we could not take is the exact defect this module exists to remove.
+    """
+    now = time.monotonic() if now is None else now
+    fetch = fetch or fetch_stage_counts
+
+    # Every return is a shallow copy of the cache's internal dict, never the
+    # live object: StageCounts is frozen so a caller can't corrupt the values,
+    # but it could still add/drop keys in the outer mapping and silently
+    # mutate what every other poller reads next.
+    hit = STAGE_CACHE.fresh(window, now)
+    if hit is not None:
+        return dict(hit), False
+    try:
+        counts = await fetch(session, window)
+    except Exception:
+        logger.exception("pipeline aggregates failed (window=%s)", window)
+        last = STAGE_CACHE.last(window)
+        return (dict(last), True) if last is not None else ({}, True)
+    STAGE_CACHE.put(window, now, counts)
+    return dict(counts), False
 
 
 def summarize_content(row) -> str:

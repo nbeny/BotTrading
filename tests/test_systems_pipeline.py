@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import pytest
+
 from service_modules import load_service_module
 
 sp = load_service_module("api-gateway", "systems_pipeline")
@@ -170,3 +172,66 @@ def test_content_summary_falls_back_to_body_when_there_is_no_title() -> None:
     row = SimpleNamespace(source="reddit", kind="social", title=None,
                           text="BTC breaking 70k")
     assert sp.summarize_content(row) == "reddit · social · BTC breaking 70k"
+
+
+class _Recorder:
+    """Stands in for the aggregate query; counts calls and can be made to fail."""
+
+    def __init__(self, value, fail=False):
+        self.value = value
+        self.fail = fail
+        self.calls = 0
+
+    async def __call__(self, session, window):
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("db down")
+        return self.value
+
+
+@pytest.fixture(autouse=True)
+def _clear_cache():
+    sp.STAGE_CACHE.clear()
+    yield
+    sp.STAGE_CACHE.clear()
+
+
+async def test_a_second_poll_inside_the_ttl_does_not_query_again() -> None:
+    fetch = _Recorder({"triage": sp.StageCounts(volume=7)})
+    first, stale = await sp.stage_counts_cached(None, "24h", now=0.0, fetch=fetch)
+    second, _ = await sp.stage_counts_cached(None, "24h", now=20.0, fetch=fetch)
+    assert fetch.calls == 1
+    assert first == second
+    assert stale is False
+
+
+async def test_the_cache_expires_after_its_ttl() -> None:
+    fetch = _Recorder({"triage": sp.StageCounts(volume=7)})
+    await sp.stage_counts_cached(None, "24h", now=0.0, fetch=fetch)
+    await sp.stage_counts_cached(None, "24h", now=31.0, fetch=fetch)
+    assert fetch.calls == 2
+
+
+async def test_each_window_is_cached_separately() -> None:
+    fetch = _Recorder({"triage": sp.StageCounts(volume=7)})
+    await sp.stage_counts_cached(None, "1h", now=0.0, fetch=fetch)
+    await sp.stage_counts_cached(None, "24h", now=0.0, fetch=fetch)
+    assert fetch.calls == 2
+
+
+async def test_a_failed_query_serves_the_last_good_value_marked_stale() -> None:
+    good = _Recorder({"triage": sp.StageCounts(volume=7)})
+    await sp.stage_counts_cached(None, "24h", now=0.0, fetch=good)
+    broken = _Recorder(None, fail=True)
+    counts, stale = await sp.stage_counts_cached(None, "24h", now=100.0, fetch=broken)
+    assert stale is True
+    assert counts["triage"].volume == 7
+
+
+async def test_a_failed_query_with_no_cache_reports_unknown_not_zero() -> None:
+    """The whole point of this panel: a zero it cannot vouch for is a lie."""
+    broken = _Recorder(None, fail=True)
+    counts, stale = await sp.stage_counts_cached(None, "24h", now=0.0, fetch=broken)
+    assert stale is True
+    stages = sp.build_pipeline_stages(counts, _services())
+    assert all(s["volume"] is None for s in stages)

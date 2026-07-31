@@ -8,18 +8,24 @@ supply their inputs.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cmi_common.db.models import ContentSentimentAgg, Price, Token
+from cmi_common.db.models import Token
+from cmi_common.db.universe import DEFAULT_MIN_MENTIONS, mention_counts, priced_symbols
 
 from ..domain.pairs import VenuePairSpec
 
-#: Knee of the observed mention distribution (measured 2026-07-29: 11 symbols
-#: clear 10 over 7 days, the next tier sits in single digits). See the spec.
-DEFAULT_MIN_MENTIONS = 10
+__all__ = [
+    "DEFAULT_MIN_MENTIONS",
+    "ambiguous_symbols",
+    "intersect",
+    "mention_counts",
+    "priced_symbols",
+    "split_regimes",
+    "token_symbol_ranks",
+    "untradable",
+]
 
 
 def intersect(
@@ -56,23 +62,6 @@ def ambiguous_symbols(rows: list[tuple[str, str, int | None]]) -> set[str]:
 def untradable(specs: list[VenuePairSpec], priced: set[str]) -> set[str]:
     """Symbols we price but Kraken does not list — the "cannot trade this" set."""
     return priced - {s.symbol for s in specs}
-
-
-async def priced_symbols(session: AsyncSession, *, hours: int = 24) -> set[str]:
-    since = datetime.now(tz=UTC) - timedelta(hours=hours)
-    stmt = select(Price.symbol).where(Price.time >= since).distinct()
-    return set((await session.execute(stmt)).scalars().all())
-
-
-async def mention_counts(session: AsyncSession, *, days: int = 7) -> dict[str, int]:
-    """Mentions per symbol over the window, both kinds summed."""
-    since = datetime.now(tz=UTC) - timedelta(days=days)
-    stmt = (
-        select(ContentSentimentAgg.symbol, func.sum(ContentSentimentAgg.mentions))
-        .where(ContentSentimentAgg.bucket_start >= since)
-        .group_by(ContentSentimentAgg.symbol)
-    )
-    return {sym: int(total or 0) for sym, total in (await session.execute(stmt)).all()}
 
 
 async def token_symbol_ranks(

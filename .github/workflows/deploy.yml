@@ -59,6 +59,7 @@ jobs:
           - { name: collector-dexscreener, dockerfile: docker/Dockerfile,     path: services/collector-dexscreener }
           - { name: collector-social,      dockerfile: docker/Dockerfile,     path: services/collector-social }
           - { name: collector-news,        dockerfile: docker/Dockerfile,     path: services/collector-news }
+          - { name: collector-kraken,      dockerfile: docker/Dockerfile,     path: services/collector-kraken }
           - { name: decision-engine,       dockerfile: docker/Dockerfile,     path: services/decision-engine }
           - { name: risk-engine,           dockerfile: docker/Dockerfile,     path: services/risk-engine }
           - { name: trading-engine,        dockerfile: docker/Dockerfile,     path: services/trading-engine }

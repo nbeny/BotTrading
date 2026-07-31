@@ -23,7 +23,8 @@ export interface ServiceNode {
   latency_ms: number;
   cpu_pct: number;
   mem_mb: number;
-  throughput_per_min: number;
+  /** null until two /metrics scrapes exist — never conflate "not measured" with 0. */
+  throughput_per_min: number | null;
   kafka_in: string[];
   kafka_out: string[];
   host: string | null;
@@ -82,7 +83,38 @@ export interface PipelineStage {
   label: string;
   sublabel: string;
   status: ServiceHealth;
-  throughput_per_min: number;
+  /** null until two /metrics scrapes exist — never conflate "not measured" with 0. */
+  throughput_per_min: number | null;
+  /** Items that crossed this stage over the selected window. */
+  volume: number | null;
+  /** Rejected here, or still pending (sentiment backlog, Sonnet budget). */
+  dropped: number | null;
+  /** Survival from the previous stage; null where the two count different units. */
+  conversion_pct: number | null;
+  last_at: string | null;
+  last_summary: string | null;
+}
+
+export type SystemsWindow = '1h' | '24h' | '7d';
+
+export interface StageItem {
+  at: string | null;
+  symbol: string | null;
+  summary: string;
+  detail: Record<string, string | number | boolean | null>;
+  /** When set, the row opens the existing DecisionTraceDrawer. */
+  correlation_id: string | null;
+}
+
+export interface StageDetail {
+  id: string;
+  label: string;
+  window: string;
+  volume: number | null;
+  dropped: number | null;
+  breakdown: { key: string; count: number }[];
+  items: StageItem[];
+  updated_at: string;
 }
 
 export interface SystemsSummary {
@@ -106,6 +138,8 @@ export interface SystemsSnapshot {
   collectors: CollectorSource[];
   workers: AiWorker[];
   infra: InfraResource[];
+  pipeline_window: string;
+  pipeline_stale: boolean;
 }
 
 export const HEALTH_LABEL: Record<ServiceHealth, string> = {

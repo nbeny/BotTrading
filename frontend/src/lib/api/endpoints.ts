@@ -23,7 +23,7 @@ import type {
   PriceEvent,
   SentimentEvent,
 } from '@/lib/types/events';
-import type { FunnelStats, SystemsSnapshot } from '@/lib/types/systems';
+import type { FunnelStats, StageDetail, SystemsSnapshot, SystemsWindow } from '@/lib/types/systems';
 
 // ── Portfolio ───────────────────────────────────────────────────────────────
 export const portfolioApi = {
@@ -169,9 +169,14 @@ export const collectorsApi = {
 // to the api-gateway (or a dedicated observability endpoint); on mock it hits the
 // built-in BFF snapshot generator.
 export const systemsApi = {
-  overview: () => api.get<SystemsSnapshot>('/systems/overview').then((r) => r.data),
-  funnel: (window = '24h') =>
+  overview: (window: SystemsWindow = '24h') =>
+    api.get<SystemsSnapshot>(`/systems/overview?window=${window}`).then((r) => r.data),
+  funnel: (window: SystemsWindow = '24h') =>
     api.get<FunnelStats>(`/systems/funnel?window=${window}`).then((r) => r.data),
+  stage: (id: string, window: SystemsWindow = '24h', limit = 20) =>
+    api
+      .get<StageDetail>(`/systems/stage/${id}?window=${window}&limit=${limit}`)
+      .then((r) => r.data),
 };
 
 // ── Decision trace ────────────────────────────────────────────────────────────

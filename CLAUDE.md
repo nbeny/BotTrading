@@ -80,11 +80,23 @@ them through. Verification lives in `services/control-api/app/turnstile.py`.
 
 ✅ **Read plane — built & contract-verified.** api-gateway now also serves the full frontend read
 plane from `app/read_api.py` (mounted at root): `/portfolio*`, `/market/*`, `/risk/*`, `/data/*`,
-`/trace/{cid}`, `/systems/overview` (plus the original `/api/v1/{opportunities,decisions,trades}`).
+`/trace/{cid}`, `/systems/overview?window=`, `/systems/stage/{id}` (plus the original
+`/api/v1/{opportunities,decisions,trades}`).
 Response shapes are locked to the TS contract by a manifest (`app/read_contract.py`) enforced by an
 offline parity test (`tests/test_read_contract.py`) and a live harness (`scripts/verify_read_live.py`).
 Every frontend read path has a matching route; live mode is wired. See
 `memory/web-terminal-backend-gap.md` and `memory/control-api-owns-frontend-control.md`.
+
+**Pipeline graph (`app/systems_pipeline.py`).** Each of the 7 Command Center stages reports a
+windowed volume counted from **Postgres** (not Prometheus — those counters reset on restart and
+round to 0 at low volume), reusing `funnel.py`'s stage predicates verbatim so the graph and the
+Entonnoir can never disagree. `throughput_per_min` stays Prometheus-derived and is **nullable**.
+The rule the whole panel is built on: **an unknown value is `null` and renders `—`; a measured zero
+renders as words.** Conflating the two is what made the graph read as a dead pipeline for months —
+`health_collector.py` scraped `events_consumed_total` while the counters are `cmi_events_consumed_total`,
+so "not measured" was served as a confident `0`. Metric names are now shared constants in
+`cmi_common.observability`. Aggregates sit behind a 30s TTL cache; a failed query reports stale or
+unknown, never zero.
 
 **Deployment:** `docker-compose.vps.yml` + `.github/workflows/deploy.yml` build every service to
 GHCR and auto-deploy to the Hostinger VPS behind the shared Traefik on push to `master`

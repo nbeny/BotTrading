@@ -44,9 +44,15 @@ class StageSpec:
 
 STAGE_SPECS: tuple[StageSpec, ...] = (
     StageSpec(
-        "collect", "Collecte", "Marché · Social · News",
-        ("collector-coingecko", "collector-dexscreener",
-         "collector-social", "collector-news"),
+        "collect",
+        "Collecte",
+        "Marché · Social · News",
+        (
+            "collector-coingecko",
+            "collector-dexscreener",
+            "collector-social",
+            "collector-news",
+        ),
     ),
     StageSpec("sentiment", "Sentiment", "Scoring L1", ("sentiment-service",)),
     StageSpec("triage", "Triage", "Haiku", ("ai-worker-haiku",)),
@@ -435,54 +441,87 @@ def _item(at, symbol, summary, detail, correlation_id=None) -> dict:
 
 
 def content_item(row) -> dict:
-    return _item(row.fetched_at, (row.symbols or [None])[0], summarize_content(row),
-                 {"source": row.source, "kind": row.kind, "url": row.url})
+    return _item(
+        row.fetched_at,
+        (row.symbols or [None])[0],
+        summarize_content(row),
+        {"source": row.source, "kind": row.kind, "url": row.url},
+    )
 
 
 def scored_item(row) -> dict:
-    return _item(row.scored_at, (row.symbols or [None])[0], summarize_scored(row),
-                 {"score": row.sentiment_score, "model": row.sentiment_model})
+    return _item(
+        row.scored_at,
+        (row.symbols or [None])[0],
+        summarize_scored(row),
+        {"score": row.sentiment_score, "model": row.sentiment_model},
+    )
 
 
 def signal_item(row) -> dict:
     return _item(
-        row.time, row.symbol, summarize_signal(row),
-        {"score": row.opportunity_score, "confidence": row.confidence,
-         "factors_present": row.factors_present, "block_reason": row.block_reason},
+        row.time,
+        row.symbol,
+        summarize_signal(row),
+        {
+            "score": row.opportunity_score,
+            "confidence": row.confidence,
+            "factors_present": row.factors_present,
+            "block_reason": row.block_reason,
+        },
         (row.payload or {}).get("correlation_id"),
     )
 
 
 def journal_item(row) -> dict:
     return _item(
-        row.time, row.symbol, summarize_journal(row),
-        {"score": row.score, "sonnet_score": row.sonnet_score,
-         "sonnet_validated": row.sonnet_validated, "skip_reason": row.skip_reason},
+        row.time,
+        row.symbol,
+        summarize_journal(row),
+        {
+            "score": row.score,
+            "sonnet_score": row.sonnet_score,
+            "sonnet_validated": row.sonnet_validated,
+            "skip_reason": row.skip_reason,
+        },
         row.correlation_id,
     )
 
 
 def decision_item(row) -> dict:
     return _item(
-        row.created_at, row.symbol, summarize_decision(row),
-        {"direction": row.direction, "score": row.opportunity_score,
-         "ai_validated": row.ai_validated},
+        row.created_at,
+        row.symbol,
+        summarize_decision(row),
+        {
+            "direction": row.direction,
+            "score": row.opportunity_score,
+            "ai_validated": row.ai_validated,
+        },
         row.correlation_id,
     )
 
 
 def approved_item(row) -> dict:
     return _item(
-        row.created_at, row.symbol, summarize_approved(row),
-        {"size_pct": row.position_size_pct, "stop_loss": row.stop_loss,
-         "take_profit": row.take_profit, "rr": row.risk_reward_ratio},
+        row.created_at,
+        row.symbol,
+        summarize_approved(row),
+        {
+            "size_pct": row.position_size_pct,
+            "stop_loss": row.stop_loss,
+            "take_profit": row.take_profit,
+            "rr": row.risk_reward_ratio,
+        },
         row.correlation_id,
     )
 
 
 def trade_item(row) -> dict:
     return _item(
-        row.created_at, row.symbol, summarize_trade(row),
+        row.created_at,
+        row.symbol,
+        summarize_trade(row),
         {"status": row.status, "fill_price": row.fill_price, "pnl": row.pnl},
         row.correlation_id,
     )
@@ -577,19 +616,24 @@ async def _detail_sentiment(ctx) -> tuple[list[dict], list[dict]]:
 async def _detail_triage(ctx) -> tuple[list[dict], list[dict]]:
     rows = await ctx.rows(Signal, Signal.time, Signal.time >= ctx.since)
     breakdown = await _grouped(
-        ctx.session, Signal.block_reason,
-        Signal.time >= ctx.since, Signal.escalated.is_(False),
+        ctx.session,
+        Signal.block_reason,
+        Signal.time >= ctx.since,
+        Signal.escalated.is_(False),
     )
     return [signal_item(r) for r in rows], breakdown
 
 
 async def _detail_senior(ctx) -> tuple[list[dict], list[dict]]:
     rows = await ctx.rows(
-        DecisionJournal, DecisionJournal.time,
-        DecisionJournal.time >= ctx.since, DecisionJournal.sonnet_called.is_(True),
+        DecisionJournal,
+        DecisionJournal.time,
+        DecisionJournal.time >= ctx.since,
+        DecisionJournal.sonnet_called.is_(True),
     )
     breakdown = await _grouped(
-        ctx.session, DecisionJournal.skip_reason,
+        ctx.session,
+        DecisionJournal.skip_reason,
         DecisionJournal.time >= ctx.since,
         DecisionJournal.escalated.is_(True),
         DecisionJournal.sonnet_called.is_(False),
@@ -613,8 +657,10 @@ async def _detail_risk(ctx) -> tuple[list[dict], list[dict]]:
 
 async def _detail_execute(ctx) -> tuple[list[dict], list[dict]]:
     rows = await ctx.rows(
-        Trade, Trade.created_at,
-        Trade.created_at >= ctx.since, Trade.status.in_(EXECUTED_STATUSES),
+        Trade,
+        Trade.created_at,
+        Trade.created_at >= ctx.since,
+        Trade.status.in_(EXECUTED_STATUSES),
     )
     breakdown = await _grouped(ctx.session, Trade.status, Trade.created_at >= ctx.since)
     return [trade_item(r) for r in rows], breakdown

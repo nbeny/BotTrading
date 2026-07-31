@@ -5,7 +5,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import httpx
+import pytest
 from service_modules import load_service_module
+
+from cmi_common.sources import RateLimitedError
 
 mapper = load_service_module("collector-kraken", "domain.mapper")
 parse_depth = mapper.parse_depth
@@ -92,3 +96,63 @@ def test_parse_depth_returns_none_on_one_sided_book():
 
 def test_parse_depth_returns_none_on_missing_result():
     assert parse_depth({"error": [], "result": {}}, symbol="BTC") is None
+
+
+kraken = load_service_module("collector-kraken", "infrastructure.kraken")
+KrakenPublicClient = kraken.KrakenPublicClient
+
+
+def _client(handler):
+    c = KrakenPublicClient()
+    c._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return c
+
+
+@pytest.mark.asyncio
+async def test_ohlc_returns_the_payload_on_success():
+    def handler(request):
+        assert request.url.params["interval"] == "60"
+        return httpx.Response(200, json={"error": [], "result": {"X": [OHLC_ROW]}})
+
+    client = _client(handler)
+    payload = await client.ohlc("XXBTZUSD", interval_minutes=60)
+    assert payload["result"]["X"] == [OHLC_ROW]
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_ohlc_raises_rate_limited_on_error_array_despite_http_200():
+    """Kraken signals throttling in the body, not the status code."""
+
+    def handler(request):
+        return httpx.Response(
+            200, json={"error": ["EAPI:Rate limit exceeded"], "result": {}}
+        )
+
+    client = _client(handler)
+    with pytest.raises(RateLimitedError):
+        await client.ohlc("XXBTZUSD", interval_minutes=60)
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_ohlc_raises_on_a_non_ratelimit_error_array():
+    def handler(request):
+        return httpx.Response(200, json={"error": ["EQuery:Unknown asset pair"]})
+
+    client = _client(handler)
+    with pytest.raises(ValueError, match="Unknown asset pair"):
+        await client.ohlc("NOPE", interval_minutes=60)
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_ohlc_raises_rate_limited_on_http_429():
+    def handler(request):
+        return httpx.Response(429, headers={"Retry-After": "17"}, json={})
+
+    client = _client(handler)
+    with pytest.raises(RateLimitedError) as exc:
+        await client.ohlc("XXBTZUSD", interval_minutes=60)
+    assert exc.value.retry_after == 17
+    await client.close()

@@ -62,6 +62,24 @@ function ItemRow({ item, now, onTrace }: { item: StageItem; now: number; onTrace
   );
 }
 
+/**
+ * `dropped` counts two different things depending on the stage, so one label
+ * cannot be honest for all of them: items refused here, or items still waiting.
+ * Sentiment's number is the unscored backlog and Analyse's is the escalations
+ * Sonnet never got to on its hourly budget — calling either "Rejetés" would put
+ * a true number under a false heading, which is the whole failure this panel was
+ * rebuilt to stop. `collect` has no drop notion at all, so it shows nothing.
+ */
+const DROPPED_LABEL: Record<string, string | undefined> = {
+  collect: undefined,
+  sentiment: 'En attente',
+  triage: 'Non escaladés',
+  senior: 'Budget Sonnet',
+  decision: 'Rejetés',
+  risk: 'Rejetés',
+  execute: 'Échoués',
+};
+
 export function StageDetailDrawer({
   stageId,
   window,
@@ -128,14 +146,16 @@ export function StageDetailDrawer({
                 {fmtNum(data.volume, 0)}
               </Typography>
             </Box>
-            <Box>
-              <Typography variant="caption" color="text.secondary">
-                Rejetés
-              </Typography>
-              <Typography className="mono" sx={{ fontWeight: 700, fontSize: 22 }}>
-                {fmtNum(data.dropped, 0)}
-              </Typography>
-            </Box>
+            {DROPPED_LABEL[data.id] && (
+              <Box>
+                <Typography variant="caption" color="text.secondary">
+                  {DROPPED_LABEL[data.id]}
+                </Typography>
+                <Typography className="mono" sx={{ fontWeight: 700, fontSize: 22 }}>
+                  {fmtNum(data.dropped, 0)}
+                </Typography>
+              </Box>
+            )}
           </Stack>
 
           {data.breakdown.length > 0 && (

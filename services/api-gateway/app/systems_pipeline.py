@@ -497,8 +497,12 @@ async def _grouped(session, col, *where) -> list[dict]:
             select(col, func.count()).where(and_(*where)).group_by(col)
         )
     ).all()
+    # A NULL group is a real bucket — rows that carry no reason — but rendering
+    # it as the literal "None" in a French drawer dresses an absence up as a
+    # category. `skip_reason` is nullable and this is the one grouped column
+    # that can be NULL today.
     return [
-        {"key": str(k), "count": int(c)}
+        {"key": "non renseigné" if k is None else str(k), "count": int(c)}
         for k, c in sorted(rows, key=lambda r: r[1], reverse=True)
     ]
 
@@ -546,9 +550,8 @@ async def _detail_collect(ctx) -> tuple[list[dict], list[dict]]:
     breakdown = await _grouped(
         ctx.session, RawContent.source, RawContent.fetched_at >= ctx.since_aware
     )
-    breakdown.append(
-        {"key": "prices", "count": await _count(ctx.session, Price, Price.time >= ctx.since)}
-    )
+    prices = await _count(ctx.session, Price, Price.time >= ctx.since)
+    breakdown.append({"key": "prices", "count": prices})
     return [content_item(r) for r in rows], breakdown
 
 
@@ -586,7 +589,9 @@ async def _detail_senior(ctx) -> tuple[list[dict], list[dict]]:
 
 
 async def _detail_decision(ctx) -> tuple[list[dict], list[dict]]:
-    rows = await ctx.rows(Decision, Decision.created_at, Decision.created_at >= ctx.since)
+    rows = await ctx.rows(
+        Decision, Decision.created_at, Decision.created_at >= ctx.since
+    )
     breakdown = await _rejection_breakdown(ctx.session, "decision_engine", ctx.since)
     return [decision_item(r) for r in rows], breakdown
 

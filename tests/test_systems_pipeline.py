@@ -444,3 +444,20 @@ def test_every_catalog_stage_has_a_detail_builder() -> None:
     """A stage in the graph with no builder would open an empty drawer, which
     reads exactly like a stage nothing ever crossed."""
     assert set(sp.STAGE_IDS) == set(sp.DETAIL_BUILDERS)
+
+
+async def test_a_null_group_key_is_labelled_rather_than_rendered_as_none() -> None:
+    """`skip_reason` is nullable, so the senior drawer can group NULL rows.
+    Rendering that bucket as the literal "None" would put a Python repr in a
+    French UI and dress an absence up as a named category."""
+
+    class _Res:
+        def all(self):
+            return [(None, 4), ("budget", 6)]
+
+    class _S:
+        async def execute(self, _stmt):
+            return _Res()
+
+    out = await sp._grouped(_S(), sp.DecisionJournal.skip_reason)
+    assert out == [{"key": "budget", "count": 6}, {"key": "non renseigné", "count": 4}]

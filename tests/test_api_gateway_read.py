@@ -282,17 +282,34 @@ class _Result:
 
 
 class _FakeSession:
+    """Replays canned results positionally, and records which tables were read.
+
+    The positional replay is table-agnostic, so a query pointed at the wrong
+    model still gets handed the right-looking result — mutation testing during
+    the T6 and T8 reviews confirmed such a swap goes undetected on values alone.
+    `tables` is what lets a test assert *where* the data came from, not only
+    what came back.
+    """
+
     def __init__(self, results):
         self._results = list(results)
+        self.tables: list[str] = []
 
-    async def execute(self, _stmt):
+    async def execute(self, stmt):
+        try:
+            self.tables.extend(sorted(t.name for t in stmt.get_final_froms()))
+        except Exception:  # raw text() statements have no resolvable froms
+            pass
         return self._results.pop(0)
 
 
-def _client(results) -> TestClient:
+def _client(results, capture: list | None = None) -> TestClient:
     api = FastAPI()
     api.include_router(read_api.router)
-    api.dependency_overrides[get_session_dep] = lambda: _FakeSession(results)
+    session = _FakeSession(results)
+    if capture is not None:
+        capture.append(session)
+    api.dependency_overrides[get_session_dep] = lambda: session
     return TestClient(api)
 
 
@@ -760,9 +777,11 @@ def test_endpoint_systems_stage_decision_wiring() -> None:
         confidence=0.66, ai_validated=True, correlation_id="corr-77",
     )
     rejection_rows = [("score 12 too low", 3), ("score 45 too low", 2)]
+    sessions: list = []
     client = _client(
         stage_count_queries
-        + [_Result(rows=[decision_row]), _Result(rows=rejection_rows)]
+        + [_Result(rows=[decision_row]), _Result(rows=rejection_rows)],
+        capture=sessions,
     )
     r = client.get("/systems/stage/decision")
     assert r.status_code == 200
@@ -777,6 +796,10 @@ def test_endpoint_systems_stage_decision_wiring() -> None:
     assert item["detail"] == {"direction": "short", "score": 55, "ai_validated": True}
     # "score 12 too low" and "score 45 too low" collapse into one bucket.
     assert body["breakdown"] == [{"key": "score N too low", "count": 5}]
+    # Where the drawer read from, not just what it returned. Values alone cannot
+    # catch a builder pointed at the wrong model: the fake replays results
+    # positionally, so a swap still receives a plausible row.
+    assert sessions[0].tables[-2:] == ["decisions", "pipeline_rejections"]
 
 
 def test_endpoint_market_news_wiring() -> None:

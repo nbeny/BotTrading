@@ -18,10 +18,7 @@ from datetime import UTC, datetime
 from sqlalchemy.dialects.postgresql import insert
 
 from cmi_common.db import Database, ServiceHealth
-from cmi_common.observability.metrics import (
-    EVENTS_CONSUMED_METRIC,
-    EVENTS_PRODUCED_METRIC,
-)
+from cmi_common.observability import EVENTS_CONSUMED_METRIC, EVENTS_PRODUCED_METRIC
 
 logger = logging.getLogger(__name__)
 

@@ -12,7 +12,12 @@ from __future__ import annotations
 from prometheus_client import REGISTRY, generate_latest
 from service_modules import load_service_module
 
-from cmi_common.observability import EVENTS_CONSUMED, EVENTS_PRODUCED
+from cmi_common.observability import (
+    EVENTS_CONSUMED,
+    EVENTS_CONSUMED_METRIC,
+    EVENTS_PRODUCED,
+    EVENTS_PRODUCED_METRIC,
+)
 
 health_collector = load_service_module("api-gateway", "health_collector")
 
@@ -38,11 +43,6 @@ def test_throughput_is_derived_from_the_real_counter_names() -> None:
 
 
 def test_counter_name_constants_match_the_exposed_samples() -> None:
-    from cmi_common.observability import (
-        EVENTS_CONSUMED_METRIC,
-        EVENTS_PRODUCED_METRIC,
-    )
-
     scraped = _scrape()
     assert EVENTS_CONSUMED_METRIC in scraped
     assert EVENTS_PRODUCED_METRIC in scraped

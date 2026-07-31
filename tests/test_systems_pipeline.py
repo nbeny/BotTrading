@@ -192,7 +192,8 @@ class _Recorder:
 async def test_a_second_poll_inside_the_ttl_does_not_query_again() -> None:
     fetch = _Recorder({"triage": sp.StageCounts(volume=7)})
     first, stale = await sp.stage_counts_cached(None, "24h", now=0.0, fetch=fetch)
-    second, _ = await sp.stage_counts_cached(None, "24h", now=20.0, fetch=fetch)
+    inside = sp.CACHE_TTL_S / 2
+    second, _ = await sp.stage_counts_cached(None, "24h", now=inside, fetch=fetch)
     assert fetch.calls == 1
     assert first == second
     assert stale is False
@@ -201,7 +202,7 @@ async def test_a_second_poll_inside_the_ttl_does_not_query_again() -> None:
 async def test_the_cache_expires_after_its_ttl() -> None:
     fetch = _Recorder({"triage": sp.StageCounts(volume=7)})
     await sp.stage_counts_cached(None, "24h", now=0.0, fetch=fetch)
-    await sp.stage_counts_cached(None, "24h", now=31.0, fetch=fetch)
+    await sp.stage_counts_cached(None, "24h", now=sp.CACHE_TTL_S + 1, fetch=fetch)
     assert fetch.calls == 2
 
 
@@ -216,7 +217,9 @@ async def test_a_failed_query_serves_the_last_good_value_marked_stale() -> None:
     good = _Recorder({"triage": sp.StageCounts(volume=7)})
     await sp.stage_counts_cached(None, "24h", now=0.0, fetch=good)
     broken = _Recorder(None, fail=True)
-    counts, stale = await sp.stage_counts_cached(None, "24h", now=100.0, fetch=broken)
+    counts, stale = await sp.stage_counts_cached(
+        None, "24h", now=sp.CACHE_TTL_S * 10, fetch=broken
+    )
     assert stale is True
     assert counts["triage"].volume == 7
 

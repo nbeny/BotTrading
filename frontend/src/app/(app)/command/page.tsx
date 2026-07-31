@@ -43,7 +43,9 @@ export default function CommandCenterPage() {
   const systems = useQuery({
     queryKey: ['systems', 'overview', range],
     queryFn: () => systemsApi.overview(range),
-    refetchInterval: 8000,
+    // Matches the server-side aggregate cache, so a poll lands on fresh counts
+    // rather than re-reading the same cached snapshot the previous one saw.
+    refetchInterval: 5000,
   });
 
   return (

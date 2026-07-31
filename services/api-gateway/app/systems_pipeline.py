@@ -154,9 +154,15 @@ def build_pipeline_stages(
 logger = logging.getLogger(__name__)
 
 # /systems/overview is polled every 8s by every open terminal and these
-# aggregates scan four tables. 30s of staleness on a volume counter is invisible
-# to an operator; a fourfold query amplification is not.
-CACHE_TTL_S = 30.0
+# aggregates scan four tables, so they are coalesced behind a short cache.
+#
+# 5s rather than the original 30s: the graph now colours each stage by how much
+# crossed it, and at 30s those colours barely moved — a panel that advertises
+# live activity while showing a half-minute-old picture is its own small lie.
+# The cache still does its real job, because it coalesces *across* terminals:
+# however many are open, the aggregates run at most once per interval, so this
+# costs at most 12 query rounds a minute instead of 2, not one per viewer.
+CACHE_TTL_S = 5.0
 
 
 class _StageCache:

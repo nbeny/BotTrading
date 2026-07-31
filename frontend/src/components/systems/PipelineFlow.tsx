@@ -1,13 +1,67 @@
 'use client';
 
+import { useEffect, useRef, useState } from 'react';
 import { Box, Stack, Tooltip, Typography } from '@mui/material';
-import { HEALTH_COLOR, HealthDot } from './common';
+import { HealthDot } from './common';
 import { HEALTH_LABEL, type PipelineStage } from '@/lib/types/systems';
 import { fmtConversion, fmtNum, fmtRate, fmtRelative } from '@/lib/format';
+import {
+  activityColor,
+  activityRatio,
+  activityRgb,
+  busiestVolume,
+  rgba,
+  STAGE_BY_EVENT,
+} from '@/lib/activity';
+import { useEventSubscription } from '@/lib/ws/WebSocketProvider';
 
 /** Below this, a stage-to-stage survival rate is a collapse worth flagging. */
 const CONVERSION_ALERT_THRESHOLD = 10;
 const ALERT_COLOR = '#ff5370';
+
+/** How long a stage stays lit after an event lands on it. */
+const PULSE_DECAY_MS = 1400;
+/** Fast enough to read as a flicker rather than a blink. */
+const PULSE_TICK_MS = 90;
+
+/**
+ * Live brightness per stage, fed by the broadcast WebSocket and decaying on its
+ * own.
+ *
+ * The counted volumes underneath refresh every few seconds; this is what makes
+ * the graph feel like it is running *now*. It only ever adds brightness — a
+ * stage with no live events still shows its counted colour, because several
+ * stages are invisible on the wire (see STAGE_BY_EVENT) and none of them may
+ * look dead for that reason.
+ */
+function useStagePulses(): Record<string, number> {
+  const lastSeen = useRef<Record<string, number>>({});
+  const [pulses, setPulses] = useState<Record<string, number>>({});
+
+  useEventSubscription([], (event) => {
+    const stage = STAGE_BY_EVENT[event.event_type];
+    if (stage) lastSeen.current[stage] = Date.now();
+  });
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      const now = Date.now();
+      const next: Record<string, number> = {};
+      for (const [stage, at] of Object.entries(lastSeen.current)) {
+        const value = Math.max(0, 1 - (now - at) / PULSE_DECAY_MS);
+        if (value > 0) next[stage] = value;
+      }
+      // Returning the previous object when nothing is fading keeps an idle
+      // graph from re-rendering seven nodes ten times a second.
+      setPulses((prev) =>
+        Object.keys(next).length || Object.keys(prev).length ? next : prev,
+      );
+    }, PULSE_TICK_MS);
+    return () => clearInterval(id);
+  }, []);
+
+  return pulses;
+}
 
 function Connector({ nextStage }: { nextStage: PipelineStage }) {
   const conversionText = fmtConversion(nextStage.conversion_pct);
@@ -73,14 +127,23 @@ function Node({
   stage,
   index,
   now,
+  ratio,
+  pulse,
   onSelect,
 }: {
   stage: PipelineStage;
   index: number;
   now: number;
+  ratio: number;
+  pulse: number;
   onSelect: (id: string) => void;
 }) {
-  const color = HEALTH_COLOR[stage.status];
+  // The body colours activity, not health: "is this process up?" is what the
+  // dot below and the health rail already answer, and it left every working
+  // stage looking identical to every other one.
+  const color = activityColor(ratio, pulse);
+  const rgb = activityRgb(ratio, pulse);
+  const lit = ratio > 0;
   // 0 is a measured, meaningful "nothing happened" — it must read as a
   // sentence, not as a bare digit indistinguishable from "not measured".
   const volumeText = stage.volume === 0 ? 'aucun élément' : fmtNum(stage.volume, 0);
@@ -95,7 +158,10 @@ function Node({
 
   return (
     <Tooltip
-      title={`${stage.label} — ${HEALTH_LABEL[stage.status]} · ${fmtRate(stage.throughput_per_min)}`}
+      title={
+        `${stage.label} — ${HEALTH_LABEL[stage.status]} · ${fmtRate(stage.throughput_per_min)}` +
+        (lit ? ` · ${Math.round(ratio * 100)}% de l’étape la plus active` : " · aucune activité")
+      }
     >
       <Box
         role="button"
@@ -115,12 +181,15 @@ function Node({
           justifyContent: 'space-between',
           position: 'relative',
           cursor: 'pointer',
-          background: `linear-gradient(160deg, ${color}1a, rgba(255,255,255,0.02))`,
-          border: `1px solid ${color}40`,
-          boxShadow: `0 0 0 1px ${color}10, 0 8px 24px rgba(0,0,0,0.35)`,
-          transition: 'border-color .16s ease, transform .16s ease, box-shadow .16s ease',
+          background: `linear-gradient(160deg, ${rgba(rgb, 0.10 + ratio * 0.22)}, rgba(255,255,255,0.02))`,
+          border: `1px solid ${rgba(rgb, lit ? 0.30 + ratio * 0.45 : 0.22)}`,
+          // The glow is the live half of the signal: it swells as an event
+          // lands and fades with the pulse, so a busy stage visibly flickers
+          // while a quiet one just sits at its counted colour.
+          boxShadow: `0 0 ${8 + pulse * 26}px ${rgba(rgb, pulse * 0.5)}, 0 8px 24px rgba(0,0,0,0.35)`,
+          transition: 'background .25s ease, border-color .25s ease, transform .16s ease',
           '&:hover': {
-            borderColor: `${color}80`,
+            borderColor: rgba(rgb, 0.85),
             transform: 'translateY(-2px)',
           },
           '&:focus-visible': {
@@ -181,6 +250,11 @@ export function PipelineFlow({ stages, onSelect }: { stages: PipelineStage[]; on
   // One clock for the whole row — per-node `Date.now()` would make sibling
   // "il y a Xm" ages disagree from render to render.
   const now = Date.now();
+  const pulses = useStagePulses();
+  // Intensity is relative to the busiest stage in this same snapshot, so the
+  // row answers "where is the work happening" rather than "how big are these
+  // numbers in the abstract".
+  const busiest = busiestVolume(stages);
   return (
     <Box
       sx={{
@@ -199,7 +273,14 @@ export function PipelineFlow({ stages, onSelect }: { stages: PipelineStage[]; on
     >
       {stages.map((stage, i) => (
         <Box key={stage.id} sx={{ display: 'flex', alignItems: 'center' }}>
-          <Node stage={stage} index={i} now={now} onSelect={onSelect} />
+          <Node
+            stage={stage}
+            index={i}
+            now={now}
+            ratio={activityRatio(stage.volume, busiest)}
+            pulse={pulses[stage.id] ?? 0}
+            onSelect={onSelect}
+          />
           {i < stages.length - 1 && <Connector nextStage={stages[i + 1]} />}
         </Box>
       ))}

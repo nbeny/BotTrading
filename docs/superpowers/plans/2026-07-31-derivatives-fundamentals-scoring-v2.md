@@ -348,9 +348,18 @@ DEFAULT_MIN_MENTIONS = 10
 
 
 def majors(
-    symbols: set[str], mentions: dict[str, int], min_mentions: int
+    symbols: set[str],
+    mentions: dict[str, int],
+    *,
+    min_mentions: int = DEFAULT_MIN_MENTIONS,
 ) -> set[str]:
-    """The subset with enough sentiment coverage to fuse on."""
+    """Symbols with enough sentiment coverage to fuse on.
+
+    Which is also, and this is why the definition is shared, the set worth
+    spending per-symbol API budget on: collector-binance-futures pays one open
+    interest call and one long/short call per major, so the threshold decides
+    the request bill as much as it decides the strategy.
+    """
     return {s for s in symbols if mentions.get(s, 0) >= min_mentions}
 
 
@@ -390,7 +399,33 @@ __all__ = [
 ]
 ```
 
-Delete the local `DEFAULT_MIN_MENTIONS = 10` definition — it now comes from the shared module. Keep `intersect`, `split_regimes`, `ambiguous_symbols`, `untradable` and `token_symbol_ranks` where they are: they depend on `VenuePairSpec` or on the `Token` table and are Kraken's business.
+Delete the local `DEFAULT_MIN_MENTIONS = 10` definition — it now comes from the shared module. Keep `intersect`, `ambiguous_symbols`, `untradable` and `token_symbol_ranks` where they are: they depend on `VenuePairSpec` or on the `Token` table and are Kraken's business.
+
+**`split_regimes` stays in this file but must delegate to `majors()`.** Leaving it with its own
+copy of the predicate would mean this task creates a second definition of the very rule it
+exists to de-duplicate — and the shared one would serve only a consumer that does not exist
+yet, while the real consumer kept its own:
+
+```python
+def split_regimes(
+    specs: list[VenuePairSpec],
+    *,
+    mentions: dict[str, int],
+    min_mentions: int = DEFAULT_MIN_MENTIONS,
+) -> tuple[list[VenuePairSpec], list[VenuePairSpec]]:
+    """(majors, alts) — majors are sentiment-covered enough to fuse on."""
+    major_symbols = majors(
+        {s.symbol for s in specs}, mentions, min_mentions=min_mentions
+    )
+    return (
+        [s for s in specs if s.symbol in major_symbols],
+        [s for s in specs if s.symbol not in major_symbols],
+    )
+```
+
+The signature is unchanged, so `tests/test_kraken_universe.py` must stay green untouched. Add
+`majors` to both the import and `__all__`. This also removes the local `majors` list variable,
+which would otherwise shadow the imported name.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
@@ -2462,7 +2497,11 @@ class _Universe:
             mentions = await mention_counts(session)
         # Ambiguity is Kraken's venue-pair concern; nothing here can resolve a
         # ticker collision, so the set stays empty until a shared source exists.
-        self._value = (priced, majors(priced, mentions, MIN_MENTIONS), set())
+        self._value = (
+            priced,
+            majors(priced, mentions, min_mentions=MIN_MENTIONS),
+            set(),
+        )
         self._loaded_at = loop.time()
 
     def get(self) -> tuple[set[str], set[str], set[str]]:

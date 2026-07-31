@@ -1116,9 +1116,12 @@ async def test_fetching_an_unlock_caches_the_extraction_not_the_body() -> None:
     await _client(handler, cache).unlock("aave", "aave")
     key, value, ttl = cache.writes[0]
     assert key == "defillama:unlock:aave"
+    # Pinning the value exactly is what proves the 2.25 MB body was discarded:
+    # any leakage of documentedData or the raw events would fail this equality.
+    # (An additional `"documentedData" not in str(value)` would be vacuous —
+    # the equality above already forecloses it.)
     assert value == {"at": None, "pct_supply": None}
     assert ttl == client_mod.UNLOCK_TTL_SECONDS
-    assert "documentedData" not in str(value)
 
 
 async def test_a_failed_unlock_fetch_returns_absent_without_raising() -> None:

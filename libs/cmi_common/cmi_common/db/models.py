@@ -62,30 +62,6 @@ class Price(Base):
     __table_args__ = (Index("ix_prices_symbol_time", "symbol", "time"),)
 
 
-class News(Base, TimestampMixin):
-    __tablename__ = "news"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    article_id: Mapped[str] = mapped_column(String(128), unique=True)
-    title: Mapped[str] = mapped_column(Text)
-    url: Mapped[str] = mapped_column(Text)
-    source_name: Mapped[str] = mapped_column(String(128))
-    published_at: Mapped[int] = mapped_column(BigInteger)
-    symbols: Mapped[list] = mapped_column(JSONB, default=list)
-    provider_sentiment: Mapped[float | None] = mapped_column(Float)
-
-
-class Sentiment(Base):
-    __tablename__ = "sentiments"
-
-    time: Mapped[datetime] = mapped_column(primary_key=True)
-    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
-    input_kind: Mapped[str] = mapped_column(String(16), primary_key=True)
-    sentiment_score: Mapped[float] = mapped_column(Float)
-    confidence: Mapped[float] = mapped_column(Float)
-    model_name: Mapped[str] = mapped_column(String(128))
-
-
 class Signal(Base):
     """Intermediate opportunity signals (analysis outputs) -> hypertable."""
 

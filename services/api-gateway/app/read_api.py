@@ -29,7 +29,6 @@ from cmi_common.db import (
     AccountSnapshot,
     Decision,
     Price,
-    Sentiment,
     ServiceHealth,
     Signal,
     Token,
@@ -1125,8 +1124,8 @@ async def systems_overview(session: AsyncSession = Depends(get_session_dep)) -> 
     hour = _utcnow_naive() - timedelta(hours=1)  # naive time-series columns
     hour_aware = _utcnow() - timedelta(hours=1)  # raw_content.fetched_at is tz-aware
 
-    async def count(model, time_col) -> int:
-        return int((await session.execute(select(func.count()).select_from(model).where(time_col >= hour))).scalar_one())
+    async def count(model, time_col, cutoff=hour) -> int:
+        return int((await session.execute(select(func.count()).select_from(model).where(time_col >= cutoff))).scalar_one())
 
     coll_rows = (
         await session.execute(
@@ -1140,7 +1139,12 @@ async def systems_overview(session: AsyncSession = Depends(get_session_dep)) -> 
     snap["kafka"] = build_kafka(
         {
             "price.events": await count(Price, Price.time),
-            "sentiment.events": await count(Sentiment, Sentiment.time),
+            # raw_content.scored_at, not the `sentiments` table: that table never
+            # had a writer, so this panel reported a flat zero while
+            # sentiment-service was scoring thousands of rows.
+            "sentiment.events": await count(
+                RawContent, RawContent.scored_at, hour_aware
+            ),
             "analysis.events": await count(Signal, Signal.time),
             "decision.events": await count(Decision, Decision.created_at),
             "risk.approved.events": await count(Trade, Trade.created_at),

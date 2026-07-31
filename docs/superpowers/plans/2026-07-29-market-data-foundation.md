@@ -2332,25 +2332,38 @@ git commit -m "test(read-plane): assert data plausibility, not just response sha
 
 - [ ] **Step 1: Run the local gate**
 
-`make lint` cannot be the gate here: it runs `black --check libs services`, and ~40 files
-on `master` were already unformatted before this lot began (measured 2026-07-31). Gating on
-it would either block on unrelated debt or tempt a reformat-everything commit buried inside
-a feature branch. Gate on the surface this lot actually touches, plus the whole suite:
+`make lint` cannot be the gate, and it is worth being precise about why. Measured on
+`master` on 2026-07-31, before this lot existed: **111 ruff errors** and **42 files black
+would reformat**. All three of its stages already fail, so the target blocks nobody and
+"make lint is green" was never an achievable expected result — the plan claimed it anyway,
+which was wrong.
+
+The honest gate is therefore a **delta against `master`**, not an absolute clean:
 
 ```bash
-python -m ruff check libs services
-python -m black --check services/collector-kraken libs/cmi_common/cmi_common/sources/candles.py \
-  services/api-gateway/app/read_api.py services/api-gateway/app/persister.py \
-  scripts/verify_read_live.py tests/test_kraken_*.py tests/test_candle_reader.py \
-  tests/test_tokens_persistence.py
+# 1. No NEW ruff findings. Both numbers must match.
+python -m ruff check libs services 2>&1 | tail -1                      # this branch
+git -C <main-repo-path> stash list >/dev/null && \
+  (cd <main-repo-path> && python -m ruff check libs services 2>&1 | tail -1)   # master
+
+# 2. Every file this lot authored is black-clean (pre-existing files are exempt,
+#    and must NOT be reformatted here).
+python -m black --check services/collector-kraken \
+  libs/cmi_common/cmi_common/sources/candles.py \
+  tests/test_kraken_pairs.py tests/test_kraken_mapper.py \
+  tests/test_kraken_universe.py tests/test_kraken_sweeper.py \
+  tests/test_candle_reader.py tests/test_tokens_persistence.py
+
+# 3. Suite green, and strictly larger than the baseline.
 python -m pytest tests/ -q
 ```
 
-Expected: ruff clean, black clean on the listed files, suite green with no regression against
-the 558-test baseline this branch started from.
+Expected: identical ruff counts on both sides, black clean on the listed files, and the suite
+green above the 558-passed/2-skipped baseline this branch started from.
 
-Reformatting the pre-existing ~40 files is legitimate work, but it belongs in its own commit
-on its own branch — never mixed into a feature diff, where it would bury the real changes.
+Clearing the pre-existing ruff and black debt is legitimate work and would make `make lint`
+mean something again — but it belongs in its own commit on its own branch. Mixed into a
+feature diff it would bury every real change under hundreds of cosmetic lines.
 
 - [ ] **Step 2: Deploy**
 

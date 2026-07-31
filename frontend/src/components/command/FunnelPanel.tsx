@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Box, Chip, Stack, Typography } from '@mui/material';
 import { SectionCard, MiniBar } from '@/components/systems/common';
 import { systemsApi } from '@/lib/api/endpoints';
-import type { FunnelStage } from '@/lib/types/systems';
+import type { FunnelStage, SystemsWindow } from '@/lib/types/systems';
 
 const STAGE_LABEL: Record<string, string> = {
   analyses: 'Analyses (triage)',
@@ -38,10 +38,10 @@ function findBottleneck(stages: FunnelStage[]): number | null {
   return maxDrop > 0 ? idx : null;
 }
 
-export function FunnelPanel() {
+export function FunnelPanel({ window: w = '24h' }: { window?: SystemsWindow }) {
   const { data } = useQuery({
-    queryKey: ['systems', 'funnel'],
-    queryFn: () => systemsApi.funnel(),
+    queryKey: ['systems', 'funnel', w],
+    queryFn: () => systemsApi.funnel(w),
     refetchInterval: 30000,
   });
 

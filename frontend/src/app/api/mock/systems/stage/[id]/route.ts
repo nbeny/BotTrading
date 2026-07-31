@@ -89,6 +89,16 @@ const BUILDERS: Record<string, ItemBuilder> = {
       correlation_id: withCorrelation(i),
     };
   },
+  // Never actually invoked — `itemCount` below is forced to 0 for 'execute'
+  // (trading-engine executed nothing this window). But the lookup that
+  // guards the 404 needs a key present here, or the drawer's real empty
+  // state becomes unreachable and shows as "unknown stage" instead.
+  execute: (i, at) => ({
+    at, symbol: 'SOL',
+    summary: 'ordre exécuté',
+    detail: {},
+    correlation_id: null,
+  }),
 };
 
 // Breakdown per stage. `sentiment` mirrors the backend's fixed two-bucket

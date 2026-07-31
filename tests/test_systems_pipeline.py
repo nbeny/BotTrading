@@ -127,3 +127,46 @@ def test_execution_summary_omits_a_fill_it_does_not_have() -> None:
     row = SimpleNamespace(symbol="BTC", direction="long", status="submitted",
                           fill_price=None, pnl=None)
     assert sp.summarize_trade(row) == "BTC · long · submitted"
+
+
+def test_decision_summary_reads_confidence_as_a_fraction() -> None:
+    """`confidence` is written as 0..1 by decision-engine's scorer. Pinning the
+    rendering here is what would catch a future switch to a 0..100 scale, which
+    would otherwise ship as a confident "8100%" nobody notices until support
+    screenshots it."""
+    row = SimpleNamespace(symbol="SOL", direction="long", confidence=0.81)
+    assert sp.summarize_decision(row) == "SOL · long · confiance 81%"
+
+
+def test_approved_summary_reads_position_size_as_a_fraction() -> None:
+    """risk-engine writes a size fraction bounded by max_position_pct (0.05),
+    never a percentage — same factor-of-100 trap as confidence."""
+    row = SimpleNamespace(symbol="SOL", direction="long", position_size_pct=0.05)
+    assert sp.summarize_approved(row) == "SOL · long · taille 5.0%"
+
+
+def test_journal_summary_says_dash_where_sonnet_returned_nothing() -> None:
+    """Both columns are nullable: Sonnet can be budget-skipped after escalation,
+    which is the measured production bottleneck. A fabricated 0 would read as a
+    real verdict of zero."""
+    row = SimpleNamespace(symbol="SOL", sonnet_direction=None, sonnet_score=None)
+    assert sp.summarize_journal(row) == "SOL · Sonnet — · score —"
+
+
+def test_scored_summary_says_dash_where_the_model_abstained() -> None:
+    row = SimpleNamespace(source="reddit", sentiment_score=None)
+    assert sp.summarize_scored(row) == "reddit · sentiment —"
+
+
+def test_content_summary_truncates_a_long_title_rather_than_wrapping() -> None:
+    row = SimpleNamespace(source="rss", kind="news", title="x" * 80, text="")
+    out = sp.summarize_content(row)
+    assert out.startswith("rss · news · ")
+    assert out.endswith("…")
+    assert len(out.split(" · ")[-1]) == 61  # 60 chars plus the ellipsis
+
+
+def test_content_summary_falls_back_to_body_when_there_is_no_title() -> None:
+    row = SimpleNamespace(source="reddit", kind="social", title=None,
+                          text="BTC breaking 70k")
+    assert sp.summarize_content(row) == "reddit · social · BTC breaking 70k"

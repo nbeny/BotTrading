@@ -715,7 +715,7 @@ def test_parent_and_child_protocols_sum_into_one_event() -> None:
         known=KNOWN,
     )
     assert len(events) == 1
-    assert events[0].tvl_usd == Decimal("8000000")
+    assert events[0].tvl_usd == Decimal("5000000")
 
 
 def test_tvl_weighted_change_is_used_when_deployments_disagree() -> None:

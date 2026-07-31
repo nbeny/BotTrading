@@ -19,7 +19,13 @@ from .control import ControlCommand, ControlCommandEvent
 from .decision import DecisionEvent, Direction
 from .execution import ExecutionEvent, ExecutionKind
 from .journal import JournalEntryEvent
-from .market import DexEvent, PriceEvent, VolumeEvent
+from .market import (
+    DerivativesEvent,
+    DexEvent,
+    FundamentalsEvent,
+    PriceEvent,
+    VolumeEvent,
+)
 from .news import NewsEvent
 from .risk import RiskApprovedEvent, RiskRejectedEvent
 from .sentiment import SentimentEvent
@@ -37,6 +43,8 @@ AnyEvent = Annotated[
         PriceEvent
         | VolumeEvent
         | DexEvent
+        | DerivativesEvent
+        | FundamentalsEvent
         | NewsEvent
         | SocialEvent
         | SentimentEvent
@@ -72,11 +80,13 @@ __all__ = [
     "ControlCommand",
     "ControlCommandEvent",
     "DecisionEvent",
+    "DerivativesEvent",
     "DexEvent",
     "Direction",
     "EventType",
     "ExecutionEvent",
     "ExecutionKind",
+    "FundamentalsEvent",
     "JournalEntryEvent",
     "NewsEvent",
     "PriceEvent",

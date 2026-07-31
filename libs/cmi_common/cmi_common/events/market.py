@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
@@ -71,3 +72,52 @@ class DexEvent(BaseEvent):
 
     def partition_key(self) -> str:
         return self.pair_address
+
+
+class DerivativesEvent(BaseEvent):
+    """Perp positioning from Binance futures, on ``market.derivatives.events``.
+
+    Every field is nullable on purpose: the broad tier supplies funding for
+    every perp in one request, while open interest and the long/short ratio are
+    per-symbol calls made only for majors. A partial event is the normal case,
+    not a degraded one.
+    """
+
+    event_type: Literal[EventType.DERIVATIVES] = EventType.DERIVATIVES
+    symbol: str
+    #: Raw fraction as Binance returns it: 0.0001 == 0.01% per 8h period.
+    funding_rate_8h: float | None = None
+    funding_annualized_pct: float | None = None
+    open_interest_usd: Decimal | None = Field(default=None, ge=0)
+    open_interest_change_pct_24h: float | None = None
+    long_short_account_ratio: float | None = Field(default=None, gt=0)
+
+    def partition_key(self) -> str:
+        return self.symbol
+
+
+class FundamentalsEvent(BaseEvent):
+    """Protocol fundamentals and scheduled dilution, on
+    ``market.fundamentals.events``.
+
+    ``has_unlock_schedule`` is what keeps "no unlock is coming" distinct from
+    "DefiLlama does not track this token". Only a minority of tokens have a
+    published schedule, so collapsing the two would turn silence into a
+    reassurance the data does not support.
+    """
+
+    event_type: Literal[EventType.FUNDAMENTALS] = EventType.FUNDAMENTALS
+    symbol: str
+    coin_id: str
+    tvl_usd: Decimal | None = Field(default=None, ge=0)
+    tvl_change_pct_7d: float | None = None
+    fees_24h_usd: Decimal | None = Field(default=None, ge=0)
+    fees_change_pct_7d: float | None = None
+    #: None with ``has_unlock_schedule`` True means: schedule known, nothing
+    #: within the next 30 days.
+    next_unlock_at: datetime | None = None
+    next_unlock_pct_supply: float | None = Field(default=None, ge=0)
+    has_unlock_schedule: bool = False
+
+    def partition_key(self) -> str:
+        return self.symbol

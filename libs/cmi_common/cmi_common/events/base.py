@@ -29,6 +29,8 @@ class EventType(StrEnum):
     PRICE = "PriceEvent"
     VOLUME = "VolumeEvent"
     DEX = "DexEvent"
+    DERIVATIVES = "DerivativesEvent"
+    FUNDAMENTALS = "FundamentalsEvent"
     NEWS = "NewsEvent"
     SOCIAL = "SocialEvent"
     SENTIMENT = "SentimentEvent"
@@ -45,6 +47,8 @@ class EventType(StrEnum):
 class Source(StrEnum):
     COINGECKO = "coingecko"
     DEXSCREENER = "dexscreener"
+    DEFILLAMA = "defillama"
+    BINANCE_FUTURES = "binance-futures"
     CRYPTOCOMPARE = "cryptocompare"
     REDDIT = "reddit"
     TWITTER = "twitter"

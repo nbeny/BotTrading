@@ -120,6 +120,24 @@ def _assert_keys(name: str, obj: dict) -> None:
     assert not missing, f"{name} missing keys: {sorted(missing)}"
 
 
+def _assert_exact_keys(name: str, obj: dict) -> None:
+    """Like `_assert_keys`, but forbids extra keys too.
+
+    Used for the nested shapes the graph reads per node, where a field the
+    frontend has never heard of is drift just as much as a missing one.
+
+    Registration and assertion live in one call on purpose: a bare
+    `_ASSERTED.add(...)` next to a hand-written assert would let someone later
+    register an entry without enforcing it, and the meta-test below would still
+    report the manifest as fully covered.
+    """
+    _ASSERTED.add(name)
+    assert set(obj) == CONTRACT[name], (
+        f"{name}: missing {sorted(CONTRACT[name] - set(obj))}, "
+        f"unexpected {sorted(set(obj) - CONTRACT[name])}"
+    )
+
+
 # ── item-shape endpoints (pure mappers) ───────────────────────────────────────
 def test_market_tokens_contract() -> None:
     item = map_token(_price(), meta=SimpleNamespace(coin_id="bitcoin", name="BTC"),
@@ -217,21 +235,19 @@ def test_systems_overview_declares_the_pipeline_window_and_staleness() -> None:
 def test_pipeline_stage_shape_matches_the_contract() -> None:
     # Exact match, not _assert_keys' >=: an extra field the frontend does not
     # know about is drift too, and every node in the graph must carry it.
-    _ASSERTED.add("systems/overview.pipeline[]")
     snap = read_api.assemble_systems_snapshot([])
     assert len(snap["pipeline"]) == 7  # the static stage catalog, not DB rows
     for stage in snap["pipeline"]:
-        assert set(stage) == CONTRACT["systems/overview.pipeline[]"]
+        _assert_exact_keys("systems/overview.pipeline[]", stage)
 
 
 def test_stage_detail_item_shape_matches_the_contract() -> None:
-    _ASSERTED.add("systems/stage.items[]")
     row = SimpleNamespace(
         symbol="SOL", opportunity_score=72, confidence=0.8, factors_present=3,
         escalated=True, block_reason="unknown", time=NOW,
         payload={"correlation_id": "cid-1"},
     )
-    assert set(systems_pipeline.signal_item(row)) == CONTRACT["systems/stage.items[]"]
+    _assert_exact_keys("systems/stage.items[]", systems_pipeline.signal_item(row))
 
 
 async def test_systems_stage_contract() -> None:

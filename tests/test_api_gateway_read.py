@@ -18,6 +18,7 @@ from service_modules import load_service_module
 read_api = load_service_module("api-gateway", "read_api")
 _health_collector = load_service_module("api-gateway", "health_collector")
 _routers = load_service_module("api-gateway", "routers")
+systems_pipeline = load_service_module("api-gateway", "systems_pipeline")
 
 SERVICE_CATALOG = read_api.SERVICE_CATALOG
 assemble_systems_snapshot = read_api.assemble_systems_snapshot
@@ -576,6 +577,33 @@ def test_assemble_systems_snapshot() -> None:
     assert snap["summary"]["services_degraded"] == 1
 
 
+def _health(service, status="healthy", throughput=None):
+    detail = {} if throughput is None else {"throughput_per_min": throughput}
+    return SimpleNamespace(
+        service=service, status=status, healthy=status == "healthy",
+        latency_ms=3.0, detail=detail,
+    )
+
+
+def test_unmeasured_service_throughput_is_null_not_zero() -> None:
+    """A service whose /metrics has only been scraped once has no rate yet.
+    Reporting 0 there is what made the whole graph look dead."""
+    snap = read_api.assemble_systems_snapshot([_health("ai-worker-haiku")])
+    haiku = next(s for s in snap["services"] if s["id"] == "ai-worker-haiku")
+    assert haiku["throughput_per_min"] is None
+
+
+def test_overview_pipeline_carries_the_stage_counts_it_is_given() -> None:
+    counts = {"triage": systems_pipeline.StageCounts(volume=42, dropped=40)}
+    snap = read_api.assemble_systems_snapshot(
+        [_health("ai-worker-haiku", throughput=9)], counts=counts
+    )
+    triage = next(s for s in snap["pipeline"] if s["id"] == "triage")
+    assert triage["volume"] == 42
+    assert triage["dropped"] == 40
+    assert triage["throughput_per_min"] == 9
+
+
 _METRICS = """# HELP process_cpu_seconds_total Total user and system CPU time
 # TYPE process_cpu_seconds_total counter
 process_cpu_seconds_total 10.0
@@ -649,6 +677,10 @@ def test_build_infra_postgres() -> None:
 
 
 def test_endpoint_systems_overview_wiring() -> None:
+    # Global across the whole test session (module-level in systems_pipeline);
+    # a cached "24h" entry left over from another test would short-circuit
+    # stage_counts_cached and desync every query below it.
+    systems_pipeline.STAGE_CACHE.clear()
     health = [
         SimpleNamespace(
             service="api-gateway",
@@ -658,10 +690,15 @@ def test_endpoint_systems_overview_wiring() -> None:
             detail={},
         )
     ]
-    # execute order: health, coll_rows, workers(Signal,Decision), kafka(Price,Sentiment,
-    # Signal,Decision,Trade), pg_stat_activity, pg_database_size
+    # fetch_stage_counts issues 2 counts + 1 "latest row" query per of the 7
+    # stages (collect, sentiment, triage, senior, decision, risk, execute) —
+    # 21 queries, none of whose values this test cares about.
+    stage_queries = ([_Result(scalar=0), _Result(scalar=0), _Result(rows=[])] * 7)
+    # execute order: health, [stage counts], coll_rows, workers(Signal,Decision),
+    # kafka(Price,Sentiment,Signal,Decision,Trade), pg_stat_activity, pg_database_size
     results = [
         _Result(rows=health),
+        *stage_queries,
         _Result(rows=[("Reddit", "social", 50)]),
         _Result(scalar=100),
         _Result(scalar=20),
@@ -678,6 +715,8 @@ def test_endpoint_systems_overview_wiring() -> None:
     assert r.status_code == 200
     body = r.json()
     assert len(body["pipeline"]) == 7
+    assert body["pipeline_window"] == "24h"
+    assert body["pipeline_stale"] is False
     assert body["collectors"][0]["platform"] == "Reddit"
     assert len(body["workers"]) == 2
     assert body["infra"][0]["id"] == "postgres"

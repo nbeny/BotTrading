@@ -39,6 +39,13 @@ from cmi_common.sources import SqlCandleReader, SqlSentimentAggReader
 
 from .funnel import SCORE_BUCKET_WIDTH, build_funnel
 from .routers import get_session_dep
+from .systems_pipeline import (
+    DEFAULT_WINDOW,
+    STAGE_BY_ID,
+    StageCounts,
+    build_pipeline_stages,
+    stage_counts_cached,
+)
 
 router = APIRouter(tags=["read"])
 
@@ -970,18 +977,16 @@ SERVICE_CATALOG: list[tuple[str, str, str, str]] = [
     ("risk-engine", "risk-engine", "decide", "Garde-fous"),
     ("trading-engine", "trading-engine", "execute", "Exécution — Kraken"),
 ]
-_PIPELINE = [
-    ("collect", "Collecte", "Marché · Social · News", "collector-coingecko"),
-    ("sentiment", "Sentiment", "Scoring L1", "sentiment-service"),
-    ("triage", "Triage", "Haiku", "ai-worker-haiku"),
-    ("senior", "Analyse", "Sonnet", "ai-worker-sonnet"),
-    ("decision", "Décision", "Fusion signaux", "decision-engine"),
-    ("risk", "Risque", "Garde-fous", "risk-engine"),
-    ("execute", "Exécution", "Kraken Futures", "trading-engine"),
-]
 
 
-def assemble_systems_snapshot(rows: Iterable[Any], *, now: datetime | None = None) -> dict:
+def assemble_systems_snapshot(
+    rows: Iterable[Any],
+    *,
+    counts: dict[str, StageCounts] | None = None,
+    stale: bool = False,
+    window: str = DEFAULT_WINDOW,
+    now: datetime | None = None,
+) -> dict:
     """Build the SystemsSnapshot from persisted health rows. Pure."""
     now = now or datetime.now(tz=UTC)
     by_svc = {r.service: r for r in rows}
@@ -1001,7 +1006,13 @@ def assemble_systems_snapshot(rows: Iterable[Any], *, now: datetime | None = Non
                 "latency_ms": round(_num(getattr(r, "latency_ms", 0.0)), 0) if r else 0,
                 "cpu_pct": int(detail.get("cpu_pct", 0)),
                 "mem_mb": int(detail.get("mem_mb", 0)),
-                "throughput_per_min": int(detail.get("throughput_per_min", 0)),
+                # None, not 0: two /metrics scrapes are needed before a rate
+                # exists, and a zero we cannot vouch for reads as a dead service.
+                "throughput_per_min": (
+                    int(detail["throughput_per_min"])
+                    if detail.get("throughput_per_min") is not None
+                    else None
+                ),
                 "kafka_in": list(detail.get("kafka_in", [])),
                 "kafka_out": list(detail.get("kafka_out", [])),
                 "host": detail.get("host"),
@@ -1010,14 +1021,7 @@ def assemble_systems_snapshot(rows: Iterable[Any], *, now: datetime | None = Non
         )
 
     smap = {s["id"]: s for s in services}
-    pipeline = [
-        {
-            "id": pid, "label": label, "sublabel": sub,
-            "status": smap.get(svc, {}).get("status", "idle"),
-            "throughput_per_min": smap.get(svc, {}).get("throughput_per_min", 0),
-        }
-        for pid, label, sub, svc in _PIPELINE
-    ]
+    pipeline = build_pipeline_stages(counts or {}, smap)
 
     healthy = sum(1 for s in services if s["status"] == "healthy")
     degraded = sum(1 for s in services if s["status"] == "degraded")
@@ -1027,7 +1031,11 @@ def assemble_systems_snapshot(rows: Iterable[Any], *, now: datetime | None = Non
         "services_healthy": healthy,
         "services_degraded": degraded,
         "services_down": down,
-        "events_per_min": int(sum(s["throughput_per_min"] for s in services)),
+        # sum() over unmeasured (None) services would raise; each is worth 0 to
+        # this rolled-up total even though it stays None on its own service row.
+        "events_per_min": int(
+            sum(s["throughput_per_min"] or 0 for s in services)
+        ),
         "kafka_lag_total": 0,
         "ai_cost_today_usd": 0.0,
         "global_uptime_pct": round(sum(s["uptime_pct"] for s in services) / len(services), 2) if services else 0.0,
@@ -1038,6 +1046,8 @@ def assemble_systems_snapshot(rows: Iterable[Any], *, now: datetime | None = Non
         "summary": summary,
         "services": services,
         "pipeline": pipeline,
+        "pipeline_window": window,
+        "pipeline_stale": stale,
         "kafka": [],       # needs a Prometheus scrape of the broker (follow-up)
         "collectors": [],  # needs per-collector metrics (follow-up)
         "workers": [],     # needs AI worker metrics (follow-up)
@@ -1115,11 +1125,15 @@ def build_infra(pg_connections: int, pg_size_bytes: int) -> list[dict]:
 
 
 @router.get("/systems/overview")
-async def systems_overview(session: AsyncSession = Depends(get_session_dep)) -> dict:
+async def systems_overview(
+    window: str = Query(DEFAULT_WINDOW, pattern="^(1h|24h|7d)$"),
+    session: AsyncSession = Depends(get_session_dep),
+) -> dict:
     from sqlalchemy import text as _text
 
     rows = (await session.execute(select(ServiceHealth))).scalars().all()
-    snap = assemble_systems_snapshot(rows)
+    counts, stale = await stage_counts_cached(session, window)
+    snap = assemble_systems_snapshot(rows, counts=counts, stale=stale, window=window)
 
     hour = _utcnow_naive() - timedelta(hours=1)  # naive time-series columns
     hour_aware = _utcnow() - timedelta(hours=1)  # raw_content.fetched_at is tz-aware

@@ -32,7 +32,7 @@ BASE_URL = "https://fapi.binance.com"
 WEIGHT_CEILING = 1800
 
 
-class BinanceRateLimited(RuntimeError):
+class BinanceRateLimitedError(RuntimeError):
     def __init__(self, retry_after: float | None) -> None:
         super().__init__("binance rate limited")
         self.retry_after = retry_after
@@ -86,7 +86,7 @@ class BinanceFuturesClient:
         if resp.status_code in (418, 429):
             UPSTREAM_REQUESTS.labels(SERVICE, "binance-futures", "ratelimit").inc()
             retry_after = resp.headers.get("Retry-After")
-            raise BinanceRateLimited(float(retry_after) if retry_after else None)
+            raise BinanceRateLimitedError(float(retry_after) if retry_after else None)
         try:
             resp.raise_for_status()
         except httpx.HTTPError:

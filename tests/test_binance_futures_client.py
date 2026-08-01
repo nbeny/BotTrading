@@ -162,7 +162,7 @@ async def test_rate_limit_status_raises_a_typed_error_with_retry_after() -> None
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(429, headers={"Retry-After": "12"})
 
-    with pytest.raises(client_mod.BinanceRateLimited) as excinfo:
+    with pytest.raises(client_mod.BinanceRateLimitedError) as excinfo:
         await _client(handler).premium_index()
     assert excinfo.value.retry_after == 12.0
 
@@ -171,7 +171,7 @@ async def test_a_ban_status_raises_the_same_typed_error() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(418)
 
-    with pytest.raises(client_mod.BinanceRateLimited) as excinfo:
+    with pytest.raises(client_mod.BinanceRateLimitedError) as excinfo:
         await _client(handler).premium_index()
     assert excinfo.value.retry_after is None
 

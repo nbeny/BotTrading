@@ -1340,8 +1340,14 @@ Un token scoré 0.79 affiche donc **`1`**, en **rouge** (`0.79 > 0` tombe dans l
 `error`). Tous les tokens scorés affichent `1` en rouge, les non scorés `0` en gris. La
 colonne « Score opp. » ne transmet aucune information.
 
-Quatre sites d'appel : `TokensTable`, `WorkerDecisionsPanel`, `SignalsTable`,
-`OpportunitiesSection` — pages market, dashboard et trading.
+Trois sites d'appel montés : `TokensTable` et `WorkerDecisionsPanel` (page market),
+`OpportunitiesSection` (page trading). `SignalsTable` appelle aussi `ScoreChip` mais n'est
+importé par aucune page — code mort, à brancher ou à supprimer séparément.
+
+Corollaire découvert en corrigeant : `map_signal_event` (`read_api.py:203`) passait
+`Signal.opportunity_score` brut (0-100) là où `map_decision` divise. Les deux défauts
+s'annulaient sur le chemin `SignalsTable`, donc corriger `ScoreChip` seul aurait transformé
+79 en 7900 le jour où ce composant serait branché. Les deux sont corrigés ensemble.
 
 **Le choix de correction.** On corrige `ScoreChip`, pas les quatre appelants : les quatre
 reçoivent la même échelle 0–1, donc le défaut est dans le composant qui la mésinterprète, et

@@ -125,7 +125,15 @@ class FundamentalsEvent(BaseEvent):
     )
     tvl_usd: Decimal | None = Field(default=None, ge=0)
     tvl_change_pct_7d: float | None = None
-    fees_24h_usd: Decimal | None = Field(default=None, ge=0)
+    #: Deliberately unbounded below, unlike ``tvl_usd``. Fees are a net *flow*
+    #: and can genuinely be negative — a protocol can pay out more than it
+    #: takes in. Measured on the live API: 8 of 2,514 fee rows carry a negative
+    #: total24h (azuro at -$14,431, fusion-by-ipor at -$15,325). A ``ge=0``
+    #: here raised ValidationError inside the collector's emit loop, which has
+    #: no per-event guard, so one such protocol entering our universe would
+    #: publish nothing for *any* token that cycle. TVL keeps its bound because
+    #: it is a stock: negative TVL is nonsense data, not a measurement.
+    fees_24h_usd: Decimal | None = None
     fees_change_pct_7d: float | None = None
     #: None with ``has_unlock_schedule`` True means: schedule known, nothing
     #: within the next 30 days.

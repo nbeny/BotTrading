@@ -326,3 +326,39 @@ def test_emission_key_falls_back_to_the_slug() -> None:
 
 def test_emission_key_is_absent_when_the_row_has_neither() -> None:
     assert mapper.emission_key({"name": "nameless"}) is None
+
+
+def test_negative_fees_are_carried_rather_than_aborting_the_cycle() -> None:
+    # Fees are a net flow: 8 of 2514 live rows carry a negative total24h
+    # (azuro -$14,431, fusion-by-ipor -$15,325). A ge=0 bound raised
+    # ValidationError inside the collector's emit loop, which has no per-event
+    # guard, so one such protocol in our universe published nothing for ANY
+    # token that cycle.
+    events = mapper.to_fundamentals_events(
+        [_protocol("azuro", "aave", 1.0, 0.0)],
+        fees={
+            "azuro": {"total24h": -14_431.0, "total7d": -100.0, "total14dto7d": 50.0}
+        },
+        unlocks={},
+        known=KNOWN,
+    )
+    assert events[0].fees_24h_usd == Decimal("-14431.0")
+
+
+def test_a_negative_tvl_row_is_skipped_without_losing_the_other_tokens() -> None:
+    # Unlike fees, TVL is a stock: negative is nonsense data, not a
+    # measurement. pinjam-labs reports tvl -1654.77 on the live API, and
+    # tvl_usd keeps its ge=0 bound, so the row is dropped rather than summed.
+    events = mapper.to_fundamentals_events(
+        [
+            {"slug": "pinjam-labs", "gecko_id": "ethereum", "tvl": -1654.77},
+            _protocol("aave-v2", "aave", 5_000_000.0, 2.0),
+        ],
+        fees={},
+        unlocks={},
+        known=KNOWN,
+    )
+    by_symbol = {e.symbol: e for e in events}
+    assert by_symbol["AAVE"].tvl_usd == Decimal("5000000")
+    # Skipped, so unmeasured — not a fabricated zero.
+    assert by_symbol["ETH"].tvl_usd is None

@@ -163,7 +163,11 @@ export function TokenDossierDrawer({ token, onClose, now }: Props) {
               </Section>
 
               <Section title={`News & social · ${token.symbol}`}>
-                <NewsPanel news={data.content} loading={false} now={now} bare />
+                {data.content.length === 0 ? (
+                  <EmptyState message="Aucune news sur ce token." />
+                ) : (
+                  <NewsPanel news={data.content} loading={false} now={now} bare />
+                )}
               </Section>
 
               <Section title="Exposition">

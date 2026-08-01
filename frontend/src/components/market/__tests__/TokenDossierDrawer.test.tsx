@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TokenDossierDrawer } from '../TokenDossierDrawer';
-import type { MarketToken } from '@/lib/types/domain';
+import type { MarketToken, NewsItem, WorkerDecision } from '@/lib/types/domain';
 import type { TokenDossier } from '@/lib/types/dossier';
 
 // The drawer resolves data through `marketApi` — mock the whole endpoints
@@ -42,30 +42,66 @@ const token: MarketToken = {
 // and `market/dossier.pipeline` (reached_stage, blocked_at, block_reason,
 // escalated, sonnet_called, sonnet_validated, last_event_at). No disagreement
 // found — every field below has a matching manifest key.
-const dossier: TokenDossier = {
-  symbol: 'BTC',
-  score: {
-    value: 84,
-    confidence: 0.62,
-    // `fundamentals` deliberately absent — must render `—`, never `0`.
-    axes: { volume_growth: 0.81, positioning: 0.93 },
-    axes_total: 7,
-    insufficient_evidence: false,
-    computed_at: '2026-08-01T09:12:00Z',
-  },
-  pipeline: {
-    reached_stage: 'decision',
-    blocked_at: null,
-    block_reason: null,
+//
+// A factory, not a shared const: a dossier mutated (or merely reused with
+// `decisions`/`content` overridden) by one `it` must never leak into
+// another. That happened once already on this branch and made a later
+// assertion pass vacuously.
+function buildDossier(overrides: Partial<TokenDossier> = {}): TokenDossier {
+  return {
+    symbol: 'BTC',
+    score: {
+      value: 84,
+      confidence: 0.62,
+      // `fundamentals` deliberately absent — must render `—`, never `0`.
+      axes: { volume_growth: 0.81, positioning: 0.93 },
+      axes_total: 7,
+      insufficient_evidence: false,
+      computed_at: '2026-08-01T09:12:00Z',
+    },
+    pipeline: {
+      reached_stage: 'decision',
+      blocked_at: null,
+      block_reason: null,
+      escalated: true,
+      sonnet_called: true,
+      sonnet_validated: true,
+      last_event_at: '2026-08-01T09:12:00Z',
+    },
+    decisions: [],
+    content: [],
+    exposure: { open_positions: [], recent_trades: [] },
+    ...overrides,
+  };
+}
+
+function buildDecision(overrides: Partial<WorkerDecision> = {}): WorkerDecision {
+  return {
+    id: 'dec-1',
+    symbol: 'BTC',
+    worker: 'sonnet',
+    decision: 'buy',
+    opportunity_score: 0.71,
+    confidence: 0.8,
+    justification: 'Momentum haussier confirmé par le volume.',
     escalated: true,
-    sonnet_called: true,
-    sonnet_validated: true,
-    last_event_at: '2026-08-01T09:12:00Z',
-  },
-  decisions: [],
-  content: [],
-  exposure: { open_positions: [], recent_trades: [] },
-};
+    created_at: '2026-08-01T09:10:00Z',
+    ...overrides,
+  };
+}
+
+function buildNewsItem(overrides: Partial<NewsItem> = {}): NewsItem {
+  return {
+    id: 'news-1',
+    title: 'BTC franchit un nouveau seuil',
+    url: 'https://example.com/btc-news',
+    source: 'CryptoCompare',
+    symbols: ['BTC'],
+    sentiment: 0.3,
+    published_at: '2026-08-01T08:55:00Z',
+    ...overrides,
+  };
+}
 
 function renderDrawer(props: Partial<React.ComponentProps<typeof TokenDossierDrawer>> = {}) {
   const queryClient = new QueryClient({
@@ -106,7 +142,7 @@ describe('TokenDossierDrawer', () => {
   });
 
   it('sur un dossier résolu, affiche la décomposition du score avec un axe non mesuré en tiret', async () => {
-    dossierMock.mockResolvedValue(dossier);
+    dossierMock.mockResolvedValue(buildDossier());
     renderDrawer();
 
     await waitFor(() => expect(screen.getByTestId('axis-volume_growth')).toBeInTheDocument());
@@ -114,6 +150,31 @@ describe('TokenDossierDrawer', () => {
     const fundamentals = screen.getByTestId('axis-fundamentals');
     expect(fundamentals).toHaveTextContent('—');
     expect(fundamentals).not.toHaveTextContent('0');
+  });
+
+  it('avec des décisions vides mais des news présentes, affiche le message vide cadré sur le token pour les décisions et pas pour les news', async () => {
+    dossierMock.mockResolvedValue(
+      buildDossier({ decisions: [], content: [buildNewsItem()] }),
+    );
+    renderDrawer();
+
+    await waitFor(() =>
+      expect(screen.getByText('Aucune décision worker sur ce token.')).toBeInTheDocument(),
+    );
+    expect(screen.queryByText('Aucune news sur ce token.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Aucune news disponible.')).not.toBeInTheDocument();
+  });
+
+  it('avec des news vides mais des décisions présentes, affiche le message vide cadré sur le token pour les news et pas pour les décisions', async () => {
+    dossierMock.mockResolvedValue(
+      buildDossier({ decisions: [buildDecision()], content: [] }),
+    );
+    renderDrawer();
+
+    await waitFor(() =>
+      expect(screen.getByText('Aucune news sur ce token.')).toBeInTheDocument(),
+    );
+    expect(screen.queryByText('Aucune décision worker sur ce token.')).not.toBeInTheDocument();
   });
 
   it("sur erreur de requête, affiche un message d'erreur et aucun panneau de score", async () => {

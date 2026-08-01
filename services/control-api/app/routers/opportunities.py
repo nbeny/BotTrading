@@ -1,5 +1,6 @@
 # services/control-api/app/routers/opportunities.py
 """Pending opportunities: list + approve/reject (human-in-the-loop)."""
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
@@ -21,14 +22,20 @@ class OpportunitiesService:
 
     async def approve(self, event_id: str, *, issued_by: str | None) -> None:
         await self._pub.publish(
-            ControlCommand.APPROVE_OPPORTUNITY, {"event_id": event_id}, issued_by=issued_by
+            ControlCommand.APPROVE_OPPORTUNITY,
+            {"event_id": event_id},
+            issued_by=issued_by,
         )
 
-    async def reject(self, event_id: str, *, reason: str | None, issued_by: str | None) -> None:
+    async def reject(
+        self, event_id: str, *, reason: str | None, issued_by: str | None
+    ) -> None:
         payload = {"event_id": event_id}
         if reason:
             payload["reason"] = reason
-        await self._pub.publish(ControlCommand.REJECT_OPPORTUNITY, payload, issued_by=issued_by)
+        await self._pub.publish(
+            ControlCommand.REJECT_OPPORTUNITY, payload, issued_by=issued_by
+        )
 
 
 router = APIRouter(prefix="/trading/opportunities", tags=["opportunities"])
@@ -43,21 +50,28 @@ class RejectInput(BaseModel):
 
 
 @router.get("")
-async def list_pending(request: Request,
-                       principal: Principal = Depends(require_principal)) -> list[dict]:
+async def list_pending(
+    request: Request, principal: Principal = Depends(require_principal)
+) -> list[dict]:
     return await _svc(request).list()
 
 
 @router.post("/{event_id}/approve")
-async def approve(event_id: str, request: Request,
-                  principal: Principal = Depends(require_principal)) -> dict:
+async def approve(
+    event_id: str, request: Request, principal: Principal = Depends(require_principal)
+) -> dict:
     await _svc(request).approve(event_id, issued_by=principal.sub)
     return {"ok": True}
 
 
 @router.post("/{event_id}/reject")
-async def reject(event_id: str, request: Request, body: RejectInput | None = None,
-                 principal: Principal = Depends(require_principal)) -> dict:
-    await _svc(request).reject(event_id, reason=(body.reason if body else None),
-                               issued_by=principal.sub)
+async def reject(
+    event_id: str,
+    request: Request,
+    body: RejectInput | None = None,
+    principal: Principal = Depends(require_principal),
+) -> dict:
+    await _svc(request).reject(
+        event_id, reason=(body.reason if body else None), issued_by=principal.sub
+    )
     return {"ok": True}

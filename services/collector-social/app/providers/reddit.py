@@ -56,7 +56,9 @@ class RedditProvider:
         self._token = resp.json().get("access_token")
         return self._token
 
-    async def _fetch_sub(self, sub: str, *, retried: bool = False) -> list[dict[str, Any]]:
+    async def _fetch_sub(
+        self, sub: str, *, retried: bool = False
+    ) -> list[dict[str, Any]]:
         token = await self._ensure_token()
         if token:
             url = f"https://oauth.reddit.com/r/{sub}/new"

@@ -4,6 +4,7 @@ Conservative by construction: notional is capped by both MAX_ORDER_USD and
 equity * MAX_LEVERAGE, then floored to the exchange contract step. A size below
 the exchange minimum returns 0.0 (caller rejects the signal).
 """
+
 from __future__ import annotations
 
 import math

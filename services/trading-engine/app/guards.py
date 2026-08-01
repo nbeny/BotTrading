@@ -4,6 +4,7 @@ Returns a machine-readable reason string when blocked, else None. Notional and
 leverage caps live in sizing.py; here we handle the kill-switch and the business
 rate-limit (orders per hour), both backed by Redis so they work across replicas.
 """
+
 from __future__ import annotations
 
 from typing import Protocol

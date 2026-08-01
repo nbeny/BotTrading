@@ -92,6 +92,7 @@ async def sentiment_authors(
     count = await reader.distinct_authors(symbol=sym, window=window)
     return {"symbol": sym, "window": window, "unique_authors": count}
 
+
 _RANGE_TO_DELTA = {
     "1d": timedelta(days=1),
     "7d": timedelta(days=7),
@@ -268,13 +269,15 @@ def compute_content_stats(rows: Iterable[Any], *, now: datetime | None = None) -
     by_cat: Counter[str] = Counter()
     src: Counter[str] = Counter()
     mentions: Counter[str] = Counter()
-    vol: dict[int, dict[str, int]] = defaultdict(lambda: {"social": 0, "news": 0, "market": 0})
+    vol: dict[int, dict[str, int]] = defaultdict(
+        lambda: {"social": 0, "news": 0, "market": 0}
+    )
 
     for r in rows:
         cat = _KIND_TO_CATEGORY.get(r.kind, "market")
         by_cat[cat] += 1
         src[r.source] += 1
-        for sym in (r.symbols or []):
+        for sym in r.symbols or []:
             mentions[sym] += 1
         ts = r.published_at or r.fetched_at
         if isinstance(ts, datetime):
@@ -480,7 +483,11 @@ async def data_content(
     elif sentiment == "neg":
         conds.append(RawContent.sentiment_score < -0.15)
     elif sentiment == "neu":
-        conds.append(and_(RawContent.sentiment_score >= -0.15, RawContent.sentiment_score <= 0.15))
+        conds.append(
+            and_(
+                RawContent.sentiment_score >= -0.15, RawContent.sentiment_score <= 0.15
+            )
+        )
 
     where = and_(*conds) if conds else None
     count_stmt = select(func.count()).select_from(RawContent)
@@ -492,10 +499,17 @@ async def data_content(
     if where is not None:
         stmt = stmt.where(where)
     rows = (await session.execute(stmt.offset(offset).limit(limit))).scalars().all()
-    return {"items": [map_content(r) for r in rows], "total": int(total), "offset": offset, "limit": limit}
+    return {
+        "items": [map_content(r) for r in rows],
+        "total": int(total),
+        "offset": offset,
+        "limit": limit,
+    }
 
 
-def assemble_trace(cid: str, signal: Any | None, decision: Any | None, trade: Any | None) -> dict:
+def assemble_trace(
+    cid: str, signal: Any | None, decision: Any | None, trade: Any | None
+) -> dict:
     """Reconstruct an end-to-end DecisionTrace from persisted rows. Pure.
 
     Stages map to what the pipeline durably records: analysis (signals) →
@@ -509,21 +523,29 @@ def assemble_trace(cid: str, signal: Any | None, decision: Any | None, trade: An
         or getattr(trade, "symbol", None)
         or "?"
     )
-    filled = bool(trade and str(getattr(trade, "status", "")).lower() in {"filled", "closed"})
+    filled = bool(
+        trade and str(getattr(trade, "status", "")).lower() in {"filled", "closed"}
+    )
     stages = [
         {
             "kind": "price",
             "at": _iso(getattr(signal, "time", None)),
             "reached": "price_change_pct_24h" in p,
             "summary": f"Contexte prix {symbol}",
-            "detail": {"change_24h_pct": p.get("price_change_pct_24h"), "volume_spike": p.get("volume_spike_ratio")},
+            "detail": {
+                "change_24h_pct": p.get("price_change_pct_24h"),
+                "volume_spike": p.get("volume_spike_ratio"),
+            },
         },
         {
             "kind": "sentiment",
             "at": _iso(getattr(signal, "time", None)),
             "reached": p.get("sentiment_score") is not None,
             "summary": "Sentiment agrégé",
-            "detail": {"score": p.get("sentiment_score"), "social_growth": p.get("social_growth")},
+            "detail": {
+                "score": p.get("sentiment_score"),
+                "social_growth": p.get("social_growth"),
+            },
         },
         {
             "kind": "analysis",
@@ -532,8 +554,12 @@ def assemble_trace(cid: str, signal: Any | None, decision: Any | None, trade: An
             "summary": "Haiku — triage",
             "detail": {
                 "opportunity_score": getattr(signal, "opportunity_score", None),
-                "confidence": _num(getattr(signal, "confidence", None)) if signal else None,
-                "escalate": bool(getattr(signal, "escalated", False)) if signal else None,
+                "confidence": (
+                    _num(getattr(signal, "confidence", None)) if signal else None
+                ),
+                "escalate": (
+                    bool(getattr(signal, "escalated", False)) if signal else None
+                ),
             },
         },
         {
@@ -543,8 +569,12 @@ def assemble_trace(cid: str, signal: Any | None, decision: Any | None, trade: An
             "summary": "Sonnet — décision",
             "detail": {
                 "direction": getattr(decision, "direction", None),
-                "confidence": _num(getattr(decision, "confidence", None)) if decision else None,
-                "ai_validated": bool(getattr(decision, "ai_validated", False)) if decision else None,
+                "confidence": (
+                    _num(getattr(decision, "confidence", None)) if decision else None
+                ),
+                "ai_validated": (
+                    bool(getattr(decision, "ai_validated", False)) if decision else None
+                ),
             },
         },
         {
@@ -553,10 +583,16 @@ def assemble_trace(cid: str, signal: Any | None, decision: Any | None, trade: An
             "reached": trade is not None,
             "summary": "Risque — sizing & protection",
             "detail": {
-                "size_pct": _num(getattr(trade, "position_size_pct", None)) if trade else None,
+                "size_pct": (
+                    _num(getattr(trade, "position_size_pct", None)) if trade else None
+                ),
                 "stop_loss": _num(getattr(trade, "stop_loss", None)) if trade else None,
-                "take_profit": _num(getattr(trade, "take_profit", None)) if trade else None,
-                "rr": _num(getattr(trade, "risk_reward_ratio", None)) if trade else None,
+                "take_profit": (
+                    _num(getattr(trade, "take_profit", None)) if trade else None
+                ),
+                "rr": (
+                    _num(getattr(trade, "risk_reward_ratio", None)) if trade else None
+                ),
             },
         },
         {
@@ -566,8 +602,16 @@ def assemble_trace(cid: str, signal: Any | None, decision: Any | None, trade: An
             "summary": "Ordre exécuté" if filled else "Ordre en attente",
             "detail": {
                 "status": getattr(trade, "status", None) if trade else None,
-                "fill_price": _num(getattr(trade, "fill_price", None)) if trade and getattr(trade, "fill_price", None) else None,
-                "pnl": _num(getattr(trade, "pnl", None)) if trade and getattr(trade, "pnl", None) is not None else None,
+                "fill_price": (
+                    _num(getattr(trade, "fill_price", None))
+                    if trade and getattr(trade, "fill_price", None)
+                    else None
+                ),
+                "pnl": (
+                    _num(getattr(trade, "pnl", None))
+                    if trade and getattr(trade, "pnl", None) is not None
+                    else None
+                ),
             },
         },
     ]
@@ -577,20 +621,41 @@ def assemble_trace(cid: str, signal: Any | None, decision: Any | None, trade: An
 @router.get("/trace/{cid}")
 async def trace(cid: str, session: AsyncSession = Depends(get_session_dep)) -> dict:
     sig = (
-        await session.execute(
-            select(Signal).where(Signal.payload["correlation_id"].astext == cid).order_by(Signal.time.desc()).limit(1)
+        (
+            await session.execute(
+                select(Signal)
+                .where(Signal.payload["correlation_id"].astext == cid)
+                .order_by(Signal.time.desc())
+                .limit(1)
+            )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     dec = (
-        await session.execute(
-            select(Decision).where(Decision.correlation_id == cid).order_by(Decision.created_at.desc()).limit(1)
+        (
+            await session.execute(
+                select(Decision)
+                .where(Decision.correlation_id == cid)
+                .order_by(Decision.created_at.desc())
+                .limit(1)
+            )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     trd = (
-        await session.execute(
-            select(Trade).where(Trade.correlation_id == cid).order_by(Trade.created_at.desc()).limit(1)
+        (
+            await session.execute(
+                select(Trade)
+                .where(Trade.correlation_id == cid)
+                .order_by(Trade.created_at.desc())
+                .limit(1)
+            )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     return assemble_trace(cid, sig, dec, trd)
 
 
@@ -636,9 +701,15 @@ MAX_EXPOSURE_PCT = 80.0
 MAX_ASSET_PCT = 30.0
 
 
-def map_position(trade: Any, price: Any | None, base_capital: float = BASE_CAPITAL) -> dict:
+def map_position(
+    trade: Any, price: Any | None, base_capital: float = BASE_CAPITAL
+) -> dict:
     entry = _num(trade.entry_price)
-    qty = round((base_capital * _num(trade.position_size_pct)) / entry, 6) if entry else 0.0
+    qty = (
+        round((base_capital * _num(trade.position_size_pct)) / entry, 6)
+        if entry
+        else 0.0
+    )
     cur = _num(getattr(price, "price_usd", None)) or entry
     value = round(qty * cur, 2)
     cost = qty * entry
@@ -664,8 +735,16 @@ def map_position(trade: Any, price: Any | None, base_capital: float = BASE_CAPIT
 def map_portfolio_trade(trade: Any, base_capital: float = BASE_CAPITAL) -> dict:
     entry = _num(trade.entry_price)
     price = _num(trade.fill_price) or entry
-    qty = round((base_capital * _num(trade.position_size_pct)) / entry, 6) if entry else 0.0
-    status = "filled" if str(trade.status).lower() in {"filled", "closed"} else str(trade.status)
+    qty = (
+        round((base_capital * _num(trade.position_size_pct)) / entry, 6)
+        if entry
+        else 0.0
+    )
+    status = (
+        "filled"
+        if str(trade.status).lower() in {"filled", "closed"}
+        else str(trade.status)
+    )
     return {
         "trade_id": trade.event_id,
         "symbol": trade.symbol,
@@ -753,12 +832,20 @@ def compute_portfolio(
         "unrealized_pnl_usd": unrealized,
         "unrealized_pnl_pct": round(unrealized / total * 100, 2) if total else 0.0,
         "realized_pnl_24h_usd": round(realized_24h, 2),
-        "pnl_24h_pct": round(realized_24h / base_capital * 100, 2) if base_capital else 0.0,
+        "pnl_24h_pct": (
+            round(realized_24h / base_capital * 100, 2) if base_capital else 0.0
+        ),
         "updated_at": now.isoformat(),
     }
 
 
-def compute_exposure(positions: list[dict], total: float, daily_loss: float = 0.0, *, now: datetime | None = None) -> dict:
+def compute_exposure(
+    positions: list[dict],
+    total: float,
+    daily_loss: float = 0.0,
+    *,
+    now: datetime | None = None,
+) -> dict:
     now = now or datetime.now(tz=UTC)
     by_asset = [
         {
@@ -787,19 +874,46 @@ def compute_exposure(positions: list[dict], total: float, daily_loss: float = 0.
 def compute_risk_limits(exposure: dict, cash_pct: float) -> list[dict]:
     max_asset = max((a["exposure_pct"] for a in exposure["by_asset"]), default=0.0)
     return [
-        {"key": "max_portfolio_exposure", "label": "Exposition maximale portefeuille",
-         "value": exposure["total_exposure_pct"], "max": MAX_EXPOSURE_PCT, "unit": "%",
-         "breached": exposure["total_exposure_pct"] > MAX_EXPOSURE_PCT},
-        {"key": "max_single_asset", "label": "Exposition maximale par actif",
-         "value": round(max_asset, 1), "max": MAX_ASSET_PCT, "unit": "%", "breached": max_asset > MAX_ASSET_PCT},
-        {"key": "daily_loss_limit", "label": "Perte journalière maximale",
-         "value": exposure["daily_loss_usd"], "max": DAILY_LOSS_LIMIT, "unit": "USD",
-         "breached": exposure["daily_loss_usd"] > DAILY_LOSS_LIMIT},
-        {"key": "max_open_positions", "label": "Positions ouvertes maximum",
-         "value": exposure["open_positions"], "max": 10, "unit": "positions",
-         "breached": exposure["open_positions"] > 10},
-        {"key": "min_cash_reserve", "label": "Réserve de liquidité minimum",
-         "value": round(cash_pct, 1), "max": 20, "unit": "%", "breached": cash_pct < 20},
+        {
+            "key": "max_portfolio_exposure",
+            "label": "Exposition maximale portefeuille",
+            "value": exposure["total_exposure_pct"],
+            "max": MAX_EXPOSURE_PCT,
+            "unit": "%",
+            "breached": exposure["total_exposure_pct"] > MAX_EXPOSURE_PCT,
+        },
+        {
+            "key": "max_single_asset",
+            "label": "Exposition maximale par actif",
+            "value": round(max_asset, 1),
+            "max": MAX_ASSET_PCT,
+            "unit": "%",
+            "breached": max_asset > MAX_ASSET_PCT,
+        },
+        {
+            "key": "daily_loss_limit",
+            "label": "Perte journalière maximale",
+            "value": exposure["daily_loss_usd"],
+            "max": DAILY_LOSS_LIMIT,
+            "unit": "USD",
+            "breached": exposure["daily_loss_usd"] > DAILY_LOSS_LIMIT,
+        },
+        {
+            "key": "max_open_positions",
+            "label": "Positions ouvertes maximum",
+            "value": exposure["open_positions"],
+            "max": 10,
+            "unit": "positions",
+            "breached": exposure["open_positions"] > 10,
+        },
+        {
+            "key": "min_cash_reserve",
+            "label": "Réserve de liquidité minimum",
+            "value": round(cash_pct, 1),
+            "max": 20,
+            "unit": "%",
+            "breached": cash_pct < 20,
+        },
     ]
 
 
@@ -808,16 +922,34 @@ def compute_risk_alerts(exposure: dict, *, now: datetime | None = None) -> list[
     alerts: list[dict] = []
     for a in exposure["by_asset"]:
         if a["exposure_pct"] > MAX_ASSET_PCT:
-            alerts.append({"id": f"exp-{a['symbol']}", "level": "warning", "symbol": a["symbol"],
-                           "message": f"Exposition {a['symbol']} à {a['exposure_pct']}% (> {MAX_ASSET_PCT}%)",
-                           "created_at": now.isoformat()})
+            alerts.append(
+                {
+                    "id": f"exp-{a['symbol']}",
+                    "level": "warning",
+                    "symbol": a["symbol"],
+                    "message": f"Exposition {a['symbol']} à {a['exposure_pct']}% (> {MAX_ASSET_PCT}%)",
+                    "created_at": now.isoformat(),
+                }
+            )
         if not a["protected"]:
-            alerts.append({"id": f"unp-{a['symbol']}", "level": "info", "symbol": a["symbol"],
-                           "message": f"Position {a['symbol']} sans SL/TP complet", "created_at": now.isoformat()})
+            alerts.append(
+                {
+                    "id": f"unp-{a['symbol']}",
+                    "level": "info",
+                    "symbol": a["symbol"],
+                    "message": f"Position {a['symbol']} sans SL/TP complet",
+                    "created_at": now.isoformat(),
+                }
+            )
     if exposure["daily_loss_usd"] > DAILY_LOSS_LIMIT:
-        alerts.append({"id": "daily-loss", "level": "critical",
-                       "message": f"Perte journalière {exposure['daily_loss_usd']}$ dépasse la limite",
-                       "created_at": now.isoformat()})
+        alerts.append(
+            {
+                "id": "daily-loss",
+                "level": "critical",
+                "message": f"Perte journalière {exposure['daily_loss_usd']}$ dépasse la limite",
+                "created_at": now.isoformat(),
+            }
+        )
     return alerts
 
 
@@ -828,10 +960,16 @@ async def _account_snapshot(session: AsyncSession) -> dict | None:
     the poller does not run at all, which is the production state today.
     """
     row = (
-        await session.execute(
-            select(AccountSnapshot).order_by(AccountSnapshot.fetched_at.desc()).limit(1)
+        (
+            await session.execute(
+                select(AccountSnapshot)
+                .order_by(AccountSnapshot.fetched_at.desc())
+                .limit(1)
+            )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if row is None:
         return None
     return {
@@ -860,8 +998,16 @@ async def _portfolio_basis(
 async def _open_positions(
     session: AsyncSession, base_capital: float | None = None
 ) -> list[dict]:
-    trades = (await session.execute(select(Trade).where(Trade.status.in_(OPEN_STATUSES)))).scalars().all()
-    prices = (await session.execute(_latest_per_symbol(Price, Price.price_usd, Price.time))).scalars().all()
+    trades = (
+        (await session.execute(select(Trade).where(Trade.status.in_(OPEN_STATUSES))))
+        .scalars()
+        .all()
+    )
+    prices = (
+        (await session.execute(_latest_per_symbol(Price, Price.price_usd, Price.time)))
+        .scalars()
+        .all()
+    )
     pmap = {p.symbol: p for p in prices}
     capital = BASE_CAPITAL if base_capital is None else base_capital
     return [map_position(t, pmap.get(t.symbol), capital) for t in trades]
@@ -870,8 +1016,16 @@ async def _open_positions(
 async def _realized_24h(session: AsyncSession) -> tuple[float, float]:
     since = _utcnow_naive() - timedelta(hours=24)
     closed = (
-        await session.execute(select(Trade).where(and_(Trade.status == "closed", Trade.created_at >= since)))
-    ).scalars().all()
+        (
+            await session.execute(
+                select(Trade).where(
+                    and_(Trade.status == "closed", Trade.created_at >= since)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
     realized = sum(_num(t.pnl) for t in closed)
     daily_loss = -sum(_num(t.pnl) for t in closed if (t.pnl or 0) < 0)
     return realized, daily_loss
@@ -897,14 +1051,19 @@ async def portfolio_positions(
 
 @router.get("/portfolio/trades")
 async def portfolio_trades(
-    limit: int = Query(50, ge=1, le=500), session: AsyncSession = Depends(get_session_dep)
+    limit: int = Query(50, ge=1, le=500),
+    session: AsyncSession = Depends(get_session_dep),
 ) -> list[dict]:
     capital = reference_capital(await _account_snapshot(session))
     rows = (
-        await session.execute(
-            select(Trade).order_by(Trade.created_at.desc()).limit(limit)
+        (
+            await session.execute(
+                select(Trade).order_by(Trade.created_at.desc()).limit(limit)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [map_portfolio_trade(t, capital) for t in rows]
 
 
@@ -914,12 +1073,16 @@ async def portfolio_history(
 ) -> list[dict]:
     since = _utcnow_naive() - _RANGE_TO_DELTA.get(range, timedelta(days=30))
     closed = (
-        await session.execute(
-            select(Trade)
-            .where(and_(Trade.status == "closed", Trade.created_at >= since))
-            .order_by(Trade.created_at.asc())
+        (
+            await session.execute(
+                select(Trade)
+                .where(and_(Trade.status == "closed", Trade.created_at >= since))
+                .order_by(Trade.created_at.asc())
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     # Reconstruct equity curve: reference capital + cumulative realized PnL at
     # each close. Same basis as every other portfolio figure -- a curve starting
     # at the config constant while the header shows a real exchange balance
@@ -936,7 +1099,9 @@ async def portfolio_history(
 async def risk_exposure(session: AsyncSession = Depends(get_session_dep)) -> dict:
     positions, snapshot, capital = await _portfolio_basis(session)
     realized, daily_loss = await _realized_24h(session)
-    total = compute_portfolio(positions, realized, capital, snapshot=snapshot)["total_value_usd"]
+    total = compute_portfolio(positions, realized, capital, snapshot=snapshot)[
+        "total_value_usd"
+    ]
     return compute_exposure(positions, total, daily_loss)
 
 
@@ -946,17 +1111,22 @@ async def risk_limits(session: AsyncSession = Depends(get_session_dep)) -> list[
     realized, daily_loss = await _realized_24h(session)
     pf = compute_portfolio(positions, realized, capital, snapshot=snapshot)
     exposure = compute_exposure(positions, pf["total_value_usd"], daily_loss)
-    cash_pct = (pf["cash_usd"] / pf["total_value_usd"] * 100) if pf["total_value_usd"] else 0.0
+    cash_pct = (
+        (pf["cash_usd"] / pf["total_value_usd"] * 100) if pf["total_value_usd"] else 0.0
+    )
     return compute_risk_limits(exposure, cash_pct)
 
 
 @router.get("/risk/alerts")
 async def risk_alerts(
-    limit: int = Query(30, ge=1, le=100), session: AsyncSession = Depends(get_session_dep)
+    limit: int = Query(30, ge=1, le=100),
+    session: AsyncSession = Depends(get_session_dep),
 ) -> list[dict]:
     positions, snapshot, capital = await _portfolio_basis(session)
     realized, daily_loss = await _realized_24h(session)
-    total = compute_portfolio(positions, realized, capital, snapshot=snapshot)["total_value_usd"]
+    total = compute_portfolio(positions, realized, capital, snapshot=snapshot)[
+        "total_value_usd"
+    ]
     exposure = compute_exposure(positions, total, daily_loss)
     return compute_risk_alerts(exposure)[:limit]
 
@@ -998,15 +1168,22 @@ def assemble_systems_snapshot(
     services = []
     for sid, name, group, role in SERVICE_CATALOG:
         r = by_svc.get(sid)
-        status = (r.status if r else None) or ("healthy" if (r and r.healthy) else "idle")
+        status = (r.status if r else None) or (
+            "healthy" if (r and r.healthy) else "idle"
+        )
         detail = getattr(r, "detail", None) or {}
         services.append(
             {
-                "id": sid, "name": name, "group": group, "role": role,
+                "id": sid,
+                "name": name,
+                "group": group,
+                "role": role,
                 "status": status,
                 "version": str(detail.get("version", "—")),
                 "replicas": int(detail.get("replicas", 1)),
-                "uptime_pct": float(detail.get("uptime_pct", 99.9 if status == "healthy" else 0.0)),
+                "uptime_pct": float(
+                    detail.get("uptime_pct", 99.9 if status == "healthy" else 0.0)
+                ),
                 "latency_ms": round(_num(getattr(r, "latency_ms", 0.0)), 0) if r else 0,
                 "cpu_pct": int(detail.get("cpu_pct", 0)),
                 "mem_mb": int(detail.get("mem_mb", 0)),
@@ -1037,12 +1214,14 @@ def assemble_systems_snapshot(
         "services_down": down,
         # sum() over unmeasured (None) services would raise; each is worth 0 to
         # this rolled-up total even though it stays None on its own service row.
-        "events_per_min": int(
-            sum(s["throughput_per_min"] or 0 for s in services)
-        ),
+        "events_per_min": int(sum(s["throughput_per_min"] or 0 for s in services)),
         "kafka_lag_total": 0,
         "ai_cost_today_usd": 0.0,
-        "global_uptime_pct": round(sum(s["uptime_pct"] for s in services) / len(services), 2) if services else 0.0,
+        "global_uptime_pct": (
+            round(sum(s["uptime_pct"] for s in services) / len(services), 2)
+            if services
+            else 0.0
+        ),
         "data_points_today": 0,
         "updated_at": now.isoformat(),
     }
@@ -1052,10 +1231,10 @@ def assemble_systems_snapshot(
         "pipeline": pipeline,
         "pipeline_window": window,
         "pipeline_stale": stale,
-        "kafka": [],       # needs a Prometheus scrape of the broker (follow-up)
+        "kafka": [],  # needs a Prometheus scrape of the broker (follow-up)
         "collectors": [],  # needs per-collector metrics (follow-up)
-        "workers": [],     # needs AI worker metrics (follow-up)
-        "infra": [],       # needs Postgres/Redis/Kafka/Traefik metrics (follow-up)
+        "workers": [],  # needs AI worker metrics (follow-up)
+        "infra": [],  # needs Postgres/Redis/Kafka/Traefik metrics (follow-up)
     }
 
 
@@ -1082,22 +1261,48 @@ def build_collectors(rows: Iterable[tuple[str, str, int]]) -> list[dict]:
 def build_workers(haiku_reqs: int, sonnet_reqs: int) -> list[dict]:
     def worker(name, model, tier, reqs, tin, tout, cost_per):
         return {
-            "name": name, "model": model, "tier": tier,
+            "name": name,
+            "model": model,
+            "tier": tier,
             "status": "healthy" if reqs else "idle",
-            "requests_last_hour": int(reqs), "tokens_in": int(reqs * tin), "tokens_out": int(reqs * tout),
-            "cost_usd_today": round(reqs * cost_per, 2), "avg_latency_ms": 0,
-            "escalation_rate": 0.0, "queue_depth": 0,
+            "requests_last_hour": int(reqs),
+            "tokens_in": int(reqs * tin),
+            "tokens_out": int(reqs * tout),
+            "cost_usd_today": round(reqs * cost_per, 2),
+            "avg_latency_ms": 0,
+            "escalation_rate": 0.0,
+            "queue_depth": 0,
         }
+
     return [
-        worker("ai-worker-haiku", "claude-haiku-4-5", "triage", haiku_reqs, 820, 190, 0.0009),
-        worker("ai-worker-sonnet", "claude-sonnet-4-6", "senior", sonnet_reqs, 2400, 640, 0.012),
+        worker(
+            "ai-worker-haiku",
+            "claude-haiku-4-5",
+            "triage",
+            haiku_reqs,
+            820,
+            190,
+            0.0009,
+        ),
+        worker(
+            "ai-worker-sonnet",
+            "claude-sonnet-4-6",
+            "senior",
+            sonnet_reqs,
+            2400,
+            640,
+            0.012,
+        ),
     ]
 
 
 # topic name → (persisted table label, partitions)
 _TOPIC_COUNTS = [
-    ("price.events", 6), ("sentiment.events", 4), ("analysis.events", 6),
-    ("decision.events", 4), ("risk.approved.events", 3),
+    ("price.events", 6),
+    ("sentiment.events", 4),
+    ("analysis.events", 6),
+    ("decision.events", 4),
+    ("risk.approved.events", 3),
 ]
 
 
@@ -1107,9 +1312,14 @@ def build_kafka(counts: dict[str, int]) -> list[dict]:
         c = int(counts.get(name, 0))
         out.append(
             {
-                "name": name, "partitions": partitions, "msg_per_min": round(c / 60, 1),
-                "lag": 0, "consumers": 1, "retention_h": 24,
-                "bytes_per_min": round(c / 60 * 512), "orphaned": c == 0,
+                "name": name,
+                "partitions": partitions,
+                "msg_per_min": round(c / 60, 1),
+                "lag": 0,
+                "consumers": 1,
+                "retention_h": 24,
+                "bytes_per_min": round(c / 60 * 512),
+                "orphaned": c == 0,
             }
         )
     return out
@@ -1119,7 +1329,10 @@ def build_infra(pg_connections: int, pg_size_bytes: int) -> list[dict]:
     gb = pg_size_bytes / 1e9 if pg_size_bytes else 0.0
     return [
         {
-            "id": "postgres", "name": "PostgreSQL + TimescaleDB", "kind": "database", "status": "healthy",
+            "id": "postgres",
+            "name": "PostgreSQL + TimescaleDB",
+            "kind": "database",
+            "status": "healthy",
             "metrics": [
                 {"label": "Connexions", "value": str(pg_connections)},
                 {"label": "Taille", "value": f"{gb:.2f} GB"},
@@ -1143,7 +1356,13 @@ async def systems_overview(
     hour_aware = _utcnow() - timedelta(hours=1)  # raw_content.fetched_at is tz-aware
 
     async def count(model, time_col, cutoff=hour) -> int:
-        return int((await session.execute(select(func.count()).select_from(model).where(time_col >= cutoff))).scalar_one())
+        return int(
+            (
+                await session.execute(
+                    select(func.count()).select_from(model).where(time_col >= cutoff)
+                )
+            ).scalar_one()
+        )
 
     coll_rows = (
         await session.execute(
@@ -1153,7 +1372,9 @@ async def systems_overview(
         )
     ).all()
     snap["collectors"] = build_collectors([(r[0], r[1], r[2]) for r in coll_rows])
-    snap["workers"] = build_workers(await count(Signal, Signal.time), await count(Decision, Decision.created_at))
+    snap["workers"] = build_workers(
+        await count(Signal, Signal.time), await count(Decision, Decision.created_at)
+    )
     snap["kafka"] = build_kafka(
         {
             "price.events": await count(Price, Price.time),
@@ -1169,16 +1390,30 @@ async def systems_overview(
         }
     )
     try:
-        conns = int((await session.execute(_text("SELECT count(*) FROM pg_stat_activity"))).scalar_one())
-        size = int((await session.execute(_text("SELECT pg_database_size(current_database())"))).scalar_one())
+        conns = int(
+            (
+                await session.execute(_text("SELECT count(*) FROM pg_stat_activity"))
+            ).scalar_one()
+        )
+        size = int(
+            (
+                await session.execute(
+                    _text("SELECT pg_database_size(current_database())")
+                )
+            ).scalar_one()
+        )
         snap["infra"] = build_infra(conns, size)
     except Exception:
         snap["infra"] = build_infra(0, 0)
 
     snap["summary"]["kafka_lag_total"] = sum(t["lag"] for t in snap["kafka"])
-    snap["summary"]["ai_cost_today_usd"] = round(sum(w["cost_usd_today"] for w in snap["workers"]), 2)
+    snap["summary"]["ai_cost_today_usd"] = round(
+        sum(w["cost_usd_today"] for w in snap["workers"]), 2
+    )
     if not snap["summary"]["events_per_min"]:
-        snap["summary"]["events_per_min"] = int(sum(t["msg_per_min"] for t in snap["kafka"]))
+        snap["summary"]["events_per_min"] = int(
+            sum(t["msg_per_min"] for t in snap["kafka"])
+        )
     return snap
 
 
@@ -1218,9 +1453,7 @@ async def systems_funnel(
     executed = await session.scalar(
         select(func.count())
         .select_from(Trade)
-        .where(
-            and_(Trade.created_at >= since, Trade.status.in_(EXECUTED_STATUSES))
-        )
+        .where(and_(Trade.created_at >= since, Trade.status.in_(EXECUTED_STATUSES)))
     )
 
     # Floor-divide, not `/`: SQLAlchemy renders `/` on two Integers as true

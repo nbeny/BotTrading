@@ -1,4 +1,5 @@
 """control-api entrypoint: front-facing control plane (JWT-protected)."""
+
 from __future__ import annotations
 
 from fastapi import FastAPI
@@ -30,7 +31,9 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     app.state.producer = producer
     app.state.settings_service = settings_router.SettingsService(publisher, reader)
     app.state.positions_service = positions_router.PositionsService(publisher, reader)
-    app.state.opportunities_service = opportunities_router.OpportunitiesService(publisher, reader)
+    app.state.opportunities_service = opportunities_router.OpportunitiesService(
+        publisher, reader
+    )
     app.state.orders_service = orders_router.OrdersService(publisher)
     app.state.publisher = publisher
     app.state.reader = reader

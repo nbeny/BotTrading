@@ -1,5 +1,6 @@
 # services/control-api/app/routers/orders.py
 """Manual order placement (published as a MANUAL_ORDER command)."""
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
@@ -28,14 +29,19 @@ def _svc(request: Request) -> OrdersService:
 
 class OrderInput(BaseModel):
     symbol: str
-    side: str          # buy | sell
-    order_type: str    # market | limit
+    side: str  # buy | sell
+    order_type: str  # market | limit
     quantity: float
     price: float | None = None
 
 
 @router.post("")
-async def place_order(body: OrderInput, request: Request,
-                      principal: Principal = Depends(require_principal)) -> dict:
-    await _svc(request).place(body.model_dump(exclude_none=True), issued_by=principal.sub)
+async def place_order(
+    body: OrderInput,
+    request: Request,
+    principal: Principal = Depends(require_principal),
+) -> dict:
+    await _svc(request).place(
+        body.model_dump(exclude_none=True), issued_by=principal.sub
+    )
     return {"ok": True}

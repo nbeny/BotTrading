@@ -74,7 +74,20 @@ def _unlock_days(raw: dict) -> float | None:
         # Nothing writes a naive timestamp today, but subtracting one from an
         # aware now() raises TypeError, which would take the consumer down.
         at = at.replace(tzinfo=UTC)
-    return max(0.0, (at - datetime.now(tz=UTC)).total_seconds() / 86400.0)
+    days = (at - datetime.now(tz=UTC)).total_seconds() / 86400.0
+    if days < 0:
+        # A past date is a *stale* reading, not an imminent unlock, and the
+        # difference is the whole axis. When an unlock passes, the collector
+        # republishes next_unlock_at=None — "read, nothing pending" — but the
+        # feature store drops None on merge, so the superseded date and pct
+        # survive beside it. Clamping that to zero days made proximity 1.0 and
+        # reported the axis at its *worst* where the truth is its best, and the
+        # 900s TTL never rescued it because every cycle rewrites the hash with
+        # a fresh expiry. Returning None lets the pct-XOR-days guard drop the
+        # term instead: half a reading is no reading.
+        logger.warning("next_unlock_at %s is in the past; treating as stale", value)
+        return None
+    return days
 
 
 class DecisionEngine:

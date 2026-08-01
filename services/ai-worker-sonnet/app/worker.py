@@ -113,7 +113,9 @@ class SonnetWorker:
         # Fixed-window token bucket shared across AI workers.
         if not await self._cache.allow("ai:budget:calls", self._max_per_hour, 3600):
             return False
-        await self._cache.set_json(f"ai:cooldown:{symbol}", 1, ttl_seconds=self._cooldown_s)
+        await self._cache.set_json(
+            f"ai:cooldown:{symbol}", 1, ttl_seconds=self._cooldown_s
+        )
         return True
 
     async def _validate(self, event: AnalysisEvent) -> DecisionEvent | None:
@@ -128,7 +130,9 @@ class SonnetWorker:
             f"social_growth: {event.social_growth}\n"
             f"Full features: {event.meta.get('features', {})}"
         )
-        resp = await self._claude.complete(system=SYSTEM, prompt=prompt, service=SERVICE)
+        resp = await self._claude.complete(
+            system=SYSTEM, prompt=prompt, service=SERVICE
+        )
         try:
             data = resp.json()
         except Exception:

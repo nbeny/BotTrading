@@ -81,7 +81,9 @@ def parse_prometheus(text: str) -> dict[str, list[tuple[dict[str, str], float]]]
     return out
 
 
-def metric_sum(parsed: dict[str, list[tuple[dict[str, str], float]]], name: str) -> float:
+def metric_sum(
+    parsed: dict[str, list[tuple[dict[str, str], float]]], name: str
+) -> float:
     return sum(v for _, v in parsed.get(name, []))
 
 
@@ -105,7 +107,9 @@ def compute_detail(
     if prev:
         dt = max(1e-3, now_ts - prev["ts"])
         detail["cpu_pct"] = round(max(0.0, (cpu_s - prev["cpu"]) / dt * 100), 1)
-        detail["throughput_per_min"] = round(max(0.0, (events - prev["events"]) / dt * 60))
+        detail["throughput_per_min"] = round(
+            max(0.0, (events - prev["events"]) / dt * 60)
+        )
     return detail, {"ts": now_ts, "cpu": cpu_s, "events": events}
 
 
@@ -114,17 +118,32 @@ class HealthCollector:
         self._db = db
         self._interval = interval
         self._stop = asyncio.Event()
-        self._samples: dict[str, dict[str, float]] = {}  # per-service last cumulative sample
+        self._samples: dict[str, dict[str, float]] = (
+            {}
+        )  # per-service last cumulative sample
 
-    async def _upsert(self, name: str, status: str, healthy: bool, latency_ms: float, detail: dict) -> None:
+    async def _upsert(
+        self, name: str, status: str, healthy: bool, latency_ms: float, detail: dict
+    ) -> None:
         async with self._db._sessionmaker() as s:
             now = datetime.now(tz=UTC)
             stmt = insert(ServiceHealth).values(
-                service=name, status=status, healthy=healthy, latency_ms=latency_ms, detail=detail, checked_at=now
+                service=name,
+                status=status,
+                healthy=healthy,
+                latency_ms=latency_ms,
+                detail=detail,
+                checked_at=now,
             )
             stmt = stmt.on_conflict_do_update(
                 index_elements=["service"],
-                set_={"status": status, "healthy": healthy, "latency_ms": latency_ms, "detail": detail, "checked_at": now},
+                set_={
+                    "status": status,
+                    "healthy": healthy,
+                    "latency_ms": latency_ms,
+                    "detail": detail,
+                    "checked_at": now,
+                },
             )
             await s.execute(stmt)
             await s.commit()
@@ -134,6 +153,7 @@ class HealthCollector:
 
         targets = resolve_targets()
         async with httpx.AsyncClient(timeout=3.0) as client:
+
             async def probe(name: str, url: str) -> tuple[str, str, bool, float, dict]:
                 t0 = time.perf_counter()
                 try:

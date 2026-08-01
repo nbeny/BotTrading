@@ -129,15 +129,19 @@ class Persister:
     async def _save_price(self, e: PriceEvent) -> None:
         EVENTS_CONSUMED.labels(SERVICE, Topic.PRICE.value, event_type_of(e)).inc()
         async with self._db._sessionmaker() as s:
-            stmt = insert(Price).values(
-                time=_naive_utc(e.occurred_at),
-                symbol=e.symbol,
-                price_usd=e.price_usd,
-                market_cap_usd=e.market_cap_usd,
-                volume_24h_usd=e.volume_24h_usd,
-                price_change_pct_24h=e.price_change_pct_24h,
-                source="coingecko",
-            ).on_conflict_do_nothing()
+            stmt = (
+                insert(Price)
+                .values(
+                    time=_naive_utc(e.occurred_at),
+                    symbol=e.symbol,
+                    price_usd=e.price_usd,
+                    market_cap_usd=e.market_cap_usd,
+                    volume_24h_usd=e.volume_24h_usd,
+                    price_change_pct_24h=e.price_change_pct_24h,
+                    source="coingecko",
+                )
+                .on_conflict_do_nothing()
+            )
             await s.execute(stmt)
             await s.commit()
         await self._save_token(e)
@@ -170,19 +174,23 @@ class Persister:
     async def _save_signal(self, e: AnalysisEvent) -> None:
         EVENTS_CONSUMED.labels(SERVICE, Topic.ANALYSIS.value, event_type_of(e)).inc()
         async with self._db._sessionmaker() as s:
-            stmt = insert(Signal).values(
-                time=_naive_utc(e.occurred_at),
-                symbol=e.symbol,
-                event_id=e.event_id,
-                opportunity_score=e.opportunity_score,
-                confidence=e.confidence,
-                reason=e.reason,
-                escalated=e.escalate,
-                ambiguous=e.ambiguous,
-                block_reason=e.block_reason,
-                factors_present=e.factors_present,
-                payload=e.model_dump(mode="json"),
-            ).on_conflict_do_nothing()
+            stmt = (
+                insert(Signal)
+                .values(
+                    time=_naive_utc(e.occurred_at),
+                    symbol=e.symbol,
+                    event_id=e.event_id,
+                    opportunity_score=e.opportunity_score,
+                    confidence=e.confidence,
+                    reason=e.reason,
+                    escalated=e.escalate,
+                    ambiguous=e.ambiguous,
+                    block_reason=e.block_reason,
+                    factors_present=e.factors_present,
+                    payload=e.model_dump(mode="json"),
+                )
+                .on_conflict_do_nothing()
+            )
             await s.execute(stmt)
             await s.commit()
 
@@ -211,14 +219,18 @@ class Persister:
     async def _save_rejection(self, e: RiskRejectedEvent) -> None:
         EVENTS_CONSUMED.labels(SERVICE, Topic.DECISION.value, event_type_of(e)).inc()
         async with self._db._sessionmaker() as s:
-            stmt = insert(PipelineRejection).values(
-                time=_naive_utc(e.occurred_at),
-                event_id=e.event_id,
-                stage=stage_for(e.source),
-                symbol=e.symbol,
-                correlation_id=e.correlation_id,
-                reason=e.reason,
-            ).on_conflict_do_nothing()
+            stmt = (
+                insert(PipelineRejection)
+                .values(
+                    time=_naive_utc(e.occurred_at),
+                    event_id=e.event_id,
+                    stage=stage_for(e.source),
+                    symbol=e.symbol,
+                    correlation_id=e.correlation_id,
+                    reason=e.reason,
+                )
+                .on_conflict_do_nothing()
+            )
             await s.execute(stmt)
             await s.commit()
         if e.decision_event_id:
@@ -231,17 +243,21 @@ class Persister:
     async def _save_decision(self, e: DecisionEvent) -> None:
         EVENTS_CONSUMED.labels(SERVICE, Topic.DECISION.value, event_type_of(e)).inc()
         async with self._db._sessionmaker() as s:
-            stmt = insert(Decision).values(
-                event_id=e.event_id,
-                correlation_id=e.correlation_id,
-                symbol=e.symbol,
-                direction=e.direction,
-                opportunity_score=e.opportunity_score,
-                confidence=e.confidence,
-                ai_validated=e.ai_validated,
-                rationale=e.rationale,
-                payload=e.model_dump(mode="json"),
-            ).on_conflict_do_nothing(index_elements=["event_id"])
+            stmt = (
+                insert(Decision)
+                .values(
+                    event_id=e.event_id,
+                    correlation_id=e.correlation_id,
+                    symbol=e.symbol,
+                    direction=e.direction,
+                    opportunity_score=e.opportunity_score,
+                    confidence=e.confidence,
+                    ai_validated=e.ai_validated,
+                    rationale=e.rationale,
+                    payload=e.model_dump(mode="json"),
+                )
+                .on_conflict_do_nothing(index_elements=["event_id"])
+            )
             await s.execute(stmt)
             await s.commit()
 
@@ -250,19 +266,23 @@ class Persister:
             SERVICE, Topic.RISK_APPROVED.value, event_type_of(e)
         ).inc()
         async with self._db._sessionmaker() as s:
-            stmt = insert(Trade).values(
-                event_id=e.event_id,
-                correlation_id=e.correlation_id,
-                symbol=e.symbol,
-                direction=e.direction,
-                entry_price=e.entry_price,
-                stop_loss=e.stop_loss,
-                take_profit=e.take_profit,
-                confidence=e.confidence,
-                position_size_pct=e.position_size_pct,
-                risk_reward_ratio=e.risk_reward_ratio,
-                status="approved",
-            ).on_conflict_do_nothing(index_elements=["event_id"])
+            stmt = (
+                insert(Trade)
+                .values(
+                    event_id=e.event_id,
+                    correlation_id=e.correlation_id,
+                    symbol=e.symbol,
+                    direction=e.direction,
+                    entry_price=e.entry_price,
+                    stop_loss=e.stop_loss,
+                    take_profit=e.take_profit,
+                    confidence=e.confidence,
+                    position_size_pct=e.position_size_pct,
+                    risk_reward_ratio=e.risk_reward_ratio,
+                    status="approved",
+                )
+                .on_conflict_do_nothing(index_elements=["event_id"])
+            )
             await s.execute(stmt)
             await s.commit()
         if e.decision_event_id:
@@ -284,14 +304,18 @@ class Persister:
         # The public property, not the private attribute the older handlers
         # reach through; same object, and it needs no `noqa`.
         async with self._db.sessionmaker() as s:
-            stmt = insert(AccountSnapshot).values(
-                event_id=e.event_id,
-                venue=e.venue,
-                equity_usd=e.equity_usd,
-                cash_usd=e.cash_usd,
-                balances=e.balances,
-                fetched_at=_naive_utc(e.occurred_at),
-            ).on_conflict_do_nothing(index_elements=["event_id"])
+            stmt = (
+                insert(AccountSnapshot)
+                .values(
+                    event_id=e.event_id,
+                    venue=e.venue,
+                    equity_usd=e.equity_usd,
+                    cash_usd=e.cash_usd,
+                    balances=e.balances,
+                    fetched_at=_naive_utc(e.occurred_at),
+                )
+                .on_conflict_do_nothing(index_elements=["event_id"])
+            )
             await s.execute(stmt)
             await s.commit()
 

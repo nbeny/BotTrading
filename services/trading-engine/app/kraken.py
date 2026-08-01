@@ -4,6 +4,7 @@ Signs private requests with the Kraken Futures scheme and routes to the demo or
 live host. In dry_run mode it performs NO network I/O and returns deterministic
 simulated responses so the whole pipeline can be exercised safely.
 """
+
 from __future__ import annotations
 
 import base64
@@ -82,8 +83,8 @@ class KrakenFuturesClient:
         self,
         *,
         pair: str,
-        side: str,            # "buy" | "sell"
-        order_type: str,      # "lmt" | "mkt" | "stp" | "take_profit"
+        side: str,  # "buy" | "sell"
+        order_type: str,  # "lmt" | "mkt" | "stp" | "take_profit"
         size: float,
         limit_price: float | None = None,
         stop_price: float | None = None,
@@ -93,8 +94,14 @@ class KrakenFuturesClient:
         if self._mode() is Mode.DRY_RUN:
             logger.info(
                 "[DRY_RUN] send_order %s %s %s size=%s lmt=%s stop=%s ro=%s cli=%s",
-                pair, side, order_type, size, limit_price, stop_price,
-                reduce_only, cli_ord_id,
+                pair,
+                side,
+                order_type,
+                size,
+                limit_price,
+                stop_price,
+                reduce_only,
+                cli_ord_id,
             )
             return {
                 "result": "success",

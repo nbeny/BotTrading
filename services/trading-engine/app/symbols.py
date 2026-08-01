@@ -3,6 +3,7 @@
 Maps the platform's internal symbol (e.g. "SOL") to a Kraken Futures perpetual
 product id (e.g. "PF_SOLUSD"). Extend deliberately; unknown symbols are rejected.
 """
+
 from __future__ import annotations
 
 

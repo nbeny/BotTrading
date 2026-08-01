@@ -1,5 +1,6 @@
 # services/trading-engine/app/engine.py
 """Trading engine: turns RiskApprovedEvent into Kraken Futures orders."""
+
 from __future__ import annotations
 
 import logging
@@ -33,11 +34,15 @@ def _order_id(resp: dict) -> str | None:
 
 def _signal_payload(event) -> dict:
     return {
-        "symbol": event.symbol, "direction": event.direction,
-        "entry_price": event.entry_price, "stop_loss": event.stop_loss,
-        "take_profit": event.take_profit, "confidence": event.confidence,
+        "symbol": event.symbol,
+        "direction": event.direction,
+        "entry_price": event.entry_price,
+        "stop_loss": event.stop_loss,
+        "take_profit": event.take_profit,
+        "confidence": event.confidence,
         "position_size_pct": event.position_size_pct,
-        "correlation_id": event.correlation_id, "event_id": event.event_id,
+        "correlation_id": event.correlation_id,
+        "event_id": event.event_id,
     }
 
 
@@ -104,7 +109,9 @@ class TradingEngine:
 
     async def _queue_pending(self, event) -> None:
         await self._cache.set_json(
-            f"trading:pending:{event.event_id}", _signal_payload(event), ttl_seconds=86_400
+            f"trading:pending:{event.event_id}",
+            _signal_payload(event),
+            ttl_seconds=86_400,
         )
         await self._cache.client.sadd("trading:pending", event.event_id)
         await self._emit(event, ExecutionKind.PENDING)
@@ -118,22 +125,35 @@ class TradingEngine:
         await self._cache.set_json(submitted_key, True, ttl_seconds=86_400)
         side = "buy" if event.direction == Direction.LONG else "sell"
         entry = await self._kraken.send_order(
-            pair=pair, side=side, order_type="lmt", size=size,
-            limit_price=event.entry_price, cli_ord_id=event.event_id,
+            pair=pair,
+            side=side,
+            order_type="lmt",
+            size=size,
+            limit_price=event.entry_price,
+            cli_ord_id=event.event_id,
         )
-        await self._emit(event, ExecutionKind.SUBMITTED, size=size,
-                         kraken_order_id=_order_id(entry))
+        await self._emit(
+            event, ExecutionKind.SUBMITTED, size=size, kraken_order_id=_order_id(entry)
+        )
 
         # SL/TP reduce-only (opposite side).
         exit_side = "sell" if side == "buy" else "buy"
         await self._kraken.send_order(
-            pair=pair, side=exit_side, order_type="stp", size=size,
-            stop_price=event.stop_loss, reduce_only=True,
+            pair=pair,
+            side=exit_side,
+            order_type="stp",
+            size=size,
+            stop_price=event.stop_loss,
+            reduce_only=True,
             cli_ord_id=f"{event.event_id}-sl",
         )
         await self._kraken.send_order(
-            pair=pair, side=exit_side, order_type="take_profit", size=size,
-            stop_price=event.take_profit, reduce_only=True,
+            pair=pair,
+            side=exit_side,
+            order_type="take_profit",
+            size=size,
+            stop_price=event.take_profit,
+            reduce_only=True,
             cli_ord_id=f"{event.event_id}-tp",
         )
 
@@ -142,28 +162,41 @@ class TradingEngine:
         await self._cache.set_json(
             f"trading:position:{event.event_id}",
             {
-                "symbol": event.symbol, "pair": pair, "side": side,
-                "size": size, "entry_price": event.entry_price,
+                "symbol": event.symbol,
+                "pair": pair,
+                "side": side,
+                "size": size,
+                "entry_price": event.entry_price,
                 "position_size_pct": event.position_size_pct,
             },
             ttl_seconds=0,
         )
-        await self._emit(event, ExecutionKind.FILLED, size=size,
-                         fill_price=event.entry_price,
-                         kraken_order_id=_order_id(entry))
+        await self._emit(
+            event,
+            ExecutionKind.FILLED,
+            size=size,
+            fill_price=event.entry_price,
+            kraken_order_id=_order_id(entry),
+        )
         logger.info("EXECUTED %s size=%s @ %s", event.symbol, size, event.entry_price)
 
-    async def approve_opportunity(self, event_id: str, *, issued_by: str | None = None) -> None:
+    async def approve_opportunity(
+        self, event_id: str, *, issued_by: str | None = None
+    ) -> None:
         payload = await self._cache.get_json(f"trading:pending:{event_id}")
         if not payload:
             logger.info("approve: %s not pending", event_id)
             return
         await self._cache.client.srem("trading:pending", event_id)
         event = RiskApprovedEvent(
-            event_id=payload["event_id"], correlation_id=payload["correlation_id"],
-            symbol=payload["symbol"], direction=payload["direction"],
-            entry_price=payload["entry_price"], stop_loss=payload["stop_loss"],
-            take_profit=payload["take_profit"], confidence=payload["confidence"],
+            event_id=payload["event_id"],
+            correlation_id=payload["correlation_id"],
+            symbol=payload["symbol"],
+            direction=payload["direction"],
+            entry_price=payload["entry_price"],
+            stop_loss=payload["stop_loss"],
+            take_profit=payload["take_profit"],
+            confidence=payload["confidence"],
             position_size_pct=payload["position_size_pct"],
         )
         config = await RuntimeConfig.load(self._cache, self._defaults)
@@ -173,9 +206,12 @@ class TradingEngine:
             await self._reject(event, reason)
             return
         size = compute_size(
-            equity_usd=await self._equity(), position_size_pct=event.position_size_pct,
-            entry_price=event.entry_price, max_order_usd=config.max_order_usd,
-            max_leverage=config.max_leverage, contract_step=CONTRACT_STEP,
+            equity_usd=await self._equity(),
+            position_size_pct=event.position_size_pct,
+            entry_price=event.entry_price,
+            max_order_usd=config.max_order_usd,
+            max_leverage=config.max_leverage,
+            contract_step=CONTRACT_STEP,
             min_contracts=MIN_CONTRACTS,
         )
         if size <= 0:
@@ -185,38 +221,56 @@ class TradingEngine:
         logger.info("APPROVED %s by %s", event.symbol, issued_by)
 
     async def reject_opportunity(
-        self, event_id: str, *, reason: str = "operator_reject", issued_by: str | None = None
+        self,
+        event_id: str,
+        *,
+        reason: str = "operator_reject",
+        issued_by: str | None = None,
     ) -> None:
         payload = await self._cache.get_json(f"trading:pending:{event_id}")
         if not payload:
             return
         await self._cache.client.srem("trading:pending", event_id)
         event = RiskApprovedEvent(
-            event_id=payload["event_id"], correlation_id=payload["correlation_id"],
-            symbol=payload["symbol"], direction=payload["direction"],
-            entry_price=payload["entry_price"], stop_loss=payload["stop_loss"],
-            take_profit=payload["take_profit"], confidence=payload["confidence"],
+            event_id=payload["event_id"],
+            correlation_id=payload["correlation_id"],
+            symbol=payload["symbol"],
+            direction=payload["direction"],
+            entry_price=payload["entry_price"],
+            stop_loss=payload["stop_loss"],
+            take_profit=payload["take_profit"],
+            confidence=payload["confidence"],
             position_size_pct=payload["position_size_pct"],
         )
         await self._emit(event, ExecutionKind.REJECTED, reason=reason)
         logger.info("operator rejected %s: %s", event.symbol, reason)
 
-    async def close_position(self, event_id: str, *, issued_by: str | None = None) -> None:
+    async def close_position(
+        self, event_id: str, *, issued_by: str | None = None
+    ) -> None:
         pos = await self._cache.get_json(f"trading:position:{event_id}")
         if not pos:
             logger.info("close_position: %s not tracked", event_id)
             return
         exit_side = "sell" if pos["side"] == "buy" else "buy"
         await self._kraken.send_order(
-            pair=pos["pair"], side=exit_side, order_type="mkt", size=pos["size"],
-            reduce_only=True, cli_ord_id=f"{event_id}-close",
+            pair=pos["pair"],
+            side=exit_side,
+            order_type="mkt",
+            size=pos["size"],
+            reduce_only=True,
+            cli_ord_id=f"{event_id}-close",
         )
         logger.info("close_position %s by %s", event_id, issued_by)
         # reconcile will detect the closed position and emit CLOSED + free exposure
 
     async def adjust_sltp(
-        self, event_id: str, *, stop_loss: float | None = None,
-        take_profit: float | None = None, issued_by: str | None = None,
+        self,
+        event_id: str,
+        *,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+        issued_by: str | None = None,
     ) -> None:
         pos = await self._cache.get_json(f"trading:position:{event_id}")
         if not pos:
@@ -226,20 +280,42 @@ class TradingEngine:
         if stop_loss is not None:
             await self._kraken.cancel_order(cli_ord_id=f"{event_id}-sl")
             await self._kraken.send_order(
-                pair=pos["pair"], side=exit_side, order_type="stp", size=pos["size"],
-                stop_price=stop_loss, reduce_only=True, cli_ord_id=f"{event_id}-sl",
+                pair=pos["pair"],
+                side=exit_side,
+                order_type="stp",
+                size=pos["size"],
+                stop_price=stop_loss,
+                reduce_only=True,
+                cli_ord_id=f"{event_id}-sl",
             )
         if take_profit is not None:
             await self._kraken.cancel_order(cli_ord_id=f"{event_id}-tp")
             await self._kraken.send_order(
-                pair=pos["pair"], side=exit_side, order_type="take_profit", size=pos["size"],
-                stop_price=take_profit, reduce_only=True, cli_ord_id=f"{event_id}-tp",
+                pair=pos["pair"],
+                side=exit_side,
+                order_type="take_profit",
+                size=pos["size"],
+                stop_price=take_profit,
+                reduce_only=True,
+                cli_ord_id=f"{event_id}-tp",
             )
-        logger.info("adjust_sltp %s sl=%s tp=%s by %s", event_id, stop_loss, take_profit, issued_by)
+        logger.info(
+            "adjust_sltp %s sl=%s tp=%s by %s",
+            event_id,
+            stop_loss,
+            take_profit,
+            issued_by,
+        )
 
     async def manual_order(
-        self, *, symbol: str, side: str, order_type: str, quantity: float,
-        price: float | None = None, issued_by: str | None = None,
+        self,
+        *,
+        symbol: str,
+        side: str,
+        order_type: str,
+        quantity: float,
+        price: float | None = None,
+        issued_by: str | None = None,
     ) -> None:
         config = await RuntimeConfig.load(self._cache, self._defaults)
         reason = await check_guards(self._cache, config)
@@ -270,11 +346,21 @@ class TradingEngine:
                 "manual_order %s: no reference price, notional cap not enforced", base
             )
         await self._kraken.send_order(
-            pair=pair, side=side, order_type=kraken_type, size=quantity,
-            limit_price=price, cli_ord_id=f"manual-{base}-{side}",
+            pair=pair,
+            side=side,
+            order_type=kraken_type,
+            size=quantity,
+            limit_price=price,
+            cli_ord_id=f"manual-{base}-{side}",
         )
-        logger.info("MANUAL ORDER %s %s %s qty=%s by %s", base, side, order_type, quantity,
-                    issued_by)
+        logger.info(
+            "MANUAL ORDER %s %s %s qty=%s by %s",
+            base,
+            side,
+            order_type,
+            quantity,
+            issued_by,
+        )
 
     async def _equity(self) -> float:
         accounts = await self._kraken.get_accounts()

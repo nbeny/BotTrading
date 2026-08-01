@@ -20,9 +20,7 @@ router = APIRouter(tags=["events"])
 
 MAX_LIMIT = 200
 
-_COLUMNS = (
-    "time, event_id, event_type, topic, symbol, correlation_id, payload"
-)
+_COLUMNS = "time, event_id, event_type, topic, symbol, correlation_id, payload"
 
 
 def assume_utc(time: datetime) -> datetime:

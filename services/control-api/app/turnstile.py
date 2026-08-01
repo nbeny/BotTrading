@@ -15,6 +15,7 @@ Two deliberate choices:
   Cloudflare as a pass — turns any outage into an open door, which is exactly
   what an attacker would provoke.
 """
+
 from __future__ import annotations
 
 import logging

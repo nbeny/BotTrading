@@ -97,7 +97,13 @@ async def test_a_naive_unlock_date_is_read_as_utc_rather_than_crashing() -> None
     assert breakdown["fundamentals"] < 0.2
 
 
-async def test_a_past_unlock_date_clamps_to_zero_days() -> None:
+async def test_a_past_unlock_date_is_stale_not_imminent() -> None:
+    # The severity inversion. When an unlock passes, the collector republishes
+    # next_unlock_at=None -- "read, nothing pending" -- but the feature store
+    # drops None on merge, so the superseded date and pct survive. Clamping a
+    # past date to zero days made proximity 1.0 and reported the axis at its
+    # *worst* where the truth is its best, permanently: every cycle rewrites
+    # the hash with a fresh 900s TTL, so it never expired out.
     due = datetime.now(tz=UTC) - timedelta(days=2)
     breakdown = await _breakdown(
         {
@@ -106,7 +112,20 @@ async def test_a_past_unlock_date_clamps_to_zero_days() -> None:
             "next_unlock_pct_supply": 5.0,
         }
     )
-    assert breakdown["fundamentals"] == 0.0
+    assert "fundamentals" not in breakdown
+
+
+async def test_an_unlock_happening_today_is_still_imminent() -> None:
+    # The other side: rejecting the past must not reject the present.
+    due = datetime.now(tz=UTC) + timedelta(hours=2)
+    breakdown = await _breakdown(
+        {
+            "has_unlock_schedule": True,
+            "next_unlock_at": due.isoformat(),
+            "next_unlock_pct_supply": 5.0,
+        }
+    )
+    assert breakdown["fundamentals"] < 0.05
 
 
 async def test_absent_context_features_leave_the_axes_out() -> None:

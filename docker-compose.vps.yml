@@ -243,6 +243,8 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      kafka:
+        condition: service_healthy
     environment:
       <<: *common-env
       DEFILLAMA_POLL_INTERVAL: ${DEFILLAMA_POLL_INTERVAL:-600}
@@ -255,6 +257,8 @@ services:
       redis:
         condition: service_healthy
       postgres:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
     environment:
       <<: *common-env
@@ -344,6 +348,12 @@ services:
       # Floors a decision must clear to become an actionable signal. Both are
       # read by rules.evaluate; surfaced here so they can be tuned from the
       # funnel without a rebuild.
+      # NOT rescaled for v2, and it sits behind the same door as
+      # DECISION_THRESHOLD. 70 was calibrated against the v1 non-renormalising
+      # scorer, whose documented ceiling was 61; v2 lifts scores by +16 to +25
+      # on plausible feature sets, so in real terms this floor is now
+      # materially looser. Reopening DECISION_THRESHOLD alone un-gates it too.
+      # Recompute both from the same population, in the same change.
       RISK_MIN_SCORE: ${RISK_MIN_SCORE:-70}
       # 0.55 was calibrated when confidence spanned five axes and a
       # legacy-only symbol could reach 1.0. It now spans seven, so those symbols

@@ -1,4 +1,5 @@
 """Engine settings: read status + publish set_mode/kill/auto/caps commands."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -12,8 +13,13 @@ from cmi_common.events.control import ControlCommand
 from ..auth_dep import require_principal
 
 _VALID_MODES = {"dry_run", "demo", "live"}
-_CAPS_FIELDS = {"max_order_usd", "max_leverage", "max_orders_per_hour",
-                "entry_timeout_s", "reconcile_interval_s"}
+_CAPS_FIELDS = {
+    "max_order_usd",
+    "max_leverage",
+    "max_orders_per_hour",
+    "entry_timeout_s",
+    "reconcile_interval_s",
+}
 
 
 class SettingsService:
@@ -27,7 +33,9 @@ class SettingsService:
     async def set_mode(self, mode: str, *, issued_by: str | None) -> None:
         if mode not in _VALID_MODES:
             raise ValueError(f"invalid mode {mode}")
-        await self._pub.publish(ControlCommand.SET_MODE, {"mode": mode}, issued_by=issued_by)
+        await self._pub.publish(
+            ControlCommand.SET_MODE, {"mode": mode}, issued_by=issued_by
+        )
 
     async def set_kill_switch(self, enabled: bool, *, issued_by: str | None) -> None:
         await self._pub.publish(
@@ -68,33 +76,45 @@ class CapsInput(BaseModel):
 
 
 @router.get("/status")
-async def status(request: Request, principal: Principal = Depends(require_principal)) -> dict:
+async def status(
+    request: Request, principal: Principal = Depends(require_principal)
+) -> dict:
     return await _svc(request).status()
 
 
 @router.post("/mode")
-async def set_mode(body: ModeInput, request: Request,
-                   principal: Principal = Depends(require_principal)) -> dict:
+async def set_mode(
+    body: ModeInput, request: Request, principal: Principal = Depends(require_principal)
+) -> dict:
     await _svc(request).set_mode(body.mode, issued_by=principal.sub)
     return {"ok": True, "mode": body.mode}
 
 
 @router.post("/kill")
-async def set_kill(body: EnabledInput, request: Request,
-                   principal: Principal = Depends(require_principal)) -> dict:
+async def set_kill(
+    body: EnabledInput,
+    request: Request,
+    principal: Principal = Depends(require_principal),
+) -> dict:
     await _svc(request).set_kill_switch(body.enabled, issued_by=principal.sub)
     return {"ok": True, "trading_enabled": body.enabled}
 
 
 @router.post("/auto")
-async def set_auto(body: EnabledInput, request: Request,
-                   principal: Principal = Depends(require_principal)) -> dict:
+async def set_auto(
+    body: EnabledInput,
+    request: Request,
+    principal: Principal = Depends(require_principal),
+) -> dict:
     await _svc(request).set_auto_trading(body.enabled, issued_by=principal.sub)
     return {"ok": True, "auto_trading_enabled": body.enabled}
 
 
 @router.post("/caps")
-async def set_caps(body: CapsInput, request: Request,
-                   principal: Principal = Depends(require_principal)) -> dict:
-    await _svc(request).set_caps(body.model_dump(exclude_none=True), issued_by=principal.sub)
+async def set_caps(
+    body: CapsInput, request: Request, principal: Principal = Depends(require_principal)
+) -> dict:
+    await _svc(request).set_caps(
+        body.model_dump(exclude_none=True), issued_by=principal.sub
+    )
     return {"ok": True}

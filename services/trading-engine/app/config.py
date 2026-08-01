@@ -1,4 +1,5 @@
 """Trading-engine configuration loaded from the environment."""
+
 from __future__ import annotations
 
 import os
@@ -7,9 +8,9 @@ from enum import StrEnum
 
 
 class Mode(StrEnum):
-    DRY_RUN = "dry_run"   # log only, no network calls
-    DEMO = "demo"         # demo-futures.kraken.com (testnet)
-    LIVE = "live"         # futures.kraken.com (real money)
+    DRY_RUN = "dry_run"  # log only, no network calls
+    DEMO = "demo"  # demo-futures.kraken.com (testnet)
+    LIVE = "live"  # futures.kraken.com (real money)
 
 
 def _bool(name: str, default: bool) -> bool:

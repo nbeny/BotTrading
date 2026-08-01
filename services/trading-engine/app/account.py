@@ -26,8 +26,15 @@ CACHE_TTL_MULTIPLE = 2
 
 
 class AccountPoller:
-    def __init__(self, client, producer: EventProducer, cache: Cache, *,
-                 venue: str, interval_s: int = 60) -> None:
+    def __init__(
+        self,
+        client,
+        producer: EventProducer,
+        cache: Cache,
+        *,
+        venue: str,
+        interval_s: int = 60,
+    ) -> None:
         self._client = client
         self._producer = producer
         self._cache = cache
@@ -66,8 +73,7 @@ class AccountPoller:
         except Exception:
             # No snapshot beats a wrong one: absence reads as "not connected"
             # downstream, whereas a zero would read as "you own nothing".
-            logger.warning("account snapshot failed for %s", self._venue,
-                           exc_info=True)
+            logger.warning("account snapshot failed for %s", self._venue, exc_info=True)
             return
         await self._producer.publish(Topic.ACCOUNT_SNAPSHOT, event)
         await self._cache.set_json(
@@ -75,8 +81,7 @@ class AccountPoller:
             # `occurred_at` is timezone-aware, so the isoformat string carries
             # its offset and the read plane can compare it to now() without a
             # silent local-time shift when it computes staleness.
-            {"venue": self._venue, "fetched_at": event.occurred_at.isoformat(),
-             **data},
+            {"venue": self._venue, "fetched_at": event.occurred_at.isoformat(), **data},
             ttl_seconds=self._interval * CACHE_TTL_MULTIPLE,
         )
 
@@ -102,5 +107,6 @@ def build_poller(config, producer, cache) -> AccountPoller | None:
     if not (config.read_api_key and config.read_api_secret):
         return None
     client = KrakenSpotClient(config.read_api_key, config.read_api_secret)
-    return AccountPoller(client, producer, cache, venue="kraken_spot",
-                         interval_s=config.account_poll_s)
+    return AccountPoller(
+        client, producer, cache, venue="kraken_spot", interval_s=config.account_poll_s
+    )

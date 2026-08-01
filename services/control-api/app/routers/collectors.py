@@ -3,6 +3,7 @@
 Reads/writes the Redis `collectors:runtime` key the poll loops honour, and reads
 the `ai:quota:*` status the AI workers publish while paused on a usage limit.
 """
+
 from __future__ import annotations
 
 import logging
@@ -90,7 +91,9 @@ async def coverage(
             )
         ).one()
         pending = (
-            await s.execute(text(f"SELECT count(*) FROM signals s WHERE {_PENDING_WHERE}"))
+            await s.execute(
+                text(f"SELECT count(*) FROM signals s WHERE {_PENDING_WHERE}")
+            )
         ).scalar_one()
     return {
         "sentiment": {

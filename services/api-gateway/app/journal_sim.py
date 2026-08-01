@@ -22,7 +22,7 @@ DEFAULT_FEE_PCT = 0.0016
 
 @dataclass(frozen=True, slots=True)
 class TradeOutcome:
-    outcome: str                  # stop_loss | take_profit | horizon | no_data
+    outcome: str  # stop_loss | take_profit | horizon | no_data
     exit_price: float | None
     seconds_held: int | None
     pnl_gross_pct: float | None
@@ -68,8 +68,12 @@ def simulate_path(
 
 
 def _settle(
-    outcome: str, entry: float, exit_price: float, seconds: int,
-    is_long: bool, fee_pct: float,
+    outcome: str,
+    entry: float,
+    exit_price: float,
+    seconds: int,
+    is_long: bool,
+    fee_pct: float,
 ) -> TradeOutcome:
     move = (exit_price - entry) / entry
     gross = (move if is_long else -move) * 100

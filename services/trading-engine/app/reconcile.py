@@ -5,6 +5,7 @@ Source of truth is Kraken. The engine only manages positions it opened (tracked
 in Redis set ``trading:positions``). A tracked position that Kraken no longer
 reports has closed. A Kraken position we do not track is logged, never touched.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -81,4 +82,6 @@ class Reconciler:
         )
         await self._producer.publish(Topic.EXECUTION, ev)
         EVENTS_PRODUCED.labels(SERVICE, Topic.EXECUTION.value, ev.event_type).inc()
-        logger.info("CLOSED %s (event %s), exposure -> %s", pos["symbol"], event_id, freed)
+        logger.info(
+            "CLOSED %s (event %s), exposure -> %s", pos["symbol"], event_id, freed
+        )

@@ -250,6 +250,8 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      kafka:
+        condition: service_healthy
     environment:
       <<: *common-env
       DEFILLAMA_POLL_INTERVAL: ${DEFILLAMA_POLL_INTERVAL:-600}
@@ -262,6 +264,8 @@ services:
       redis:
         condition: service_healthy
       postgres:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
     environment:
       <<: *common-env
@@ -343,6 +347,12 @@ services:
     build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/risk-engine } }
     environment:
       <<: *common-env
+      # Kept in step with docker-compose.vps.yml. Without these the dev
+      # stack runs the pre-v2 confidence floor, i.e. the exact bug the VPS
+      # config was changed to fix, and local reproduction of production is
+      # impossible by construction.
+      RISK_MIN_SCORE: ${RISK_MIN_SCORE:-70}
+      RISK_MIN_CONFIDENCE: ${RISK_MIN_CONFIDENCE:-0.41}
       RISK_MAX_POSITION_PCT: ${RISK_MAX_POSITION_PCT:-0.05}
 
   trading-engine:

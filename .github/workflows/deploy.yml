@@ -41,7 +41,22 @@ jobs:
             tests/test_scorer_diagnostics.py \
             tests/test_sonnet_budget.py \
             tests/test_collector_runtime.py \
-            tests/test_control_api_turnstile.py -q
+            tests/test_control_api_turnstile.py \
+            tests/test_derivatives_fundamentals_events.py \
+            tests/test_shared_universe.py \
+            tests/test_defillama_unlocks.py \
+            tests/test_defillama_mapper.py \
+            tests/test_defillama_client.py \
+            tests/test_defillama_collector.py \
+            tests/test_binance_futures_mapper.py \
+            tests/test_binance_futures_client.py \
+            tests/test_binance_futures_collector.py \
+            tests/test_haiku_context_features.py \
+            tests/test_scoring.py \
+            tests/test_scoring_new_axes.py \
+            tests/test_scoring_renormalisation.py \
+            tests/test_decision_engine_context_features.py \
+            tests/test_market_regime_signal.py -q
 
   # -------------------------------------------------------------- images
   images:

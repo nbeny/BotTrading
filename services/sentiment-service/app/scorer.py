@@ -14,12 +14,37 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 _POSITIVE = {
-    "bull", "bullish", "moon", "pump", "surge", "rally", "breakout",
-    "gain", "up", "buy", "long", "adoption", "partnership", "listing",
+    "bull",
+    "bullish",
+    "moon",
+    "pump",
+    "surge",
+    "rally",
+    "breakout",
+    "gain",
+    "up",
+    "buy",
+    "long",
+    "adoption",
+    "partnership",
+    "listing",
 }
 _NEGATIVE = {
-    "bear", "bearish", "dump", "crash", "rug", "scam", "hack", "exploit",
-    "down", "sell", "short", "fud", "lawsuit", "ban", "delist",
+    "bear",
+    "bearish",
+    "dump",
+    "crash",
+    "rug",
+    "scam",
+    "hack",
+    "exploit",
+    "down",
+    "sell",
+    "short",
+    "fud",
+    "lawsuit",
+    "ban",
+    "delist",
 }
 
 
@@ -54,9 +79,7 @@ class SentimentScorer:
             )
             logger.info("loaded HF sentiment model %s", self._model_name)
         except Exception as exc:
-            logger.warning(
-                "HF model unavailable (%s); using lexicon fallback", exc
-            )
+            logger.warning("HF model unavailable (%s); using lexicon fallback", exc)
             self._pipeline = None
 
     def score(self, text: str) -> SentimentResult:

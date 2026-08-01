@@ -4,6 +4,7 @@
 Later phases add position actions (close/adjust), manual orders, and opportunity
 approve/reject by extending the dispatch table.
 """
+
 from __future__ import annotations
 
 import logging
@@ -20,8 +21,11 @@ from .runtime import RuntimeConfig
 logger = logging.getLogger(__name__)
 
 _CAPS_FIELDS = (
-    "max_order_usd", "max_leverage", "max_orders_per_hour",
-    "entry_timeout_s", "reconcile_interval_s",
+    "max_order_usd",
+    "max_leverage",
+    "max_orders_per_hour",
+    "entry_timeout_s",
+    "reconcile_interval_s",
 )
 
 
@@ -44,7 +48,9 @@ class ControlHandler:
         if cmd == ControlCommand.SET_MODE:
             await RuntimeConfig.set_fields(self._cache, {"mode": str(p["mode"])})
         elif cmd == ControlCommand.SET_KILL_SWITCH:
-            await RuntimeConfig.set_fields(self._cache, {"trading_enabled": bool(p["enabled"])})
+            await RuntimeConfig.set_fields(
+                self._cache, {"trading_enabled": bool(p["enabled"])}
+            )
         elif cmd == ControlCommand.SET_AUTO_TRADING:
             await RuntimeConfig.set_fields(
                 self._cache, {"auto_trading_enabled": bool(p["enabled"])}
@@ -57,19 +63,28 @@ class ControlHandler:
             await self._engine.close_position(p["event_id"], issued_by=event.issued_by)
         elif cmd == ControlCommand.ADJUST_SLTP:
             await self._engine.adjust_sltp(
-                p["event_id"], stop_loss=p.get("stop_loss"),
-                take_profit=p.get("take_profit"), issued_by=event.issued_by,
+                p["event_id"],
+                stop_loss=p.get("stop_loss"),
+                take_profit=p.get("take_profit"),
+                issued_by=event.issued_by,
             )
         elif cmd == ControlCommand.MANUAL_ORDER:
             await self._engine.manual_order(
-                symbol=p["symbol"], side=p["side"], order_type=p["order_type"],
-                quantity=p["quantity"], price=p.get("price"), issued_by=event.issued_by,
+                symbol=p["symbol"],
+                side=p["side"],
+                order_type=p["order_type"],
+                quantity=p["quantity"],
+                price=p.get("price"),
+                issued_by=event.issued_by,
             )
         elif cmd == ControlCommand.APPROVE_OPPORTUNITY:
-            await self._engine.approve_opportunity(p["event_id"], issued_by=event.issued_by)
+            await self._engine.approve_opportunity(
+                p["event_id"], issued_by=event.issued_by
+            )
         elif cmd == ControlCommand.REJECT_OPPORTUNITY:
             await self._engine.reject_opportunity(
-                p["event_id"], reason=p.get("reason", "operator_reject"),
+                p["event_id"],
+                reason=p.get("reason", "operator_reject"),
                 issued_by=event.issued_by,
             )
         else:

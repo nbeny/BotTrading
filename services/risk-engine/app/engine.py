@@ -43,9 +43,7 @@ class RiskEngine:
         EVENTS_CONSUMED.labels(SERVICE, Topic.DECISION.value, event.event_type).inc()
 
         entry = await self._entry_price(event)
-        is_black = bool(
-            await self._cache.client.sismember(BLACKLIST_KEY, event.symbol)
-        )
+        is_black = bool(await self._cache.client.sismember(BLACKLIST_KEY, event.symbol))
         exposure = float(await self._cache.get_json(EXPOSURE_KEY) or 0.0)
 
         decision = evaluate(
@@ -107,6 +105,4 @@ class RiskEngine:
         )
         # Rejections are published on the decision topic as an audit trail.
         await self._producer.publish(Topic.DECISION, rejected)
-        EVENTS_PRODUCED.labels(
-            SERVICE, Topic.DECISION.value, rejected.event_type
-        ).inc()
+        EVENTS_PRODUCED.labels(SERVICE, Topic.DECISION.value, rejected.event_type).inc()

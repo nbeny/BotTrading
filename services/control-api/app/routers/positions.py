@@ -1,5 +1,6 @@
 # services/control-api/app/routers/positions.py
 """Positions: list live positions + publish close / adjust-SLTP commands."""
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
@@ -24,13 +25,17 @@ class PositionsService:
             ControlCommand.CLOSE_POSITION, {"event_id": event_id}, issued_by=issued_by
         )
 
-    async def adjust(self, event_id: str, *, stop_loss, take_profit, issued_by: str | None) -> None:
+    async def adjust(
+        self, event_id: str, *, stop_loss, take_profit, issued_by: str | None
+    ) -> None:
         payload = {"event_id": event_id}
         if stop_loss is not None:
             payload["stop_loss"] = stop_loss
         if take_profit is not None:
             payload["take_profit"] = take_profit
-        await self._pub.publish(ControlCommand.ADJUST_SLTP, payload, issued_by=issued_by)
+        await self._pub.publish(
+            ControlCommand.ADJUST_SLTP, payload, issued_by=issued_by
+        )
 
 
 router = APIRouter(prefix="/trading/positions", tags=["positions"])
@@ -46,21 +51,31 @@ class SlTpInput(BaseModel):
 
 
 @router.get("")
-async def list_positions(request: Request,
-                         principal: Principal = Depends(require_principal)) -> list[dict]:
+async def list_positions(
+    request: Request, principal: Principal = Depends(require_principal)
+) -> list[dict]:
     return await _svc(request).list()
 
 
 @router.post("/{event_id}/close")
-async def close(event_id: str, request: Request,
-                principal: Principal = Depends(require_principal)) -> dict:
+async def close(
+    event_id: str, request: Request, principal: Principal = Depends(require_principal)
+) -> dict:
     await _svc(request).close(event_id, issued_by=principal.sub)
     return {"ok": True}
 
 
 @router.patch("/{event_id}/sltp")
-async def adjust(event_id: str, body: SlTpInput, request: Request,
-                 principal: Principal = Depends(require_principal)) -> dict:
-    await _svc(request).adjust(event_id, stop_loss=body.stop_loss,
-                               take_profit=body.take_profit, issued_by=principal.sub)
+async def adjust(
+    event_id: str,
+    body: SlTpInput,
+    request: Request,
+    principal: Principal = Depends(require_principal),
+) -> dict:
+    await _svc(request).adjust(
+        event_id,
+        stop_loss=body.stop_loss,
+        take_profit=body.take_profit,
+        issued_by=principal.sub,
+    )
     return {"ok": True}

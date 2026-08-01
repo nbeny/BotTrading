@@ -5,6 +5,7 @@ The trading-engine is the single writer of `trading:runtime`. Env defaults are
 written once at boot if absent, then the operator mutates fields via control
 commands. The hot path calls `RuntimeConfig.load` on each signal/action.
 """
+
 from __future__ import annotations
 
 from dataclasses import replace
@@ -15,8 +16,13 @@ from .config import Mode, TradingConfig
 RUNTIME_KEY = "trading:runtime"
 
 _OVERLAY_FIELDS = (
-    "trading_enabled", "auto_trading_enabled", "max_order_usd", "max_leverage",
-    "max_orders_per_hour", "entry_timeout_s", "reconcile_interval_s",
+    "trading_enabled",
+    "auto_trading_enabled",
+    "max_order_usd",
+    "max_leverage",
+    "max_orders_per_hour",
+    "entry_timeout_s",
+    "reconcile_interval_s",
 )
 
 

@@ -76,9 +76,7 @@ class DexScreenerCollector:
                 if event is None:
                     continue
                 await self._producer.publish(Topic.DEX, event)
-                EVENTS_PRODUCED.labels(
-                    SERVICE, Topic.DEX.value, event.event_type
-                ).inc()
+                EVENTS_PRODUCED.labels(SERVICE, Topic.DEX.value, event.event_type).inc()
                 published += 1
         logger.info("dexscreener poll published %d events", published)
         return published

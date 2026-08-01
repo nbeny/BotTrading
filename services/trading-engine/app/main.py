@@ -1,5 +1,6 @@
 # services/trading-engine/app/main.py
 """trading-engine entrypoint."""
+
 from __future__ import annotations
 
 import asyncio
@@ -49,7 +50,10 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
 
     engine = TradingEngine(cache, producer, kraken, config)
     signals = EventConsumer(
-        settings.kafka, [Topic.RISK_APPROVED], engine.handle, group_id="trading-engine",
+        settings.kafka,
+        [Topic.RISK_APPROVED],
+        engine.handle,
+        group_id="trading-engine",
     )
     await signals.start()
 
@@ -61,9 +65,12 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
 
     # Each engine replica must apply every command -> unique group per instance.
     import os
+
     replica = os.getenv("HOSTNAME", "local")
     commands = EventConsumer(
-        settings.kafka, [Topic.CONTROL], _control_handle,
+        settings.kafka,
+        [Topic.CONTROL],
+        _control_handle,
         group_id=f"trading-engine-control-{replica}",
     )
     await commands.start()
@@ -87,7 +94,9 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     app.state.reconciler = reconciler
     app.state.signals_task = asyncio.create_task(signals.run())
     app.state.commands_task = asyncio.create_task(commands.run())
-    app.state.reconcile_task = asyncio.create_task(reconciler.run(config.reconcile_interval_s))
+    app.state.reconcile_task = asyncio.create_task(
+        reconciler.run(config.reconcile_interval_s)
+    )
 
 
 async def _shutdown(app: FastAPI, settings: Settings) -> None:
@@ -99,7 +108,9 @@ async def _shutdown(app: FastAPI, settings: Settings) -> None:
     # Awaited *before* the producer and cache close: a poll still in flight
     # would otherwise finish by publishing to a stopped producer.
     tasks = [
-        app.state.signals_task, app.state.commands_task, app.state.reconcile_task,
+        app.state.signals_task,
+        app.state.commands_task,
+        app.state.reconcile_task,
         app.state.account_task,
     ]
     await asyncio.gather(*[t for t in tasks if t is not None], return_exceptions=True)

@@ -23,11 +23,11 @@ class ScorerConfig:
     w_sentiment: float = 0.25
     w_liquidity: float = 0.15
     # Normalization caps — a factor at/above its cap saturates to 1.0.
-    mom_cap_pct: float = 15.0        # |24h change %|
-    vol_cap: float = 5.0             # volume spike ratio
+    mom_cap_pct: float = 15.0  # |24h change %|
+    vol_cap: float = 5.0  # volume spike ratio
     liq_cap_usd: float = 1_000_000.0  # liquidity for the safety factor
-    thin_liq_usd: float = 50_000.0   # below this, a big move is "thin/ambiguous"
-    escalate_score: int = 60         # min local score to consider LLM escalation
+    thin_liq_usd: float = 50_000.0  # below this, a big move is "thin/ambiguous"
+    escalate_score: int = 60  # min local score to consider LLM escalation
 
     def __post_init__(self) -> None:
         total = self.w_momentum + self.w_volume + self.w_sentiment + self.w_liquidity
@@ -37,10 +37,10 @@ class ScorerConfig:
 
 @dataclass(frozen=True, slots=True)
 class ScoreResult:
-    opportunity_score: int          # 0-100
-    confidence: float               # 0-1
+    opportunity_score: int  # 0-100
+    confidence: float  # 0-1
     reason: str
-    escalate: bool                  # worth a senior (LLM) look?
+    escalate: bool  # worth a senior (LLM) look?
     ambiguous: bool
     # Diagnostics — why a signal did or did not reach the senior analyst, and
     # how much evidence the score was actually computed from. A score built on
@@ -48,7 +48,7 @@ class ScoreResult:
     # to tell them apart before any threshold is tuned.
     # unknown (never scored) | escalated | score_below_threshold | gate_not_met
     block_reason: str = "unknown"
-    factors_present: int = 0         # 0-4
+    factors_present: int = 0  # 0-4
     # dex (DexScreener) | volume_proxy (24h volume stand-in) | unknown
     liquidity_source: str = "unknown"
     factors: dict[str, float] = field(default_factory=dict)
@@ -63,7 +63,7 @@ def local_opportunity(f: dict, cfg: ScorerConfig | None = None) -> ScoreResult:
     cfg = cfg or ScorerConfig()
     chg = f.get("price_change_pct_24h")
     vol_spike = f.get("volume_spike_ratio")
-    sent = f.get("sentiment_score")          # expected ~[-1, 1]
+    sent = f.get("sentiment_score")  # expected ~[-1, 1]
     liq = f.get("liquidity_usd")
 
     # A dex pair with no liquidity reading arrives as 0.0, not None
@@ -95,11 +95,7 @@ def local_opportunity(f: dict, cfg: ScorerConfig | None = None) -> ScoreResult:
 
     # Normalize each factor to [0,1] (magnitude of a tradeable setup).
     mom = _clamp(abs(chg) / cfg.mom_cap_pct, 0.0, 1.0) if has_chg else 0.0
-    vol = (
-        _clamp((vol_spike - 1.0) / (cfg.vol_cap - 1.0), 0.0, 1.0)
-        if has_vol
-        else 0.0
-    )
+    vol = _clamp((vol_spike - 1.0) / (cfg.vol_cap - 1.0), 0.0, 1.0) if has_vol else 0.0
     sent_mag = _clamp(abs(sent), 0.0, 1.0) if has_sent else 0.0
     # Unknown liquidity is treated as neutral (0.5) rather than penalized to 0.
     liq_f = (

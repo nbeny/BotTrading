@@ -103,10 +103,18 @@ unlocks going back years, so the future filter is not optional.
 `collector-kraken`'s `ambiguous_symbols` exists to record. Measured: 2,325 of the 7,974
 protocol rows carry a `gecko_id`.
 
-When a protocol appears under several entries, TVL is summed at the `gecko_id` level before
-emission, so a token's TVL is the token's, not one deployment's. This is the common case, not
-an edge case: Aave is seven rows (`aave-v1` … `aave-v4`, `aave-horizon-rwa`, `aave-aptos`)
-sharing one `gecko_id`, totalling $14.3B.
+**A token's rows are found through `parentProtocol`, not through a shared `gecko_id`.** This
+was got wrong first, by misreading a query that printed only the non-null ids of a family and
+so appeared to show all seven Aave rows sharing one. Measured properly: **zero of the 7,974
+rows share a `gecko_id` with another row.** The id sits on exactly one row per family, and not
+the largest — `aave-v2` carries `aave` at $109M while `aave-v3`, at $13.7B, carries `None`.
+
+So the mapper resolves each row's family (parent slug, else own slug), takes the `gecko_id`
+from whichever row in that family has one, and sums the family. Joining row-by-row instead
+shipped AAVE at **0.76%** of its real TVL, and every `jupiter-*` row is untagged so a $2.04B
+protocol shipped a *measured* `Decimal(0)` — which the scorer penalises rather than excludes,
+the platform's own rule inverted. Across the live universe: 84 tokens under-reporting, $706M
+of $22.88B.
 
 **Three different join keys are in play, and conflating them silently loses data.** All three
 were verified against the live API:

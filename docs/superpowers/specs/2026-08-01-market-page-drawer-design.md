@@ -181,9 +181,13 @@ Forme de la réponse :
     "computed_at": "2026-08-01T09:12:00Z"   // str | null
   },
   "pipeline": {
+    // Vocabulaire de systems_pipeline.py::STAGE_SPECS : collect, sentiment,
+    // triage, senior, decision, risk, execute.
     "reached_stage": "risk",       // str | null
-    "blocked_at": "risk",          // str | null — null si non bloqué
+    "blocked_at": "risk",          // str | null — null si aucun blocage OBSERVÉ
     "block_reason": "score_below_threshold",  // str | null
+    // bool | null. `null` quand la seule trace est un PipelineRejection : sans
+    // ligne de journal, on ne sait pas si Haiku avait escaladé en parallèle.
     "escalated": true,
     "sonnet_called": true,
     "sonnet_validated": false,     // bool | null
@@ -212,7 +216,15 @@ Règles de nullité, non négociables :
 |---|---|
 | `score` | dernière `Decision` du symbole — `opportunity_score`, `confidence`, `created_at`, et `payload["meta"]["breakdown"]` pour les axes |
 | `pipeline.*` sauf `blocked_at` | dernier `DecisionJournal` du symbole (`escalated`, `sonnet_*`, `skip_reason`, `risk_verdict`, `execution_event_id`) |
-| `pipeline.blocked_at`, `block_reason` | dernier `PipelineRejection` du symbole (`stage`, `reason`), recoupé avec `Signal.block_reason` |
+| `pipeline.blocked_at`, `block_reason` | dernier `PipelineRejection` du symbole (`stage`, `reason`), en repli quand aucune ligne de journal n'existe |
+
+**Deux vocabulaires d'étages coexistent, et il faut les réconcilier.**
+`PipelineRejection.stage` vaut `decision_engine` ou `risk_engine` — `stage_for` mappe la *source*
+de l'événement (`persister.py:59`) — tandis que le reste de la plateforme, y compris le graphe du
+Command Center, utilise les ids de `systems_pipeline.py::STAGE_SPECS` : `decision`, `risk`, etc.
+Le dossier normalise vers les ids `STAGE_SPECS`, qui sont ceux que le frontend sait libeller. Une
+source non mappée passe telle quelle, pour la même raison que `stage_for` le fait déjà : un
+rejeteur inattendu doit rester visible plutôt que d'être silencieusement renommé.
 | `decisions` | `Decision` where `symbol = :sym` order by `created_at` desc, limite 20 |
 | `content` | `RawContent` where `symbols @> [:sym]` order by `published_at` desc, limite 20 — même prédicat que `/data/content` (`read_api.py:463`) |
 | `exposure` | `_portfolio_basis(session)` (`read_api.py:983`) puis filtre par symbole, plus `Trade` where `symbol = :sym` order by `created_at` desc, limite 20 |

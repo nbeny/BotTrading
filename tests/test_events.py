@@ -78,6 +78,10 @@ def test_risk_approved_event_new_fields_default_for_backward_compat() -> None:
     assert e.rationale == ""
     assert e.key_risks == []
     assert e.ai_validated is False
+    # decision_source (analysis provenance, distinct from `source` -- this
+    # event's own producer) is the same idiom: absent for an older producer,
+    # not coerced to a fake value.
+    assert e.decision_source is None
 
 
 def test_score_bounds_enforced() -> None:

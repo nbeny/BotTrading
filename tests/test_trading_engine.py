@@ -1,6 +1,7 @@
 # tests/test_trading_engine.py
 import asyncio
 
+from cmi_common.events.base import Source
 from cmi_common.events.execution import ExecutionEvent, ExecutionKind
 from cmi_common.events.risk import RiskApprovedEvent
 from cmi_common.events.decision import Direction
@@ -179,6 +180,32 @@ def test_signal_payload_defaults_unset_score_to_zero() -> None:
     mod = load_module("engine")
     payload = mod._signal_payload(_signal())  # opportunity_score defaults None
     assert payload["opportunity_score"] == 0.0
+
+
+def test_signal_payload_source_prefers_decision_provenance() -> None:
+    """The mock -- the de-facto contract the frontend was built against --
+    fills `Opportunity.source` with analysis provenance (frontend/src/lib/
+    mock/store.ts: haiku_triage/sonnet_decision/manual), not the approving
+    service. `event.source` on a RiskApprovedEvent is always risk-engine (the
+    approver); `decision_source`, propagated from the DecisionEvent, is what
+    must land in the payload."""
+    mod = load_module("engine")
+    sig = _signal(decision_source=Source.AI_SONNET)
+    assert sig.source == Source.RISK_ENGINE  # sanity: approver, not analysis
+    payload = mod._signal_payload(sig)
+    assert payload["source"] == Source.AI_SONNET
+
+
+def test_signal_payload_source_falls_back_when_decision_source_absent() -> None:
+    """An older producer's event -- or a payload reconstructed from a partial
+    Redis record -- never set `decision_source`. `_signal_payload` must still
+    emit a usable, non-null `source` rather than leaking the field's None
+    default through to the frontend."""
+    mod = load_module("engine")
+    sig = _signal()  # decision_source defaults None
+    payload = mod._signal_payload(sig)
+    assert payload["source"] == Source.RISK_ENGINE
+    assert payload["source"] is not None
 
 
 def test_idempotent_on_redelivery() -> None:

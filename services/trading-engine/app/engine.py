@@ -42,6 +42,13 @@ def _signal_payload(event) -> dict:
     `correlation_id` and `event_id` are not part of that contract but are kept
     so `approve_opportunity`/`reject_opportunity` below can reconstruct the
     RiskApprovedEvent from this same Redis record.
+
+    `source`: the mock (frontend/src/lib/mock/store.ts) — the de-facto contract
+    the frontend was built against — fills this with analysis provenance
+    (haiku_triage/sonnet_decision/manual), not the approving service. Prefer
+    `decision_source`, propagated from the DecisionEvent this approval was
+    raised for; fall back to the event's own `source` (risk-engine) only for an
+    older producer that never set it, so the field is never null.
     """
     return {
         "opportunity_id": event.event_id,
@@ -66,7 +73,7 @@ def _signal_payload(event) -> dict:
         "rationale": event.rationale,
         "key_risks": event.key_risks,
         "ai_validated": event.ai_validated,
-        "source": event.source,
+        "source": event.decision_source or event.source,
         "status": "pending",
         "created_at": event.occurred_at.isoformat(),
         "correlation_id": event.correlation_id,

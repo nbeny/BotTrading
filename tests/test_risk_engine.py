@@ -8,6 +8,7 @@ import asyncio
 
 from tests.service_modules import load_service_module
 
+from cmi_common.events.base import Source
 from cmi_common.events.decision import DecisionEvent, Direction
 from cmi_common.events.risk import RiskApprovedEvent
 
@@ -79,6 +80,11 @@ def test_approval_propagates_opportunity_fields_from_decision() -> None:
     assert approved.rationale == "Momentum breakout confirmed"
     assert approved.key_risks == ["Volatilite macro elevee"]
     assert approved.ai_validated is True
+    # The approval's own `source` is risk-engine (the approving service); the
+    # analysis provenance -- what the frontend's `Opportunity.source` means --
+    # travels separately, on `decision_source`, copied from the DecisionEvent.
+    assert approved.source == Source.RISK_ENGINE
+    assert approved.decision_source == Source.AI_SONNET
 
 
 def test_rejected_decision_does_not_publish_approval() -> None:

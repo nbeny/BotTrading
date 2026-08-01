@@ -78,6 +78,7 @@ class RiskEngine:
             rationale=event.rationale,
             key_risks=event.key_risks,
             ai_validated=event.ai_validated,
+            decision_source=event.source,
         )
         await self._cache.set_json(
             EXPOSURE_KEY, round(exposure + levels.position_size_pct, 4), ttl_seconds=0

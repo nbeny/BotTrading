@@ -184,3 +184,11 @@ export interface EngineSettings extends EngineCaps {
   trading_enabled: boolean;
   auto_trading_enabled: boolean;
 }
+
+export type {
+  PipelineVerdict,
+  ScoreAxis,
+  TokenDossier,
+  TokenExposure,
+  TokenScore,
+} from './dossier';

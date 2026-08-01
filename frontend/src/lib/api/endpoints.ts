@@ -11,6 +11,7 @@ import type {
   RiskAlert,
   RiskExposure,
   RiskLimit,
+  TokenDossier,
   Trade,
   TradingMode,
   TradingStatus,
@@ -43,6 +44,10 @@ export const marketApi = {
   prices: (symbol: string, range = '1d') =>
     api
       .get<PricePoint[]>(`/market/tokens/${symbol}/prices`, { params: { range } })
+      .then((r) => r.data),
+  dossier: (symbol: string) =>
+    api
+      .get<TokenDossier>(`/market/tokens/${symbol}/dossier`)
       .then((r) => r.data),
   news: (limit = 20) =>
     api.get<NewsItem[]>('/market/news', { params: { limit } }).then((r) => r.data),

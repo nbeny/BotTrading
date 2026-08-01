@@ -40,32 +40,46 @@ def _iso(v: Any) -> str | None:
     return str(v)
 
 
-def build_score(journal: Any | None) -> dict:
+def build_score(decision: Any | None) -> dict:
     """Décomposition par axe du dernier score connu pour un symbole.
+
+    La source est ``Decision.payload["meta"]["breakdown"]`` : ``engine.py`` y
+    publie le ``breakdown`` du scoring v2, et le persister sérialise
+    l'événement entier dans la colonne ``payload``.
+
+    **Pas** ``DecisionJournal.factors`` : celui-là porte le triage Haiku à
+    quatre facteurs (``momentum``/``volume``/``sentiment``/``liquidity``), un
+    espace de noms disjoint. L'y lire renverrait ``{}`` en permanence, soit
+    sept tirets à l'écran indiscernables d'un vrai « rien mesuré ».
 
     ``axes`` ne contient que les axes **mesurés**. L'absence d'une clé est
     l'information : elle dit « non mesuré », pas « nul ».
     """
-    if journal is None:
+    if decision is None:
         return {
             "value": None,
             "confidence": None,
             "axes": {},
             "axes_total": len(AXIS_KEYS),
-            "dominant_factor": None,
-            "dominant_factor_share": None,
+            "insufficient_evidence": False,
             "computed_at": None,
         }
 
-    factors = journal.factors or {}
+    breakdown = ((decision.payload or {}).get("meta") or {}).get("breakdown") or {}
+    # `is not None` et non un test de vérité : un axe mesuré à 0.0 est une
+    # mesure et doit être conservé.
+    axes = {k: float(breakdown[k]) for k in AXIS_KEYS if breakdown.get(k) is not None}
+
+    # Un breakdown vide sur une décision existante veut dire que le poids
+    # présent était sous `_MIN_PRESENT_WEIGHT` : scoring.py renvoie alors
+    # `ScoreResult(0, 0.0, {})`. Ce 0 n'est pas une mesure, et le publier comme
+    # `value` en ferait une — la faute exacte que ce module existe pour éviter.
+    insufficient = not axes
     return {
-        "value": journal.score,
-        "confidence": journal.confidence,
-        # `is not None` et non un test de vérité : un axe mesuré à 0.0 est une
-        # mesure et doit être conservé.
-        "axes": {k: float(factors[k]) for k in AXIS_KEYS if factors.get(k) is not None},
+        "value": None if insufficient else decision.opportunity_score,
+        "confidence": None if insufficient else decision.confidence,
+        "axes": axes,
         "axes_total": len(AXIS_KEYS),
-        "dominant_factor": journal.dominant_factor,
-        "dominant_factor_share": journal.dominant_factor_share,
-        "computed_at": _iso(journal.time),
+        "insufficient_evidence": insufficient,
+        "computed_at": _iso(decision.created_at),
     }

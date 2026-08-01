@@ -1,7 +1,15 @@
 import type { NewsItem, Position, Trade, WorkerDecision } from './domain';
 
-/** Les sept axes de decision-engine/app/scoring.py::WEIGHTS, dans l'ordre
- *  d'affichage du drawer. */
+/**
+ * Les sept axes de decision-engine/app/scoring.py::WEIGHTS, dans l'ordre
+ * d'affichage du drawer.
+ *
+ * Troisième copie indépendante de cette liste, avec
+ * `decision-engine/app/scoring.py::WEIGHTS` et
+ * `services/api-gateway/app/dossier.py::AXIS_KEYS`. Rien ne vérifie qu'elles
+ * restent alignées : un axe ajouté au scoring sans être ajouté ici
+ * n'apparaîtrait jamais à l'écran, sans erreur ni test rouge.
+ */
 export const SCORE_AXES = [
   'volume_growth',
   'social_score',
@@ -25,6 +33,12 @@ export const AXIS_LABELS: Record<ScoreAxis, string> = {
 };
 
 export interface TokenScore {
+  /**
+   * Sur **0–100** — le `Decision.opportunity_score` brut, rendu tel quel à côté
+   * d'un « / 100 ». Attention au voisin : `TokenDossier.decisions[].opportunity_score`
+   * est sur 0–1 dans la même réponse (`map_decision` divise), et `ScoreChip`
+   * remultiplie. Deux échelles pour « score d'opportunité » dans un même payload.
+   */
   value: number | null;
   confidence: number | null;
   /**

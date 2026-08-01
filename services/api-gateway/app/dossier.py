@@ -19,8 +19,14 @@ from typing import Any
 
 #: Les sept axes de decision-engine/app/scoring.py::WEIGHTS, dans l'ordre
 #: d'affichage. Dupliqués ici et non importés : api-gateway ne dépend pas du
-#: decision-engine, et cette liste ne bouge que lors d'un changement de modèle
-#: de scoring, qui touchera de toute façon les deux fichiers.
+#: decision-engine.
+#:
+#: Cette liste existe en **trois** copies indépendantes — ici,
+#: decision-engine/app/scoring.py::WEIGHTS, et
+#: frontend/src/lib/types/dossier.ts::SCORE_AXES. Aucune n'importe les autres et
+#: rien ne vérifie qu'elles restent alignées : un huitième axe ajouté au scoring
+#: n'apparaîtrait jamais dans le drawer, sans erreur ni test rouge. Les trois
+#: doivent bouger ensemble.
 AXIS_KEYS: tuple[str, ...] = (
     "volume_growth",
     "social_score",

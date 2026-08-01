@@ -306,6 +306,26 @@ git commit -m "feat(api-gateway): décomposition du score par axe, absent ≠ z�
 Ajouter à la fin de `tests/test_dossier_assembly.py` :
 
 ```python
+def _journal(**kw):
+    """Une ligne `decision_journal`. Source du *parcours* uniquement — sa
+    colonne `factors` porte le triage Haiku à quatre facteurs, pas les sept
+    axes, et n'est donc jamais lue par le dossier."""
+    base = dict(
+        symbol="SOL",
+        time=NOW,
+        escalated=True,
+        sonnet_called=True,
+        sonnet_validated=False,
+        skip_reason=None,
+        decision_event_id=None,
+        risk_verdict=None,
+        risk_reason=None,
+        execution_event_id=None,
+    )
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
 def _rejection(**kw):
     base = dict(symbol="SOL", time=NOW, stage="risk", reason="max_exposure")
     base.update(kw)
@@ -455,7 +475,7 @@ def build_pipeline(journal: Any | None, rejection: Any | None) -> dict:
 ```bash
 pytest tests/test_dossier_assembly.py -v
 ```
-Attendu : 14 passed.
+Attendu : 15 passed.
 
 - [ ] **Step 5 : commit**
 

@@ -75,8 +75,22 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     )
     await commands.start()
 
+    # Deliberately no boot sweep here. reconciler.run() reconciles on its first
+    # iteration and wraps every sweep in a try/except, so an awaited call at
+    # this point was a duplicate of that work with the guard removed -- and it
+    # ran inside _startup, where anything that raises aborts the whole service.
+    #
+    # It took the engine down in production on 2026-08-01: Kraken retired
+    # demo-futures.kraken.com, the endpoint began answering 301 to a marketing
+    # page, and get_open_positions() raised. The container crash-looped. By then
+    # the control consumer had already joined its group and been assigned
+    # control.commands -- it simply never reached commands.run() nine lines
+    # below, so every operator command was published to Kafka and silently
+    # dropped. Including the kill switch.
+    #
+    # A venue we cannot reach is exactly when the control plane matters most, so
+    # it must never gate startup.
     reconciler = Reconciler(cache, producer, kraken)
-    await reconciler.sweep()
 
     # Optional: absent (not failing) when no read-only spot key is configured.
     poller = build_poller(config, producer, cache)

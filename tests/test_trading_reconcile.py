@@ -90,3 +90,49 @@ def test_still_open_position_is_left_alone() -> None:
     asyncio.run(_reconciler(cache, producer, kraken).sweep())
     assert producer.published == []
     assert cache._values["risk:exposure"] == 0.30
+
+
+class ExplodingKraken:
+    """A venue that has gone away — Kraken retired demo-futures and the
+    endpoint now 301s to a marketing page."""
+
+    def __init__(self):
+        self.calls = 0
+
+    async def get_open_positions(self):
+        self.calls += 1
+        raise RuntimeError("301 Moved Permanently")
+
+
+async def test_run_sweeps_immediately_rather_than_waiting_out_the_interval():
+    # main.py used to await an extra sweep at startup, unguarded, three lines
+    # before scheduling run(). That call was deleted; this pins what makes the
+    # deletion safe -- run() reconciles on its first iteration, not after the
+    # interval elapses.
+    reconcile = load_module("reconcile")
+    kraken = ExplodingKraken()
+    r = reconcile.Reconciler(FakeCache({}), FakeProducer(), kraken)
+    task = asyncio.create_task(r.run(3600))
+    await asyncio.sleep(0.05)
+    r.stop()
+    await asyncio.wait_for(task, timeout=2)
+    assert kraken.calls >= 1
+
+
+async def test_an_unreachable_venue_does_not_stop_the_reconciler():
+    # The failure that took the trading engine down: the boot sweep raised out
+    # of _startup, so the process exited before commands.run() was scheduled --
+    # the control consumer had already been assigned control.commands and then
+    # never polled it. Every operator command was published and silently
+    # dropped, including the kill switch.
+    #
+    # A venue we cannot reach is exactly when the control plane matters most,
+    # so it must never gate startup.
+    reconcile = load_module("reconcile")
+    kraken = ExplodingKraken()
+    r = reconcile.Reconciler(FakeCache({}), FakeProducer(), kraken)
+    task = asyncio.create_task(r.run(0.01))
+    await asyncio.sleep(0.08)
+    r.stop()
+    await asyncio.wait_for(task, timeout=2)
+    assert kraken.calls >= 2  # kept sweeping despite every attempt raising

@@ -2,15 +2,28 @@
 
 Implements the weighted model from the spec::
 
-    score = volume_growth   * 0.25
-          + social_score    * 0.20
-          + news_score      * 0.20
-          + market_trend    * 0.20
-          + liquidity_score * 0.15
+    score = 100 * SUM(sub_i * w_i over PRESENT axes) / SUM(w_i over PRESENT axes)
+
+over seven axes: volume_growth 0.1875, social_score 0.15, news_score 0.15,
+market_trend 0.15, liquidity_score 0.1125, positioning 0.15, fundamentals 0.10.
 
 Every sub-score is normalized to [0, 1] before weighting, so the final
-``opportunity_score`` is a clean 0-100. ``confidence`` reflects how many of the
-signals were actually present (missing signals reduce confidence).
+``opportunity_score`` is a clean 0-100. ``confidence`` is the share of model
+weight backed by real evidence.
+
+**The denominator is the point.** Dividing by a constant 1.0 meant an axis whose
+data we failed to collect scored identically to one measured at its worst — so a
+symbol missing three of five signals was not "scored on what we know", it was
+penalised for what we failed to gather. That is the documented
+RISK_MIN_SCORE=70 / max-observed-score-68 deadlock: the scale itself was
+unreachable. Every ``_norm_*`` now returns ``None`` for absent input, and the
+sum divides by the weight actually present.
+
+The corollary matters when reading anything downstream: an absent axis is
+*excluded*, never penalised, so an unmeasured value that leaks in as a confident
+reading always moves the score in the direction of the reading. Keeping ``None``
+and a measured ``0`` distinct is therefore load-bearing at every layer that
+feeds this module, not a stylistic preference.
 """
 
 from __future__ import annotations
@@ -18,12 +31,17 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
+#: The five legacy axes are rescaled by x0.75, preserving their relative
+#: proportions exactly — this expresses no new opinion about the old model, it
+#: only makes room for the two new ones.
 WEIGHTS = {
-    "volume_growth": 0.25,
-    "social_score": 0.20,
-    "news_score": 0.20,
-    "market_trend": 0.20,
-    "liquidity_score": 0.15,
+    "volume_growth": 0.1875,
+    "social_score": 0.1500,
+    "news_score": 0.1500,
+    "market_trend": 0.1500,
+    "liquidity_score": 0.1125,
+    "positioning": 0.1500,
+    "fundamentals": 0.1000,
 }
 
 
@@ -41,6 +59,18 @@ class Features:
     #: (regulation, macro, exchange incidents). Used only when the symbol has no
     #: sentiment of its own — see _norm_news.
     market_sentiment: float | None = None
+    #: Binance perp positioning. funding is the raw 8h fraction, not a percent.
+    funding_rate_8h: float | None = None
+    long_short_account_ratio: float | None = None
+    open_interest_change_pct_24h: float | None = None
+    #: DefiLlama fundamentals. has_unlock_schedule False means "not tracked",
+    #: which is a different statement from "tracked, nothing pending" — see
+    #: _norm_fundamentals.
+    tvl_change_pct_7d: float | None = None
+    fees_change_pct_7d: float | None = None
+    next_unlock_pct_supply: float | None = None
+    next_unlock_days: float | None = None
+    has_unlock_schedule: bool = False
     present: set[str] = field(default_factory=set)
 
 
@@ -55,16 +85,16 @@ def _sigmoid(x: float, k: float = 1.0) -> float:
     return 1.0 / (1.0 + math.exp(-k * x))
 
 
-def _norm_volume(ratio: float | None) -> float:
+def _norm_volume(ratio: float | None) -> float | None:
     if ratio is None:
-        return 0.0
+        return None
     # ratio 1 -> ~0.27, 3 -> ~0.6, 5+ -> ~0.8, saturating.
     return max(0.0, min(1.0, _sigmoid(ratio - 3, k=0.7)))
 
 
-def _norm_social(growth: float | None) -> float:
+def _norm_social(growth: float | None) -> float | None:
     if growth is None:
-        return 0.0
+        return None
     return max(0.0, min(1.0, _sigmoid(growth, k=1.5)))
 
 
@@ -77,12 +107,15 @@ def _norm_news(
     impact: float | None,
     sentiment: float | None,
     market_sentiment: float | None = None,
-) -> float:
-    # No early return for "nothing known". Absence of news is neutral, not
-    # bearish: short-circuiting to 0.0 gave a silent symbol the same news score
-    # as one everybody is panicking about, since sentiment -1.0 also lands on
-    # 0.0. Falling through with base=0 and raw=0 puts "unknown" exactly where a
-    # genuinely neutral reading sits, and leaves bearish strictly below it.
+) -> float | None:
+    # Absence of news is neutral, not bearish — the original fix, which
+    # short-circuited to 0.0 and so gave a silent symbol the same news score as
+    # one everybody is panicking about. Under renormalisation, *excluding* the
+    # axis expresses that better than the 0.5 this used to return: a neutral
+    # constant still drags a strong symbol toward the middle, where an absent
+    # axis leaves the score to the evidence that exists.
+    if impact is None and sentiment is None and market_sentiment is None:
+        return None
     base = impact if impact is not None else 0.0
     # Fold sentiment (-1..1) into a positive news contribution. The symbol's own
     # sentiment always wins; the market regime is a fallback for symbols that
@@ -96,15 +129,20 @@ def _norm_news(
     return max(0.0, min(1.0, 0.5 * base + 0.5 * ((raw + 1) / 2)))
 
 
-def _norm_trend(change_24h: float | None) -> float:
+def _norm_trend(change_24h: float | None) -> float | None:
     if change_24h is None:
-        return 0.0
+        return None
     # +20% -> ~0.75, 0% -> 0.5, -20% -> ~0.25.
     return max(0.0, min(1.0, _sigmoid(change_24h / 15.0)))
 
 
-def _norm_liquidity(liq: float | None) -> float:
-    if not liq or liq <= 0:
+def _norm_liquidity(liq: float | None) -> float | None:
+    # A measured zero is the worst score; an unknown is no score at all. The two
+    # used to collapse onto 0.0, which is what made "we did not collect it"
+    # indistinguishable from "there is none".
+    if liq is None:
+        return None
+    if liq <= 0:
         return 0.0
     # log-scaled: $10k -> ~0.25, $100k -> ~0.5, $1M -> ~0.75, $10M+ -> ~1.
     return max(0.0, min(1.0, (math.log10(liq) - 3) / 4))
@@ -196,7 +234,7 @@ def _norm_fundamentals(
 
 
 def score(features: Features) -> ScoreResult:
-    breakdown = {
+    sub: dict[str, float | None] = {
         "volume_growth": _norm_volume(features.volume_spike_ratio),
         "social_score": _norm_social(features.social_growth),
         "news_score": _norm_news(
@@ -206,25 +244,44 @@ def score(features: Features) -> ScoreResult:
         ),
         "market_trend": _norm_trend(features.price_change_pct_24h),
         "liquidity_score": _norm_liquidity(features.liquidity_usd),
+        "positioning": _norm_positioning(
+            funding=features.funding_rate_8h,
+            ratio=features.long_short_account_ratio,
+            oi_change=features.open_interest_change_pct_24h,
+        ),
+        "fundamentals": _norm_fundamentals(
+            tvl_change=features.tvl_change_pct_7d,
+            fees_change=features.fees_change_pct_7d,
+            unlock_pct=features.next_unlock_pct_supply,
+            unlock_days=features.next_unlock_days,
+            has_schedule=features.has_unlock_schedule,
+        ),
     }
-    weighted = sum(breakdown[k] * WEIGHTS[k] for k in WEIGHTS)
-    opportunity = int(round(weighted * 100))
+    # Presence is read off the normalised values rather than re-derived from the
+    # raw fields, so the two can no longer disagree -- the old _signal_present
+    # was a second, hand-maintained copy of the same rule.
+    breakdown = {k: v for k, v in sub.items() if v is not None}
+    present_weight = sum(WEIGHTS[k] for k in breakdown)
+    if present_weight <= 0:
+        # No evidence at all. A confidence of 0 is what says so; a score would
+        # only invent a number to sit beside it.
+        return ScoreResult(0, 0.0, {})
+    weighted = sum(breakdown[k] * WEIGHTS[k] for k in breakdown)
+    opportunity = round(100 * weighted / present_weight)
+    return ScoreResult(opportunity, _confidence(breakdown, features), breakdown)
 
-    # Confidence = fraction of weight backed by a present signal.
-    present_weight = sum(WEIGHTS[k] for k in WEIGHTS if _signal_present(k, features))
-    confidence = round(present_weight, 3)
-    return ScoreResult(opportunity, confidence, breakdown)
 
+def _confidence(breakdown: dict[str, float], f: Features) -> float:
+    """Share of model weight backed by *symbol-specific* evidence.
 
-def _signal_present(key: str, f: Features) -> bool:
-    # market_sentiment is deliberately absent here. Confidence measures how much
-    # symbol-specific evidence backs the score, and a market-wide read is the
-    # same number for every symbol -- counting it would lift confidence across
-    # the whole book at once, which is precisely what confidence should not do.
-    return {
-        "volume_growth": f.volume_spike_ratio is not None,
-        "social_score": f.social_growth is not None,
-        "news_score": f.news_impact is not None or f.sentiment_score is not None,
-        "market_trend": f.price_change_pct_24h is not None,
-        "liquidity_score": bool(f.liquidity_usd),
-    }[key]
+    Not simply the present weight, and the difference is one axis: the news axis
+    fires on the market-wide regime read when a symbol has no sentiment of its
+    own. That read genuinely belongs in the score — damped, as a nudge — but it
+    is the same number for every symbol, so counting it here would lift
+    confidence across the whole book at once, which is precisely what confidence
+    must not do.
+    """
+    keys = set(breakdown)
+    if f.news_impact is None and f.sentiment_score is None:
+        keys.discard("news_score")
+    return round(sum(WEIGHTS[k] for k in keys), 3)

@@ -87,7 +87,11 @@ def test_the_regime_is_damped_relative_to_a_symbols_own_reading() -> None:
     # read would, because it is not about this symbol.
     direct = scoring.score(scoring.Features(sentiment_score=0.8))
     regime = scoring.score(scoring.Features(market_sentiment=0.8))
-    neutral = scoring.score(scoring.Features())
+    # The baseline is a *measured* neutral, not an empty symbol: since
+    # renormalisation, knowing nothing excludes the news axis entirely rather
+    # than valuing it at the midpoint, so an empty Features has no news_score
+    # to subtract from.
+    neutral = scoring.score(scoring.Features(sentiment_score=0.0))
     direct_lift = direct.breakdown["news_score"] - neutral.breakdown["news_score"]
     regime_lift = regime.breakdown["news_score"] - neutral.breakdown["news_score"]
     assert 0 < regime_lift < direct_lift

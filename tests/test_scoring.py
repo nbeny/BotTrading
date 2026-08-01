@@ -21,22 +21,27 @@ sys.modules[_spec.name] = scoring  # required for dataclass(slots=True)
 _spec.loader.exec_module(scoring)
 
 
-def test_empty_features_score_near_zero_with_no_confidence() -> None:
-    # Not 0 any more: absence of news is neutral, not bearish. An unknown symbol
-    # keeps the neutral half of news_score (0.25 x 0.20 = 5 points) while every
-    # other axis stays at zero. What signals its emptiness is the confidence of
-    # 0.0, not a score that pretends the news was terrible.
+def test_empty_features_produce_no_score_at_all() -> None:
+    # Was: score 5, from a neutral news axis applied to a symbol we know nothing
+    # about. Under renormalisation an axis with no input is *excluded* rather
+    # than valued, so an empty symbol has no denominator and therefore no score.
+    # The confidence of 0.0 is what carries the emptiness — as it did before,
+    # except the score no longer invents a number to sit beside it.
     result = scoring.score(scoring.Features())
-    assert result.opportunity_score == 5
+    assert result.opportunity_score == 0
     assert result.confidence == 0.0
+    assert result.breakdown == {}
 
 
-def test_no_news_now_outscores_maximally_bearish_news() -> None:
-    # The conflation this replaced: both used to land on exactly 0.0, so a
-    # silent symbol scored like one everybody was panicking about.
-    silent = scoring.score(scoring.Features())
+def test_bearish_news_scores_below_neutral_news() -> None:
+    # The original conflation — silence scoring like panic — is now prevented by
+    # exclusion rather than by a neutral constant, so the meaningful comparison
+    # is between two symbols that both *have* a news reading. Silence no longer
+    # participates in the axis at all, which is a stronger guarantee than
+    # outscoring panic: it cannot be scored on evidence nobody collected.
+    neutral = scoring.score(scoring.Features(sentiment_score=0.0))
     panicking = scoring.score(scoring.Features(sentiment_score=-1.0))
-    assert panicking.opportunity_score < silent.opportunity_score
+    assert panicking.opportunity_score < neutral.opportunity_score
 
 
 def test_strong_signals_score_high() -> None:
@@ -50,7 +55,10 @@ def test_strong_signals_score_high() -> None:
     )
     result = scoring.score(f)
     assert result.opportunity_score > 60
-    assert result.confidence == 1.0  # all five signals present
+    # Five of seven axes. The derivatives and fundamentals axes are absent for a
+    # symbol with no perp and no protocol, which is most of them — and under
+    # renormalisation that costs confidence without costing score.
+    assert result.confidence == 0.75
 
 
 def test_confidence_reflects_missing_signals() -> None:

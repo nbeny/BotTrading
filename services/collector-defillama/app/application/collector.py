@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from cmi_common.kafka import EventProducer, Topic
-from cmi_common.observability import EVENTS_PRODUCED
+from cmi_common.observability import EVENTS_PRODUCED, UNMEASURED
 
 from ..domain.mapper import emission_key, to_fundamentals_events
 from ..domain.unlocks import Unlock
@@ -151,8 +151,13 @@ class DefiLlamaCollector:
             # be narrowed — the client raises across httpx, Redis, JSON decoding
             # and next_unlock's own ValueError, and whichever type were missed
             # would reintroduce the present-with-None inversion.
-            except Exception:
+            except Exception as exc:
                 failed += 1
+                # Counted here rather than left to UPSTREAM_REQUESTS, which
+                # records *calls*: next_unlock raises on a schedule it cannot
+                # size, after a perfectly successful HTTP request, so that
+                # counter reports `ok` for a token we ended up unable to read.
+                UNMEASURED.labels(SERVICE, "unlock_schedule", type(exc).__name__).inc()
                 logger.warning("unlock lookup failed for %s", slug, exc_info=True)
         if misses:
             # The cursor rotates over the misses so a persistently failing

@@ -32,6 +32,21 @@ UPSTREAM_REQUESTS = Counter(
     "Outbound provider API calls",
     ["service", "provider", "status"],
 )
+#: A reading a collector set out to obtain and could not. Distinct from
+#: UPSTREAM_REQUESTS{status="error"}, which counts *calls*: a lookup can fail
+#: after a perfectly successful HTTP request — DefiLlama's unlock parser raises
+#: on a schedule it cannot size, and that is recorded as `ok` by the request
+#: counter because the request was fine.
+#:
+#: This matters more here than in most pipelines. The scoring model excludes an
+#: absent axis rather than penalising it, so a reading we failed to take pushes
+#: scores *up* while leaving no trace in any error metric. Without this counter
+#: the only signal is a WARNING line, which sits below most alert thresholds.
+UNMEASURED = Counter(
+    "cmi_unmeasured_total",
+    "Readings a collector could not obtain, by field and cause",
+    ["service", "field", "reason"],
+)
 LEXICON_COINS = Gauge(
     "cmi_lexicon_coins",
     "Tokens in the symbol lexicon a collector is currently resolving against",

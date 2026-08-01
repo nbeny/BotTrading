@@ -194,3 +194,21 @@ async def test_an_empty_token_universe_is_reported_rather_than_run_silently() ->
     )
     assert await collector.poll_once() == 0
     assert producer.published == []
+
+
+async def test_an_unread_schedule_is_counted_by_cause() -> None:
+    # UPSTREAM_REQUESTS records calls, and next_unlock raises *after* a
+    # successful HTTP request -- so the request counter reports "ok" for a
+    # token we ended up unable to read. Since an absent axis is excluded from
+    # the score rather than penalised, that failure pushes the score up while
+    # leaving no trace in any error metric.
+    from cmi_common.observability import UNMEASURED
+
+    class RaisingClient(FakeClient):
+        async def unlock(self, slug: str, coin_id: str):
+            raise ValueError("unlock scheduled but maxSupply is missing or zero")
+
+    labels = UNMEASURED.labels("collector-defillama", "unlock_schedule", "ValueError")
+    before = labels._value.get()
+    await _collector(RaisingClient(), FakeProducer()).poll_once()
+    assert labels._value.get() == before + 1

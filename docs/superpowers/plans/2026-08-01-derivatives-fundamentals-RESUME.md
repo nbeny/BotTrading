@@ -48,22 +48,63 @@ The order matters; step 3 is the one that changes trading behaviour.
    and check `funding_rate_8h` is present.
 3. Run the two queries below against production, set `DECISION_THRESHOLD` to the result, and
    deploy the scoring change.
-4. Watch the decision rate for 24h. Retuning the threshold is an env change and a restart, not a
+4. **Set `RISK_MIN_CONFIDENCE` in the same change**, or the risk engine silently tightens.
+   Confidence now measures seven axes, so a legacy-only symbol — "most of them most of the
+   time" — tops out at **0.75** where it used to reach 1.0. Against an unchanged
+   `RISK_MIN_CONFIDENCE=0.55` (`risk-engine/app/main.py:23`) the floor effectively becomes 0.733
+   on the old scale, and symbols that used to pass at 0.60 no longer do. `0.55 × 0.75 ≈ 0.41`
+   preserves the admission set.
+
+   A second effect has no env knob: `risk-engine/app/rules.py:88` sizes positions as
+   `max_position_pct × min(1.0, confidence)`, so every surviving legacy-only position is sized
+   **25% smaller** than before. That is a real change to live trading, not a rounding detail —
+   decide it deliberately rather than discovering it.
+
+5. Watch the decision rate for 24h. Retuning the threshold is an env change and a restart, not a
    redeploy — only the model itself needs one.
 
-```sql
--- current decision rate
-SELECT count(*) FILTER (WHERE score >= 70)::float / count(*)
-FROM decision_journal WHERE time > now() - interval '7 days';
+### Do NOT use a SQL ratio to pick the threshold
 
--- the v2 threshold preserving it (substitute <rate> above)
-SELECT percentile_disc(1 - <rate>) WITHIN GROUP (ORDER BY score::float / confidence)
-FROM decision_journal WHERE time > now() - interval '7 days' AND confidence > 0;
+An earlier version of this note proposed `percentile_disc(...) ORDER BY score::float /
+confidence` over `decision_journal`. **That is wrong twice over**, and both errors push the
+threshold *too high* — which would restore the exact deadlock this change removes, presenting
+as a quiet pipeline with no error anywhere.
+
+1. **Those columns are not this model's output.** `ai-worker-sonnet/app/journal.py:63-64` writes
+   `score`/`confidence` from `analysis.*`, i.e. **haiku's four-factor scorer**. Haiku's
+   confidence is `0.25 + 0.35·liq + 0.4·(present/4)` — a hand-tuned affine floored at 0.25,
+   with no relation to present weight. Dividing by it multiplies sparse rows by up to 4×.
+2. **The identity does not hold where it matters.** v1's `_norm_news` returned 0.25 with all
+   inputs absent and that value entered the numerator, while `_signal_present` reported the axis
+   *absent* — so `score_v1 / confidence_v1` overestimates `score_v2` by `5/confidence` points on
+   every row without its own news, which is most of them. Measured over 30k samples: 24%
+   violated by >1 point, worst case +33.8. `test_migration_identity_holds_on_unrounded_values`
+   does not catch this — it hardcodes `v1_confidence = 1.0`, the one configuration where the
+   identity cannot fail.
+
+**Instead, recompute.** `decision_journal.features` stores the raw feature dict for every
+analysis, escalated or not. Load the last 7 days, run each row through the new `score()`, and
+take the percentile that preserves the current *decision-engine* pass rate:
+
+```python
+# scripts/pick_threshold.py — offline, reads only.
+rows = session.execute(
+    select(DecisionJournal.features).where(
+        DecisionJournal.time > datetime.now(UTC) - timedelta(days=7)
+    )
+).scalars().all()
+scores = sorted(
+    r.opportunity_score
+    for r in (score(features_from(f)) for f in rows)
+    if r.confidence > 0                      # the evidence floor emitted nothing
+)
+# current rate: the fraction of Decision rows vs DecisionJournal rows over the
+# same window, since only cleared decisions reach the Decision table.
+print(scores[int((1 - current_rate) * len(scores))])
 ```
 
-The second query works because `score_v2 = score_v1 / confidence_v1` is an identity on
-legacy-only features — pinned by `test_migration_identity_holds_on_unrounded_values`. If that
-test ever breaks, the deployed threshold is silently wrong.
+`features_from` is the same mapping `engine.py:126-142` performs — keep them in one place if
+this script outlives the deploy.
 
 ## The rule this work is built on
 
@@ -103,6 +144,13 @@ costliest defect came from misreading my own query output, not from failing to r
 - `openInterestHist?period=1h&limit=25` spans exactly 24 h and carries USD **and** base units.
 
 ## Known open items
+
+0. **`test_migration_identity_holds_on_unrounded_values` is a tautology.** It fixes
+   `v1_confidence = 1.0`, where the claim reduces to `score_v2 == score_v1` — true purely
+   because the ×0.75 rescale cancels, independent of renormalisation. Either sweep partial
+   presence against a checked-in copy of the v1 function, or delete it: with the threshold now
+   chosen by recompute, the identity is a nice-to-have rather than load-bearing, and a test that
+   cannot fail is worse than no test.
 
 1. **The negative-TVL guard** above — the one measured crash path still unhandled.
 2. **T7–T14 are unreviewed.** T12 in particular changes production scoring.

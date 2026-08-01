@@ -336,15 +336,16 @@ below asserts the identity on unrounded values rather than on persisted ones.
 The iso-rate threshold is readable directly from `decision_journal`, which stores `features`,
 `score` and `confidence` for every analysis, escalated or not:
 
-```sql
--- 1. current decision rate
-SELECT count(*) FILTER (WHERE score >= 70)::float / count(*)
-FROM decision_journal WHERE time > now() - interval '7 days';
+**Superseded — do not use a SQL ratio.** `decision_journal.score`/`.confidence` are written
+from `analysis.*`, i.e. *haiku's* four-factor scorer, not this module: haiku's confidence is
+`0.25 + 0.35·liq + 0.4·(present/4)`, floored at 0.25 and unrelated to present weight. And the
+identity itself fails where it matters — v1's `_norm_news` contributed 0.25 to the numerator
+while reporting the axis absent, so the ratio overestimates `score_v2` by `5/confidence` points
+on every row without its own news (24% of samples off by >1 point, worst +33.8). Both errors
+push the threshold too high, which restores the deadlock.
 
--- 2. the v2 threshold that preserves it (substitute <rate> from step 1)
-SELECT percentile_disc(1 - <rate>) WITHIN GROUP (ORDER BY score::float / confidence)
-FROM decision_journal WHERE time > now() - interval '7 days' AND confidence > 0;
-```
+The threshold is instead chosen by recomputing v2 offline over `decision_journal.features` —
+see the deployment section of `../plans/2026-08-01-derivatives-fundamentals-RESUME.md`.
 
 Two queries run at deploy time, not a code deliverable.
 

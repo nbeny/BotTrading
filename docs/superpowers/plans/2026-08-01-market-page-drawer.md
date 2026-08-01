@@ -93,11 +93,12 @@ dossier = load_service_module("api-gateway", "dossier")
 NOW = datetime(2026, 8, 1, 9, 12, tzinfo=timezone.utc)
 
 
-def _journal(**kw):
-    base = dict(
-        symbol="SOL",
-        time=NOW,
-        factors={
+def _decision(**kw):
+    """Une ligne `decisions`. `payload` est le DecisionEvent sérialisé, dont
+    `meta.breakdown` porte la décomposition v2 — voir engine.py:190."""
+    breakdown = kw.pop(
+        "breakdown",
+        {
             "volume_growth": 0.81,
             "social_score": 0.74,
             "news_score": 0.60,
@@ -105,33 +106,29 @@ def _journal(**kw):
             "liquidity_score": 0.70,
             "positioning": 0.93,
         },
-        score=84,
+    )
+    base = dict(
+        symbol="SOL",
+        created_at=NOW,
+        opportunity_score=84,
         confidence=0.62,
-        dominant_factor="positioning",
-        dominant_factor_share=0.28,
-        escalated=True,
-        sonnet_called=True,
-        sonnet_validated=False,
-        skip_reason=None,
-        decision_event_id=None,
-        risk_verdict=None,
-        risk_reason=None,
-        execution_event_id=None,
+        payload={"meta": {"breakdown": breakdown}},
     )
     base.update(kw)
     return SimpleNamespace(**base)
 
 
 def test_measured_axes_are_reported_with_their_value() -> None:
-    score = dossier.build_score(_journal())
+    score = dossier.build_score(_decision())
     assert score["value"] == 84
     assert score["confidence"] == 0.62
     assert score["axes"]["positioning"] == 0.93
     assert score["axes_total"] == 7
+    assert score["insufficient_evidence"] is False
 
 
 def test_an_unmeasured_axis_is_absent_not_zero() -> None:
-    score = dossier.build_score(_journal())
+    score = dossier.build_score(_decision())
     assert "fundamentals" not in score["axes"], (
         "un axe non mesuré doit être absent du dict : présent à 0.0 il serait "
         "compté comme une mesure au pire, ce que la renormalisation interdit"
@@ -140,22 +137,47 @@ def test_an_unmeasured_axis_is_absent_not_zero() -> None:
 
 
 def test_an_axis_explicitly_null_is_treated_as_absent() -> None:
-    score = dossier.build_score(_journal(factors={"volume_growth": None}))
+    score = dossier.build_score(_decision(breakdown={"volume_growth": None}))
     assert score["axes"] == {}
 
 
 def test_a_measured_zero_is_kept() -> None:
-    score = dossier.build_score(_journal(factors={"volume_growth": 0.0}))
+    score = dossier.build_score(_decision(breakdown={"volume_growth": 0.0}))
     assert score["axes"] == {"volume_growth": 0.0}
 
 
-def test_no_journal_reports_unknown_not_zero() -> None:
+def test_the_haiku_four_factor_keys_are_not_mistaken_for_axes() -> None:
+    """`DecisionJournal.factors` porte momentum/volume/sentiment/liquidity — le
+    triage Haiku, pas les sept axes. Lire cet espace-là donnerait sept tirets en
+    permanence ; ce test fige la distinction."""
+    score = dossier.build_score(
+        _decision(breakdown={"momentum": 0.9, "volume": 0.8, "sentiment": 0.7})
+    )
+    assert score["axes"] == {}
+    assert score["insufficient_evidence"] is True
+
+
+def test_an_empty_breakdown_is_insufficient_evidence_not_a_zero_score() -> None:
+    """Sous `_MIN_PRESENT_WEIGHT`, scoring.py renvoie `ScoreResult(0, 0.0, {})`.
+    Ce 0 n'est pas une mesure et ne doit jamais s'afficher comme telle."""
+    score = dossier.build_score(_decision(breakdown={}, opportunity_score=0, confidence=0.0))
+    assert score["insufficient_evidence"] is True
+    assert score["value"] is None
+    assert score["confidence"] is None
+    assert score["computed_at"] is not None
+
+
+def test_no_decision_reports_unknown_not_zero() -> None:
     score = dossier.build_score(None)
     assert score["value"] is None
     assert score["confidence"] is None
     assert score["axes"] == {}
     assert score["axes_total"] == 7
     assert score["computed_at"] is None
+    assert score["insufficient_evidence"] is False, (
+        "aucune décision n'est pas la même chose que des preuves insuffisantes : "
+        "dans le premier cas rien n'a été tenté"
+    )
 ```
 
 - [ ] **Step 2 : lancer le test, vérifier qu'il échoue**
@@ -212,36 +234,48 @@ def _iso(v: Any) -> str | None:
     return str(v)
 
 
-def build_score(journal: Any | None) -> dict:
+def build_score(decision: Any | None) -> dict:
     """Décomposition par axe du dernier score connu pour un symbole.
+
+    La source est ``Decision.payload["meta"]["breakdown"]`` : ``engine.py`` y
+    publie le ``breakdown`` du scoring v2, et le persister sérialise
+    l'événement entier dans la colonne ``payload``.
+
+    **Pas** ``DecisionJournal.factors`` : celui-là porte le triage Haiku à
+    quatre facteurs (``momentum``/``volume``/``sentiment``/``liquidity``), un
+    espace de noms disjoint. L'y lire renverrait ``{}`` en permanence, soit
+    sept tirets à l'écran indiscernables d'un vrai « rien mesuré ».
 
     ``axes`` ne contient que les axes **mesurés**. L'absence d'une clé est
     l'information : elle dit « non mesuré », pas « nul ».
     """
-    if journal is None:
+    if decision is None:
         return {
             "value": None,
             "confidence": None,
             "axes": {},
             "axes_total": len(AXIS_KEYS),
-            "dominant_factor": None,
-            "dominant_factor_share": None,
+            "insufficient_evidence": False,
             "computed_at": None,
         }
 
-    factors = journal.factors or {}
+    breakdown = ((decision.payload or {}).get("meta") or {}).get("breakdown") or {}
+    # `is not None` et non un test de vérité : un axe mesuré à 0.0 est une
+    # mesure et doit être conservé.
+    axes = {k: float(breakdown[k]) for k in AXIS_KEYS if breakdown.get(k) is not None}
+
+    # Un breakdown vide sur une décision existante veut dire que le poids
+    # présent était sous `_MIN_PRESENT_WEIGHT` : scoring.py renvoie alors
+    # `ScoreResult(0, 0.0, {})`. Ce 0 n'est pas une mesure, et le publier comme
+    # `value` en ferait une — la faute exacte que ce module existe pour éviter.
+    insufficient = not axes
     return {
-        "value": journal.score,
-        "confidence": journal.confidence,
-        # `is not None` et non un test de vérité : un axe mesuré à 0.0 est une
-        # mesure et doit être conservé.
-        "axes": {
-            k: float(factors[k]) for k in AXIS_KEYS if factors.get(k) is not None
-        },
+        "value": None if insufficient else decision.opportunity_score,
+        "confidence": None if insufficient else decision.confidence,
+        "axes": axes,
         "axes_total": len(AXIS_KEYS),
-        "dominant_factor": journal.dominant_factor,
-        "dominant_factor_share": journal.dominant_factor_share,
-        "computed_at": _iso(journal.time),
+        "insufficient_evidence": insufficient,
+        "computed_at": _iso(decision.created_at),
     }
 ```
 
@@ -250,7 +284,7 @@ def build_score(journal: Any | None) -> dict:
 ```bash
 pytest tests/test_dossier_assembly.py -v
 ```
-Attendu : 5 passed.
+Attendu : 7 passed.
 
 - [ ] **Step 5 : commit**
 
@@ -272,8 +306,30 @@ git commit -m "feat(api-gateway): décomposition du score par axe, absent ≠ z�
 Ajouter à la fin de `tests/test_dossier_assembly.py` :
 
 ```python
+def _journal(**kw):
+    """Une ligne `decision_journal`. Source du *parcours* uniquement — sa
+    colonne `factors` porte le triage Haiku à quatre facteurs, pas les sept
+    axes, et n'est donc jamais lue par le dossier."""
+    base = dict(
+        symbol="SOL",
+        time=NOW,
+        escalated=True,
+        sonnet_called=True,
+        sonnet_validated=False,
+        skip_reason=None,
+        decision_event_id=None,
+        risk_verdict=None,
+        risk_reason=None,
+        execution_event_id=None,
+    )
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
 def _rejection(**kw):
-    base = dict(symbol="SOL", time=NOW, stage="risk", reason="max_exposure")
+    """`stage` porte la SOURCE de l'événement (`decision_engine`/`risk_engine`),
+    jamais un id d'étage : c'est ce que `persister.stage_for` écrit réellement."""
+    base = dict(symbol="SOL", time=NOW, stage="risk_engine", reason="max_exposure")
     base.update(kw)
     return SimpleNamespace(**base)
 
@@ -298,16 +354,43 @@ def test_risk_approval_is_not_a_block() -> None:
     v = dossier.build_pipeline(_journal(risk_verdict="approved"), None)
     assert v["reached_stage"] == "risk"
     assert v["blocked_at"] is None
+    assert v["block_reason"] is None
 
 
 def test_triage_refusal_is_a_block_at_triage() -> None:
+    """`skip_reason` reste `None` sur un refus de triage réel — ai-worker-sonnet
+    ne le renseigne que sur la branche escaladée. C'est donc le repli
+    `not_escalated` qui s'observe en production, et lui qu'il faut couvrir."""
+    v = dossier.build_pipeline(
+        _journal(escalated=False, sonnet_called=False, skip_reason=None), None
+    )
+    assert v["reached_stage"] == "triage"
+    assert v["blocked_at"] == "triage"
+    assert v["block_reason"] == "not_escalated"
+
+
+def test_an_explicit_skip_reason_wins_over_the_fallback() -> None:
     v = dossier.build_pipeline(
         _journal(escalated=False, sonnet_called=False, skip_reason="score_too_low"),
         None,
     )
-    assert v["reached_stage"] == "triage"
-    assert v["blocked_at"] == "triage"
     assert v["block_reason"] == "score_too_low"
+
+
+def test_a_published_decision_awaiting_risk_reports_the_decision_stage() -> None:
+    v = dossier.build_pipeline(_journal(decision_event_id="d1"), None)
+    assert v["reached_stage"] == "decision"
+    assert v["blocked_at"] is None
+
+
+def test_escalated_without_a_sonnet_call_stops_at_triage_without_a_block() -> None:
+    """Le cas `cooldown_or_budget` : Haiku a escaladé, Sonnet n'a pas été
+    appelé. Rien n'a refusé le signal — il a été mis de côté, ce qui n'est pas
+    la même chose et ne doit pas s'afficher comme un blocage."""
+    v = dossier.build_pipeline(_journal(escalated=True, sonnet_called=False), None)
+    assert v["reached_stage"] == "triage"
+    assert v["blocked_at"] is None
+    assert v["block_reason"] is None
 
 
 def test_escalated_but_undecided_claims_no_block() -> None:
@@ -321,9 +404,26 @@ def test_escalated_but_undecided_claims_no_block() -> None:
 
 def test_rejection_without_journal_is_the_fallback() -> None:
     v = dossier.build_pipeline(None, _rejection())
-    assert v["reached_stage"] == "risk"
+    assert v["reached_stage"] == "risk", "risk_engine doit être normalisé en risk"
     assert v["blocked_at"] == "risk"
     assert v["block_reason"] == "max_exposure"
+    assert v["escalated"] is None, (
+        "sans ligne de journal on ignore si Haiku avait escaladé : `False` "
+        "serait une supposition déguisée en mesure"
+    )
+    assert v["sonnet_called"] is None
+
+
+def test_a_decision_engine_rejection_is_normalised_too() -> None:
+    v = dossier.build_pipeline(None, _rejection(stage="decision_engine"))
+    assert v["reached_stage"] == "decision"
+
+
+def test_an_unmapped_rejector_stays_visible_under_its_own_name() -> None:
+    """`stage_for` laisse passer une source inconnue plutôt que de la masquer ;
+    la normalisation doit avoir le même réflexe."""
+    v = dossier.build_pipeline(None, _rejection(stage="some_new_service"))
+    assert v["reached_stage"] == "some_new_service"
 
 
 def test_nothing_known_reports_nulls() -> None:
@@ -332,8 +432,8 @@ def test_nothing_known_reports_nulls() -> None:
         "reached_stage": None,
         "blocked_at": None,
         "block_reason": None,
-        "escalated": False,
-        "sonnet_called": False,
+        "escalated": None,
+        "sonnet_called": None,
         "sonnet_validated": None,
         "last_event_at": None,
     }
@@ -351,6 +451,28 @@ Attendu : `AttributeError: module ... has no attribute 'build_pipeline'`.
 Ajouter à `services/api-gateway/app/dossier.py` :
 
 ```python
+#: `PipelineRejection.stage` porte la *source* de l'événement
+#: (`persister.py::_STAGE_BY_SOURCE`), pas l'id d'étage. Le reste de la
+#: plateforme — dont le graphe du Command Center — parle le vocabulaire de
+#: `systems_pipeline.py::STAGE_SPECS`, et c'est celui que le frontend sait
+#: libeller. Sans cette table, un rejet du decision-engine s'afficherait
+#: « decision_engine » en brut dans le drawer.
+_STAGE_BY_REJECTION_SOURCE = {
+    "decision_engine": "decision",
+    "risk_engine": "risk",
+}
+
+
+def _normalise_stage(stage: str) -> str:
+    """Vocabulaire de rejet -> id d'étage.
+
+    Une source non mappée passe telle quelle, pour la raison exacte que
+    `stage_for` invoque déjà : un rejeteur inattendu doit rester visible plutôt
+    que d'être silencieusement renommé ou masqué.
+    """
+    return _STAGE_BY_REJECTION_SOURCE.get(stage, stage)
+
+
 def _verdict(j: Any) -> tuple[str, str | None, str | None]:
     """``(reached_stage, blocked_at, block_reason)`` pour une ligne de journal.
 
@@ -389,17 +511,23 @@ def build_pipeline(journal: Any | None, rejection: Any | None) -> dict:
                 "reached_stage": None,
                 "blocked_at": None,
                 "block_reason": None,
-                "escalated": False,
-                "sonnet_called": False,
+                "escalated": None,
+                "sonnet_called": None,
                 "sonnet_validated": None,
                 "last_event_at": None,
             }
+        stage = _normalise_stage(rejection.stage)
         return {
-            "reached_stage": rejection.stage,
-            "blocked_at": rejection.stage,
+            "reached_stage": stage,
+            "blocked_at": stage,
             "block_reason": rejection.reason,
-            "escalated": False,
-            "sonnet_called": False,
+            # `None`, pas `False` : sans ligne de journal on ignore si Haiku
+            # avait escaladé. Le decision-engine consomme les analyses en
+            # parallèle de Sonnet, donc un rejet déterministe ne dit rien du
+            # chemin d'escalade. Répondre `False` serait une supposition
+            # déguisée en mesure.
+            "escalated": None,
+            "sonnet_called": None,
             "sonnet_validated": None,
             "last_event_at": _iso(rejection.time),
         }
@@ -421,7 +549,7 @@ def build_pipeline(journal: Any | None, rejection: Any | None) -> dict:
 ```bash
 pytest tests/test_dossier_assembly.py -v
 ```
-Attendu : 12 passed.
+Attendu : 20 passed.
 
 - [ ] **Step 5 : commit**
 
@@ -549,6 +677,21 @@ async def market_token_dossier(
     """
     sym = symbol.upper()
 
+    # Deux sources distinctes, à ne pas confondre : la décomposition en sept
+    # axes vit dans `Decision.payload["meta"]["breakdown"]`, tandis que le
+    # journal porte le parcours (escalade, verdict Sonnet, verdict risque).
+    scored = (
+        (
+            await session.execute(
+                select(Decision)
+                .where(Decision.symbol == sym)
+                .order_by(Decision.created_at.desc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
     journal = (
         (
             await session.execute(
@@ -620,7 +763,7 @@ async def market_token_dossier(
 
     return {
         "symbol": sym,
-        "score": build_score(journal),
+        "score": build_score(scored),
         "pipeline": build_pipeline(journal, rejection),
         "decisions": [map_decision(d) for d in decisions],
         "content": [map_news(c) for c in content],
@@ -666,15 +809,22 @@ git commit -m "feat(api-gateway): GET /market/tokens/{symbol}/dossier"
 Ajouter à `tests/test_read_contract.py`, avant la section « manifest coverage » (donc avant `test_every_contract_entry_is_actually_asserted`, qui doit rester le dernier test du fichier) :
 
 ```python
+def _scored_decision(**kw):
+    base = dict(
+        symbol="SOL",
+        created_at=NOW,
+        opportunity_score=84,
+        confidence=0.62,
+        payload={"meta": {"breakdown": {"volume_growth": 0.8, "positioning": 0.9}}},
+    )
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
 def _journal_row(**kw):
     base = dict(
         symbol="SOL",
         time=NOW,
-        factors={"volume_growth": 0.8, "positioning": 0.9},
-        score=84,
-        confidence=0.62,
-        dominant_factor="positioning",
-        dominant_factor_share=0.28,
         escalated=True,
         sonnet_called=True,
         sonnet_validated=False,
@@ -689,7 +839,9 @@ def _journal_row(**kw):
 
 
 def test_dossier_score_contract() -> None:
-    _assert_exact_keys("market/dossier.score", read_api.build_score(_journal_row()))
+    _assert_exact_keys(
+        "market/dossier.score", read_api.build_score(_scored_decision())
+    )
 
 
 def test_dossier_pipeline_contract() -> None:
@@ -707,7 +859,7 @@ def test_an_absent_axis_never_reaches_the_wire_as_zero() -> None:
     """Garde-fou de bout en bout : le contrat autorise n'importe quel contenu
     dans `axes`, donc seule cette assertion empêche un axe non mesuré de partir
     à 0.0 vers le navigateur."""
-    score = read_api.build_score(_journal_row())
+    score = read_api.build_score(_scored_decision())
     assert set(score["axes"]) == {"volume_growth", "positioning"}
     assert "fundamentals" not in score["axes"]
 ```
@@ -741,8 +893,7 @@ Dans `services/api-gateway/app/read_contract.py`, après l'entrée `"market/deci
         "confidence",
         "axes",
         "axes_total",
-        "dominant_factor",
-        "dominant_factor_share",
+        "insufficient_evidence",
         "computed_at",
     },
     "market/dossier.pipeline": {
@@ -865,8 +1016,13 @@ export interface TokenScore {
    */
   axes: Partial<Record<ScoreAxis, number>>;
   axes_total: number;
-  dominant_factor: string | null;
-  dominant_factor_share: number | null;
+  /**
+   * `true` : une décision existe, mais le poids des axes présents était sous le
+   * seuil de renormalisation — le back renvoie alors `value: null` plutôt que le
+   * `0` que le moteur de scoring produit dans ce cas. `false` quand aucune
+   * décision n'existe : rien n'a été tenté, ce n'est pas la même chose.
+   */
+  insufficient_evidence: boolean;
   computed_at: string | null;
 }
 
@@ -876,8 +1032,10 @@ export interface PipelineVerdict {
    *  signal encore en vol. L'UI doit distinguer les deux. */
   blocked_at: string | null;
   block_reason: string | null;
-  escalated: boolean;
-  sonnet_called: boolean;
+  /** `null` quand la seule trace est un rejet sans ligne de journal : on ignore
+   *  alors si Haiku avait escaladé. Ne pas rendre `null` comme « non ». */
+  escalated: boolean | null;
+  sonnet_called: boolean | null;
   sonnet_validated: boolean | null;
   last_event_at: string | null;
 }
@@ -997,8 +1155,7 @@ export function getDossier(symbol: string): TokenDossier | null {
         // fundamentals : non mesuré — clé absente exprès, voir la docstring
       },
       axes_total: 7,
-      dominant_factor: 'positioning',
-      dominant_factor_share: 0.28,
+      insufficient_evidence: false,
       computed_at: new Date(Date.now() - 12 * 60_000).toISOString(),
     },
     pipeline: {
@@ -1178,8 +1335,7 @@ const score: TokenScore = {
   confidence: 0.62,
   axes: { volume_growth: 0.81, positioning: 0.93 },
   axes_total: 7,
-  dominant_factor: 'positioning',
-  dominant_factor_share: 0.28,
+  insufficient_evidence: false,
   computed_at: '2026-08-01T09:12:00Z',
 };
 
@@ -1201,6 +1357,22 @@ describe('ScoreBreakdown', () => {
     expect(screen.getByText(/2 axes sur 7/)).toBeInTheDocument();
   });
 
+  it('dit que les preuves étaient insuffisantes plutôt que d’afficher un score', () => {
+    render(
+      <ScoreBreakdown
+        score={{
+          value: null,
+          confidence: null,
+          axes: {},
+          axes_total: 7,
+          insufficient_evidence: true,
+          computed_at: '2026-08-01T09:12:00Z',
+        }}
+      />,
+    );
+    expect(screen.getByText(/Preuves insuffisantes/)).toBeInTheDocument();
+  });
+
   it('sans score, rend tous les axes en tiret sans planter', () => {
     render(
       <ScoreBreakdown
@@ -1209,14 +1381,14 @@ describe('ScoreBreakdown', () => {
           confidence: null,
           axes: {},
           axes_total: 7,
-          dominant_factor: null,
-          dominant_factor_share: null,
+          insufficient_evidence: false,
           computed_at: null,
         }}
       />,
     );
     expect(screen.getByTestId('axis-volume_growth')).toHaveTextContent('—');
     expect(screen.getByText(/0 axe sur 7/)).toBeInTheDocument();
+    expect(screen.queryByText(/Preuves insuffisantes/)).not.toBeInTheDocument();
   });
 });
 ```
@@ -1308,6 +1480,16 @@ export function ScoreBreakdown({ score }: Props) {
         })}
       </Stack>
 
+      {/* Le moteur renvoie un score de 0 quand le poids présent est sous son
+          seuil de renormalisation. Le back le convertit en `value: null` ; ici
+          on dit pourquoi, sinon « — » se lit comme « jamais analysé ». */}
+      {score.insufficient_evidence && (
+        <Typography variant="caption" color="warning.main" sx={{ display: 'block', mt: 1 }}>
+          Preuves insuffisantes — trop peu d&apos;axes mesurés pour calculer un score
+          honnête.
+        </Typography>
+      )}
+
       <Tooltip title="Un axe non mesuré est exclu du calcul du score — il n'est pas compté zéro.">
         <Typography
           variant="caption"
@@ -1328,7 +1510,7 @@ export function ScoreBreakdown({ score }: Props) {
 ```bash
 cd frontend && npm run test:run -- ScoreBreakdown
 ```
-Attendu : 4 passed.
+Attendu : 5 passed.
 
 - [ ] **Step 5 : commit**
 

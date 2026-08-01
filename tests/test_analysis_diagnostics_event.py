@@ -16,9 +16,7 @@ from cmi_common.events import AnalysisEvent
 def test_defaults_are_backwards_compatible() -> None:
     """Producers that omit the new fields must still validate, and an unset
     block_reason must not read as "this reached the senior analyst"."""
-    ev = AnalysisEvent(
-        symbol="BTC", opportunity_score=22, confidence=0.6, reason="r"
-    )
+    ev = AnalysisEvent(symbol="BTC", opportunity_score=22, confidence=0.6, reason="r")
     assert ev.ambiguous is False
     assert ev.factors_present == 0
     assert ev.block_reason == "unknown"

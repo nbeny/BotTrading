@@ -11,9 +11,16 @@ def test_client_mode_follows_provider() -> None:
     cfg = config_mod.TradingConfig(api_key="k", api_secret="c2VjcmV0")
     client = kraken.KrakenFuturesClient(cfg, mode_provider=lambda: mode["m"])
     # dry_run -> no network, simulated
-    r = asyncio.run(client.send_order(
-        pair="PF_SOLUSD", side="buy", order_type="lmt", size=1.0,
-        limit_price=100.0, cli_ord_id="e1"))
+    r = asyncio.run(
+        client.send_order(
+            pair="PF_SOLUSD",
+            side="buy",
+            order_type="lmt",
+            size=1.0,
+            limit_price=100.0,
+            cli_ord_id="e1",
+        )
+    )
     assert r["dry_run"] is True
     # switch to live -> base_url resolves live host
     mode["m"] = config_mod.Mode.LIVE

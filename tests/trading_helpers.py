@@ -3,6 +3,7 @@
 Each service names its package `app`, so we register it as `tengine` here to avoid
 collisions and to make relative imports inside the package resolve.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -10,13 +11,20 @@ import sys
 import types
 from pathlib import Path
 
-_APP_DIR = (
-    Path(__file__).resolve().parents[1]
-    / "services" / "trading-engine" / "app"
-)
+_APP_DIR = Path(__file__).resolve().parents[1] / "services" / "trading-engine" / "app"
 _PKG = "tengine"
 # Dependency order: leaf modules first, composers last.
-_MODULES = ["config", "symbols", "sizing", "guards", "runtime", "kraken", "control", "engine", "reconcile"]
+_MODULES = [
+    "config",
+    "symbols",
+    "sizing",
+    "guards",
+    "runtime",
+    "kraken",
+    "control",
+    "engine",
+    "reconcile",
+]
 
 
 def load_app() -> types.ModuleType:

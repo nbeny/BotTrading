@@ -97,8 +97,13 @@ async def test_produced_counter_increments_when_reconciler_closes_a_position() -
     cache = _ReconcileCache(exposure=0.1)
     producer = _Producer()
     reconciler = reconcile_mod.Reconciler(cache, producer, None)
-    pos = {"symbol": "BTC", "pair": "PF_XBTUSD", "side": "buy",
-           "size": 0.01, "position_size_pct": 0.05}
+    pos = {
+        "symbol": "BTC",
+        "pair": "PF_XBTUSD",
+        "side": "buy",
+        "size": 0.01,
+        "position_size_pct": 0.05,
+    }
 
     labels = dict(
         service="trading-engine",

@@ -17,8 +17,12 @@ from cmi_common.events.decision import Direction
 
 
 def test_price_event_partition_key_is_symbol() -> None:
-    e = PriceEvent(source=Source.COINGECKO, symbol="SOL", coin_id="solana",
-                   price_usd=Decimal("150"))
+    e = PriceEvent(
+        source=Source.COINGECKO,
+        symbol="SOL",
+        coin_id="solana",
+        price_usd=Decimal("150"),
+    )
     assert e.partition_key() == "SOL"
 
 
@@ -34,15 +38,23 @@ def test_roundtrip_parse_returns_concrete_type() -> None:
 
 def test_risk_approved_long_level_validation() -> None:
     ok = RiskApprovedEvent(
-        symbol="SOL", direction=Direction.LONG, entry_price=150,
-        stop_loss=142, take_profit=165, confidence=0.87,
+        symbol="SOL",
+        direction=Direction.LONG,
+        entry_price=150,
+        stop_loss=142,
+        take_profit=165,
+        confidence=0.87,
     )
     assert ok.risk_reward_ratio == 0.0  # default until set by engine
 
     with pytest.raises(ValueError):
         RiskApprovedEvent(
-            symbol="SOL", direction=Direction.LONG, entry_price=150,
-            stop_loss=160, take_profit=165, confidence=0.5,  # SL above entry
+            symbol="SOL",
+            direction=Direction.LONG,
+            entry_price=150,
+            stop_loss=160,
+            take_profit=165,
+            confidence=0.5,  # SL above entry
         )
 
 

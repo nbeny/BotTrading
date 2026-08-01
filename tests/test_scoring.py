@@ -39,8 +39,15 @@ def test_bearish_news_scores_below_neutral_news() -> None:
     # is between two symbols that both *have* a news reading. Silence no longer
     # participates in the axis at all, which is a stronger guarantee than
     # outscoring panic: it cannot be scored on evidence nobody collected.
-    neutral = scoring.score(scoring.Features(sentiment_score=0.0))
-    panicking = scoring.score(scoring.Features(sentiment_score=-1.0))
+    # A price anchor rides along because a lone news axis is now below the
+    # minimum evidence floor -- and because haiku's _ready() means no symbol
+    # ever reaches the scorer without one anyway.
+    neutral = scoring.score(
+        scoring.Features(sentiment_score=0.0, price_change_pct_24h=0.0)
+    )
+    panicking = scoring.score(
+        scoring.Features(sentiment_score=-1.0, price_change_pct_24h=0.0)
+    )
     assert panicking.opportunity_score < neutral.opportunity_score
 
 
@@ -62,7 +69,8 @@ def test_strong_signals_score_high() -> None:
 
 
 def test_confidence_reflects_missing_signals() -> None:
-    f = scoring.Features(price_change_pct_24h=10)  # only market_trend present
+    # Two of seven axes: enough to clear the evidence floor, far from complete.
+    f = scoring.Features(price_change_pct_24h=10, volume_spike_ratio=2.0)
     result = scoring.score(f)
     assert 0.0 < result.confidence < 0.5
 

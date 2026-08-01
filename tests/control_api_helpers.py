@@ -1,4 +1,5 @@
 """Load the control-api `app` package under a unique name for tests."""
+
 from __future__ import annotations
 
 import importlib.util

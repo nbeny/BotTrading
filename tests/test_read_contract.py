@@ -35,16 +35,32 @@ NOW = datetime(2026, 7, 25, 12, 0, tzinfo=timezone.utc)
 
 # ── fake rows ─────────────────────────────────────────────────────────────────
 def _price(**kw):
-    base = dict(symbol="BTC", price_usd=110.0, price_change_pct_24h=6.0,
-                volume_24h_usd=1000.0, market_cap_usd=1e9, time=NOW)
+    base = dict(
+        symbol="BTC",
+        price_usd=110.0,
+        price_change_pct_24h=6.0,
+        volume_24h_usd=1000.0,
+        market_cap_usd=1e9,
+        time=NOW,
+    )
     base.update(kw)
     return SimpleNamespace(**base)
 
 
 def _trade(**kw):
-    base = dict(event_id="t1", symbol="BTC", direction="long", entry_price=100.0,
-                position_size_pct=0.1, stop_loss=90.0, take_profit=120.0,
-                fill_price=101.0, status="filled", pnl=5.0, created_at=NOW)
+    base = dict(
+        event_id="t1",
+        symbol="BTC",
+        direction="long",
+        entry_price=100.0,
+        position_size_pct=0.1,
+        stop_loss=90.0,
+        take_profit=120.0,
+        fill_price=101.0,
+        status="filled",
+        pnl=5.0,
+        created_at=NOW,
+    )
     base.update(kw)
     return SimpleNamespace(**base)
 
@@ -64,9 +80,15 @@ def _news(**kw):
 
 
 def _decision(**kw):
-    base = dict(event_id="d1", symbol="BTC", direction="long",
-                opportunity_score=80, confidence=0.9, rationale="x",
-                created_at=NOW)
+    base = dict(
+        event_id="d1",
+        symbol="BTC",
+        direction="long",
+        opportunity_score=80,
+        confidence=0.9,
+        rationale="x",
+        created_at=NOW,
+    )
     base.update(kw)
     return SimpleNamespace(**base)
 
@@ -140,8 +162,12 @@ def _assert_exact_keys(name: str, obj: dict) -> None:
 
 # ── item-shape endpoints (pure mappers) ───────────────────────────────────────
 def test_market_tokens_contract() -> None:
-    item = map_token(_price(), meta=SimpleNamespace(coin_id="bitcoin", name="BTC"),
-                     opportunity_score=80, sentiment_score=0.4)
+    item = map_token(
+        _price(),
+        meta=SimpleNamespace(coin_id="bitcoin", name="BTC"),
+        opportunity_score=80,
+        sentiment_score=0.4,
+    )
     _assert_keys("market/tokens", item)
     _assert_keys("market/token", item)
 
@@ -186,7 +212,9 @@ def test_risk_alerts_contract() -> None:
     # An unprotected asset triggers an "unp-" info alert → a representative item.
     exp = compute_exposure(
         [{"symbol": "BTC", "value_usd": 100.0, "protected": False}],
-        100.0, 0.0, now=NOW,
+        100.0,
+        0.0,
+        now=NOW,
     )
     _assert_keys("risk/alerts", compute_risk_alerts(exp, now=NOW)[0])
 
@@ -199,8 +227,13 @@ async def test_data_stats_contract() -> None:
 
 async def test_data_content_contract() -> None:
     resp = await read_api.data_content(
-        category="all", symbol=None, q=None, sentiment="all",
-        limit=50, offset=0, session=_FakeSession(8),
+        category="all",
+        symbol=None,
+        q=None,
+        sentiment="all",
+        limit=50,
+        offset=0,
+        session=_FakeSession(8),
     )
     _assert_keys("data/content", resp)
 
@@ -243,8 +276,13 @@ def test_pipeline_stage_shape_matches_the_contract() -> None:
 
 def test_stage_detail_item_shape_matches_the_contract() -> None:
     row = SimpleNamespace(
-        symbol="SOL", opportunity_score=72, confidence=0.8, factors_present=3,
-        escalated=True, block_reason="unknown", time=NOW,
+        symbol="SOL",
+        opportunity_score=72,
+        confidence=0.8,
+        factors_present=3,
+        escalated=True,
+        block_reason="unknown",
+        time=NOW,
         payload={"correlation_id": "cid-1"},
     )
     _assert_exact_keys("systems/stage.items[]", systems_pipeline.signal_item(row))

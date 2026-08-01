@@ -57,8 +57,15 @@ def _reconciler(cache, producer, kraken):
 
 
 def test_closed_position_emits_and_frees_exposure() -> None:
-    positions = {"evt-1": {"symbol": "SOL", "pair": "PF_SOLUSD",
-                           "position_size_pct": 0.04, "entry_price": 150.0, "side": "buy"}}
+    positions = {
+        "evt-1": {
+            "symbol": "SOL",
+            "pair": "PF_SOLUSD",
+            "position_size_pct": 0.04,
+            "entry_price": 150.0,
+            "side": "buy",
+        }
+    }
     cache = FakeCache(positions, exposure=0.30)
     producer = FakeProducer()
     kraken = FakeKraken(open_pairs=[])  # SOL no longer open -> closed
@@ -68,8 +75,15 @@ def test_closed_position_emits_and_frees_exposure() -> None:
 
 
 def test_still_open_position_is_left_alone() -> None:
-    positions = {"evt-1": {"symbol": "SOL", "pair": "PF_SOLUSD",
-                           "position_size_pct": 0.04, "entry_price": 150.0, "side": "buy"}}
+    positions = {
+        "evt-1": {
+            "symbol": "SOL",
+            "pair": "PF_SOLUSD",
+            "position_size_pct": 0.04,
+            "entry_price": 150.0,
+            "side": "buy",
+        }
+    }
     cache = FakeCache(positions, exposure=0.30)
     producer = FakeProducer()
     kraken = FakeKraken(open_pairs=["PF_SOLUSD"])

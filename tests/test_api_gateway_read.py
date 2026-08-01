@@ -597,8 +597,11 @@ def test_assemble_systems_snapshot() -> None:
 def _health(service, status="healthy", throughput=None):
     detail = {} if throughput is None else {"throughput_per_min": throughput}
     return SimpleNamespace(
-        service=service, status=status, healthy=status == "healthy",
-        latency_ms=3.0, detail=detail,
+        service=service,
+        status=status,
+        healthy=status == "healthy",
+        latency_ms=3.0,
+        detail=detail,
     )
 
 
@@ -713,7 +716,7 @@ def test_endpoint_systems_overview_wiring() -> None:
     # build_pipeline_stages always returns 7 stages either way, so a length
     # check alone proves nothing about the wiring.
     stage_queries = [_Result(scalar=3), _Result(scalar=5), _Result(rows=[])]
-    stage_queries += ([_Result(scalar=0), _Result(scalar=0), _Result(rows=[])] * 6)
+    stage_queries += [_Result(scalar=0), _Result(scalar=0), _Result(rows=[])] * 6
     # execute order: health, [stage counts], coll_rows, workers(Signal,Decision),
     # kafka(Price,Sentiment,Signal,Decision,Trade), pg_stat_activity, pg_database_size
     results = [
@@ -773,8 +776,13 @@ def test_endpoint_systems_stage_decision_wiring() -> None:
         + [_Result(scalar=11), _Result(scalar=12), _Result(rows=[])]  # execute
     )
     decision_row = SimpleNamespace(
-        created_at=NOW, symbol="ETH", direction="short", opportunity_score=55,
-        confidence=0.66, ai_validated=True, correlation_id="corr-77",
+        created_at=NOW,
+        symbol="ETH",
+        direction="short",
+        opportunity_score=55,
+        confidence=0.66,
+        ai_validated=True,
+        correlation_id="corr-77",
     )
     rejection_rows = [("score 12 too low", 3), ("score 45 too low", 2)]
     sessions: list = []

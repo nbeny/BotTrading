@@ -33,9 +33,15 @@ def test_load_returns_defaults_when_absent() -> None:
 def test_redis_overlay_wins() -> None:
     runtime, config = _mods()
     defaults = config.TradingConfig(max_order_usd=500.0, trading_enabled=True)
-    cache = FakeCache(values={"trading:runtime": {
-        "mode": "demo", "trading_enabled": False, "max_order_usd": 250.0,
-    }})
+    cache = FakeCache(
+        values={
+            "trading:runtime": {
+                "mode": "demo",
+                "trading_enabled": False,
+                "max_order_usd": 250.0,
+            }
+        }
+    )
     eff = asyncio.run(runtime.RuntimeConfig.load(cache, defaults))
     assert eff.mode == config.Mode.DEMO
     assert eff.trading_enabled is False
@@ -61,5 +67,7 @@ def test_set_field_updates_runtime() -> None:
     defaults = config.TradingConfig()
     cache = FakeCache()
     asyncio.run(runtime.RuntimeConfig.write_defaults_if_absent(cache, defaults))
-    asyncio.run(runtime.RuntimeConfig.set_fields(cache, {"auto_trading_enabled": False}))
+    asyncio.run(
+        runtime.RuntimeConfig.set_fields(cache, {"auto_trading_enabled": False})
+    )
     assert cache._values["trading:runtime"]["auto_trading_enabled"] is False

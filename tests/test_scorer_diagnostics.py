@@ -18,9 +18,7 @@ def test_typical_major_pair_is_blocked_by_score() -> None:
     Scores ~22 against the escalation floor. This is why the pipeline
     produced no decisions at all.
     """
-    r = sc.local_opportunity(
-        {"price_change_pct_24h": 3.0, "sentiment_score": 0.3}
-    )
+    r = sc.local_opportunity({"price_change_pct_24h": 3.0, "sentiment_score": 0.3})
     assert r.opportunity_score < sc.ScorerConfig().escalate_score
     assert r.escalate is False
     assert r.block_reason == "score_below_threshold"
@@ -57,9 +55,7 @@ def test_escalated_signal_reports_escalated() -> None:
 
 
 def test_factors_present_counts_only_supplied_factors() -> None:
-    r = sc.local_opportunity(
-        {"price_change_pct_24h": 3.0, "sentiment_score": 0.3}
-    )
+    r = sc.local_opportunity({"price_change_pct_24h": 3.0, "sentiment_score": 0.3})
     assert r.factors_present == 2
 
     full = sc.local_opportunity(
@@ -97,9 +93,7 @@ def test_ambiguity_no_longer_drags_confidence_under_the_risk_floor() -> None:
     ambiguous signal with unknown liquidity — below the risk engine's 0.55
     floor. Ambiguity is a reason to escalate, not a reason to distrust the data.
     """
-    r = sc.local_opportunity(
-        {"price_change_pct_24h": 5.0, "sentiment_score": -0.5}
-    )
+    r = sc.local_opportunity({"price_change_pct_24h": 5.0, "sentiment_score": -0.5})
     assert r.ambiguous is True
     assert r.confidence >= 0.55
 

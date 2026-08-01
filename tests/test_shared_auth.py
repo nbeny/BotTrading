@@ -45,7 +45,5 @@ def test_require_principal_rejects_bad_token(monkeypatch):
 def test_require_principal_accepts_valid_token(monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "s3cret")
     tok = encode_token({"sub": "admin", "role": "admin"}, secret="s3cret")
-    principal = asyncio.run(
-        require_principal(authorization=f"Bearer {tok}")
-    )
+    principal = asyncio.run(require_principal(authorization=f"Bearer {tok}"))
     assert principal.sub == "admin" and principal.role == "admin"

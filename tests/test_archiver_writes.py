@@ -61,7 +61,10 @@ async def test_journal_entry_is_skipped_without_touching_the_database() -> None:
     a = arch.EventArchiver(FakeDb(s))
     await a.handle(
         JournalEntryEvent(
-            symbol="BTC", signal_event_id="s1", score=1, confidence=0.5,
+            symbol="BTC",
+            signal_event_id="s1",
+            score=1,
+            confidence=0.5,
             factors_present=1,
         )
     )

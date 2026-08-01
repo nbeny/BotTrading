@@ -51,8 +51,14 @@ def test_signal_events_route_to_the_signal_table() -> None:
     """Sentiment, décision, exécution : faible volume, et ce sont ceux qu'on
     relit sans qu'ils existent ailleurs."""
     for ev in (
-        SentimentEvent(symbol="BTC", sentiment_score=0.1, confidence=0.5,
-                       model_name="m", input_kind="news", sample_size=1),
+        SentimentEvent(
+            symbol="BTC",
+            sentiment_score=0.1,
+            confidence=0.5,
+            model_name="m",
+            input_kind="news",
+            sample_size=1,
+        ),
         DecisionEvent(symbol="BTC", opportunity_score=1, confidence=0.5, rationale="r"),
         ExecutionEvent(kind=ExecutionKind.FILLED, symbol="BTC", risk_event_id="r1"),
     ):
@@ -69,8 +75,13 @@ def test_events_with_a_table_of_their_own_are_not_archived_twice() -> None:
     `pipeline_rejections`), donc l'archive n'apportait rien qu'une requête ne
     donne déjà."""
     for ev in (
-        JournalEntryEvent(symbol="BTC", signal_event_id="s1", score=1,
-                          confidence=0.5, factors_present=1),
+        JournalEntryEvent(
+            symbol="BTC",
+            signal_event_id="s1",
+            score=1,
+            confidence=0.5,
+            factors_present=1,
+        ),
         AnalysisEvent(symbol="BTC", opportunity_score=1, confidence=0.5, reason="r"),
         RiskRejectedEvent(source=Source.RISK_ENGINE, symbol="BTC", reason="x"),
     ):

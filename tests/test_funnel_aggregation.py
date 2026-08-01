@@ -151,6 +151,7 @@ def test_block_reasons_are_sorted_by_count_desc() -> None:
     )
     assert out["top_block_reasons"][0]["count"] == 980
 
+
 # ── regroupement des raisons de blocage ──────────────────────────────────────
 def test_reasons_differing_only_by_an_embedded_number_are_one_row() -> None:
     """Mesuré en production : les douze premières lignes du panneau étaient
@@ -158,8 +159,14 @@ def test_reasons_differing_only_by_an_embedded_number_are_one_row() -> None:
     (« score 13 below decision threshold 70 »). Une raison réellement
     différente était donc invisible, poussée sous ~70 doublons."""
     out = funnel.build_funnel(
-        window="24h", analyses=1, escalated=0, decisions=0, approved=0, executed=0,
-        score_buckets={}, factors_presence={},
+        window="24h",
+        analyses=1,
+        escalated=0,
+        decisions=0,
+        approved=0,
+        executed=0,
+        score_buckets={},
+        factors_presence={},
         block_reasons=[
             ("decision_engine", "score 13 below decision threshold 70", 47654),
             ("decision_engine", "score 14 below decision threshold 70", 23287),
@@ -179,8 +186,14 @@ def test_the_same_wording_from_two_stages_stays_separate() -> None:
     """Le stage fait partie de l'identité : fusionner un refus du moteur de
     décision avec un refus du moteur de risque effacerait où meurt le signal."""
     out = funnel.build_funnel(
-        window="24h", analyses=1, escalated=0, decisions=0, approved=0, executed=0,
-        score_buckets={}, factors_presence={},
+        window="24h",
+        analyses=1,
+        escalated=0,
+        decisions=0,
+        approved=0,
+        executed=0,
+        score_buckets={},
+        factors_presence={},
         block_reasons=[
             ("haiku", "score N too low", 5),
             ("risk_engine", "score N too low", 3),
@@ -191,8 +204,14 @@ def test_the_same_wording_from_two_stages_stays_separate() -> None:
 
 def test_a_reason_with_no_number_is_untouched() -> None:
     out = funnel.build_funnel(
-        window="24h", analyses=1, escalated=0, decisions=0, approved=0, executed=0,
-        score_buckets={}, factors_presence={},
+        window="24h",
+        analyses=1,
+        escalated=0,
+        decisions=0,
+        approved=0,
+        executed=0,
+        score_buckets={},
+        factors_presence={},
         block_reasons=[("haiku", "gate_not_met", 9)],
     )
     assert out["top_block_reasons"][0]["reason"] == "gate_not_met"
@@ -202,8 +221,14 @@ def test_decimals_collapse_to_a_single_placeholder() -> None:
     """`0.42` ne doit pas devenir `N.N` : deux nombres là où l'opérateur en lit
     un seul rendrait la phrase illisible."""
     out = funnel.build_funnel(
-        window="24h", analyses=1, escalated=0, decisions=0, approved=0, executed=0,
-        score_buckets={}, factors_presence={},
+        window="24h",
+        analyses=1,
+        escalated=0,
+        decisions=0,
+        approved=0,
+        executed=0,
+        score_buckets={},
+        factors_presence={},
         block_reasons=[("risk_engine", "confidence 0.42 below floor 0.55", 1)],
     )
     assert out["top_block_reasons"][0]["reason"] == "confidence N below floor N"
@@ -214,8 +239,15 @@ def test_the_list_is_capped_and_says_so() -> None:
     une liste partielle comme exhaustive."""
     many = [("haiku", f"raison {chr(97 + i)}", 100 - i) for i in range(15)]
     out = funnel.build_funnel(
-        window="24h", analyses=1, escalated=0, decisions=0, approved=0, executed=0,
-        score_buckets={}, factors_presence={}, block_reasons=many,
+        window="24h",
+        analyses=1,
+        escalated=0,
+        decisions=0,
+        approved=0,
+        executed=0,
+        score_buckets={},
+        factors_presence={},
+        block_reasons=many,
     )
     assert len(out["top_block_reasons"]) == funnel.MAX_BLOCK_REASONS
     assert out["block_reasons_truncated"] is True

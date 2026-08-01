@@ -34,5 +34,6 @@ def test_adjust_publishes_command() -> None:
     pub = FakePublisher()
     svc = positions.PositionsService(pub, FakeReader())
     asyncio.run(svc.adjust("e1", stop_loss=140.0, take_profit=None, issued_by="admin"))
-    assert pub.calls == [(ControlCommand.ADJUST_SLTP,
-                          {"event_id": "e1", "stop_loss": 140.0}, "admin")]
+    assert pub.calls == [
+        (ControlCommand.ADJUST_SLTP, {"event_id": "e1", "stop_loss": 140.0}, "admin")
+    ]

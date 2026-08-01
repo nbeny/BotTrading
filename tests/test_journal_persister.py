@@ -39,15 +39,21 @@ class FakeDb:
 
 
 def _entry(**kw) -> JournalEntryEvent:
-    base = {"symbol": "BTC", "signal_event_id": "sig-1", "score": 42,
-            "confidence": 0.7, "factors_present": 2}
+    base = {
+        "symbol": "BTC",
+        "signal_event_id": "sig-1",
+        "score": 42,
+        "confidence": 0.7,
+        "factors_present": 2,
+    }
     base.update(kw)
     return JournalEntryEvent(**base)
 
 
 def _tables(session) -> list[str]:
     return [
-        t.name for t in (getattr(s, "table", None) for s in session.executed)
+        t.name
+        for t in (getattr(s, "table", None) for s in session.executed)
         if t is not None
     ]
 
@@ -66,12 +72,16 @@ async def test_risk_rejection_updates_rather_than_inserts() -> None:
     s = FakeSession()
     p = persister_mod.Persister(FakeDb(s))
     await p.handle(
-        RiskRejectedEvent(source=Source.RISK_ENGINE, symbol="BTC",
-                          reason="confidence 0.45 below floor",
-                          decision_event_id="dec-1")
+        RiskRejectedEvent(
+            source=Source.RISK_ENGINE,
+            symbol="BTC",
+            reason="confidence 0.45 below floor",
+            decision_event_id="dec-1",
+        )
     )
     journal_stmts = [
-        st for st in s.executed
+        st
+        for st in s.executed
         if getattr(getattr(st, "table", None), "name", None) == "decision_journal"
     ]
     assert len(journal_stmts) == 1
@@ -96,11 +106,17 @@ async def test_execution_joins_on_risk_event_id_not_decision_event_id() -> None:
     s = FakeSession()
     p = persister_mod.Persister(FakeDb(s))
     await p.handle(
-        ExecutionEvent(kind=ExecutionKind.FILLED, symbol="BTC",
-                       risk_event_id="risk-1", fill_price=101.0, pnl=5.0)
+        ExecutionEvent(
+            kind=ExecutionKind.FILLED,
+            symbol="BTC",
+            risk_event_id="risk-1",
+            fill_price=101.0,
+            pnl=5.0,
+        )
     )
     journal_stmts = [
-        st for st in s.executed
+        st
+        for st in s.executed
         if getattr(getattr(st, "table", None), "name", None) == "decision_journal"
     ]
     assert len(journal_stmts) == 1

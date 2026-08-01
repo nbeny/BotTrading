@@ -100,9 +100,17 @@ def test_the_reference_capital_reaches_the_positions_not_only_the_header() -> No
     from types import SimpleNamespace
 
     trade = SimpleNamespace(
-        event_id="t1", symbol="BTC", direction="long", entry_price=100.0,
-        position_size_pct=0.1, stop_loss=None, take_profit=None,
-        fill_price=None, status="filled", pnl=None, created_at=NOW,
+        event_id="t1",
+        symbol="BTC",
+        direction="long",
+        entry_price=100.0,
+        position_size_pct=0.1,
+        stop_loss=None,
+        take_profit=None,
+        fill_price=None,
+        status="filled",
+        pnl=None,
+        created_at=NOW,
     )
     on_snapshot = read_api.map_position(trade, None, base_capital=5000.0)
     on_default = read_api.map_position(trade, None)

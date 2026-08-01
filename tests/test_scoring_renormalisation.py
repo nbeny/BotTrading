@@ -99,9 +99,13 @@ def test_a_symbol_with_no_evidence_at_all_produces_no_score() -> None:
 
 
 def test_positioning_participates_in_the_score() -> None:
-    without = scoring.score(scoring.Features(price_change_pct_24h=10.0))
+    without = scoring.score(
+        scoring.Features(price_change_pct_24h=10.0, volume_spike_ratio=2.0)
+    )
     with_crowded = scoring.score(
-        scoring.Features(price_change_pct_24h=10.0, funding_rate_8h=0.001)
+        scoring.Features(
+            price_change_pct_24h=10.0, volume_spike_ratio=2.0, funding_rate_8h=0.001
+        )
     )
     assert with_crowded.opportunity_score < without.opportunity_score
     assert with_crowded.confidence > without.confidence
@@ -135,3 +139,51 @@ def test_the_breakdown_reports_only_measured_axes() -> None:
         scoring.Features(price_change_pct_24h=10.0, funding_rate_8h=0.0)
     )
     assert set(result.breakdown) == {"market_trend", "positioning"}
+
+
+def test_a_single_thin_axis_cannot_score_at_all() -> None:
+    # Before the evidence floor, a lone has_unlock_schedule=True -- "DefiLlama
+    # tracks this token and nothing is due in 30 days" -- scored a perfect 100
+    # on 0.10 of the model, and funding alone scored 99. Both cleared the
+    # decision threshold. Renormalisation exists to stop absent data dragging a
+    # score down, not to let one axis speak for seven.
+    for f in (
+        scoring.Features(has_unlock_schedule=True),
+        scoring.Features(funding_rate_8h=-0.0005),
+        scoring.Features(open_interest_change_pct_24h=50.0),
+        scoring.Features(volume_spike_ratio=6.0),  # the heaviest single axis
+    ):
+        result = scoring.score(f)
+        assert result.opportunity_score == 0
+        assert result.breakdown == {}
+
+
+def test_the_lightest_legitimate_pair_still_scores() -> None:
+    # fundamentals (0.10) + liquidity (0.1125) = 0.2125, just over the floor.
+    result = scoring.score(
+        scoring.Features(liquidity_usd=1_000_000.0, has_unlock_schedule=True)
+    )
+    assert result.opportunity_score > 0
+    assert set(result.breakdown) == {"liquidity_score", "fundamentals"}
+
+
+def test_a_half_read_unlock_leaves_the_axis_absent_not_maximal() -> None:
+    # Sized but undated, or dated but unsized, is half a reading. Landing it on
+    # 1.0 meant a known 40% unlock with an unreadable date scored the axis at
+    # its best and pulled the score up.
+    sized_only = scoring._norm_fundamentals(
+        tvl_change=None,
+        fees_change=None,
+        unlock_pct=40.0,
+        unlock_days=None,
+        has_schedule=True,
+    )
+    dated_only = scoring._norm_fundamentals(
+        tvl_change=None,
+        fees_change=None,
+        unlock_pct=None,
+        unlock_days=1.0,
+        has_schedule=True,
+    )
+    assert sized_only is None
+    assert dated_only is None

@@ -13,8 +13,11 @@ from cmi_common.db.models import (
 def test_raw_content_columns() -> None:
     cols = set(RawContent.__table__.columns.keys())
     assert {"source", "kind", "external_id", "text", "symbols", "scored_at"} <= cols
-    uq = {tuple(sorted(c.columns.keys())) for c in RawContent.__table__.constraints
-          if c.__class__.__name__ == "UniqueConstraint"}
+    uq = {
+        tuple(sorted(c.columns.keys()))
+        for c in RawContent.__table__.constraints
+        if c.__class__.__name__ == "UniqueConstraint"
+    }
     assert ("external_id", "source") in uq
 
 

@@ -16,6 +16,8 @@ def test_control_command_roundtrip() -> None:
 
 
 def test_control_command_partition_key_is_stable() -> None:
-    ev = ControlCommandEvent(command=ControlCommand.SET_KILL_SWITCH, payload={"enabled": False})
+    ev = ControlCommandEvent(
+        command=ControlCommand.SET_KILL_SWITCH, payload={"enabled": False}
+    )
     # All control commands share one partition for global ordering.
     assert ev.partition_key() == "control"

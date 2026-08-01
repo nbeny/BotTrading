@@ -67,9 +67,7 @@ def test_a_measured_zero_ratio_counts_as_a_supplied_factor() -> None:
 def test_cex_liquidity_falls_back_to_the_volume_proxy() -> None:
     """Sans DexEvent, la liquidité valait un neutre 0,5 indiscernable d'une
     vraie liquidité médiocre. Le volume 24 h est déjà dans le PriceEvent."""
-    r = scorer.local_opportunity(
-        {"price_change_pct_24h": 5.0, "volume_24h_usd": 2e10}
-    )
+    r = scorer.local_opportunity({"price_change_pct_24h": 5.0, "volume_24h_usd": 2e10})
     assert r.liquidity_source == "volume_proxy"
     assert r.factors["liquidity"] > 0.5
 

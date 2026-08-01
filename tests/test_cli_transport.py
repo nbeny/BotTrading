@@ -21,9 +21,7 @@ def test_no_key_uses_stub() -> None:
     from cmi_common.ai import ClaudeClient
 
     client = ClaudeClient(api_key="", model="claude-haiku-4-5")
-    resp = asyncio.run(
-        client.complete(system="s", prompt="hello", service="svc")
-    )
+    resp = asyncio.run(client.complete(system="s", prompt="hello", service="svc"))
     data = resp.json()
     assert "opportunity_score" in data
     assert "offline-stub" in data["reason"]
@@ -48,8 +46,13 @@ def test_cli_options_importable() -> None:
 class FakeProc:
     """Stand-in for an asyncio subprocess."""
 
-    def __init__(self, out: bytes = b"", err: bytes = b"", returncode: int = 0,
-                 delay: float = 0.0) -> None:
+    def __init__(
+        self,
+        out: bytes = b"",
+        err: bytes = b"",
+        returncode: int = 0,
+        delay: float = 0.0,
+    ) -> None:
         self._out, self._err = out, err
         self.returncode = returncode
         self._delay = delay
@@ -82,8 +85,12 @@ def _patch_exec(monkeypatch, proc: FakeProc, captured: dict) -> None:
 def test_cli_argv_and_stdin(monkeypatch) -> None:
     from cmi_common.ai.claude import CliOptions, CliTransport
 
-    envelope = json.dumps({"result": '{"opportunity_score": 80}',
-                           "usage": {"input_tokens": 10, "output_tokens": 5}})
+    envelope = json.dumps(
+        {
+            "result": '{"opportunity_score": 80}',
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+    )
     proc = FakeProc(out=envelope.encode())
     captured: dict = {}
     _patch_exec(monkeypatch, proc, captured)
@@ -95,7 +102,9 @@ def test_cli_argv_and_stdin(monkeypatch) -> None:
     assert argv[0] == "claude"
     assert "-p" in argv
     assert argv[argv.index("--model") + 1] == "claude-haiku-4-5"
-    assert "--output-format" in argv and argv[argv.index("--output-format") + 1] == "json"
+    assert (
+        "--output-format" in argv and argv[argv.index("--output-format") + 1] == "json"
+    )
     # Independence: never continue or resume a session.
     assert "--continue" not in argv
     assert "--resume" not in argv
@@ -213,13 +222,13 @@ def test_semaphore_caps_parallelism(monkeypatch) -> None:
             asyncio.create_task(t.complete(system="s", prompt="p", service="svc"))
             for _ in range(5)
         ]
-        await asyncio.sleep(0.05)      # let as many as allowed enter
-        assert state["peak"] <= 2      # never more than the cap
+        await asyncio.sleep(0.05)  # let as many as allowed enter
+        assert state["peak"] <= 2  # never more than the cap
         release.set()
         await asyncio.gather(*tasks)
 
     asyncio.run(scenario())
-    assert state["peak"] == 2          # the cap was actually reached
+    assert state["peak"] == 2  # the cap was actually reached
 
 
 def test_tier_mismatch_metric_exists() -> None:
@@ -276,14 +285,16 @@ def test_cli_system_prompt_append_mode(monkeypatch) -> None:
 def test_actual_model_surfaced(monkeypatch) -> None:
     from cmi_common.ai.claude import CliOptions, CliTransport
 
-    envelope = json.dumps({
-        "result": '{"opportunity_score": 42}',
-        "usage": {"input_tokens": 10, "output_tokens": 20},
-        "modelUsage": {
-            "claude-haiku-4-5-20251001": {"outputTokens": 3},
-            "claude-sonnet-4-6": {"outputTokens": 20},
-        },
-    })
+    envelope = json.dumps(
+        {
+            "result": '{"opportunity_score": 42}',
+            "usage": {"input_tokens": 10, "output_tokens": 20},
+            "modelUsage": {
+                "claude-haiku-4-5-20251001": {"outputTokens": 3},
+                "claude-sonnet-4-6": {"outputTokens": 20},
+            },
+        }
+    )
     proc = FakeProc(out=envelope.encode())
     _patch_exec(monkeypatch, proc, {})
 
@@ -335,11 +346,13 @@ def _mismatch_count(service: str, requested: str, actual: str) -> float:
 def test_cli_tier_mismatch_counted(monkeypatch) -> None:
     from cmi_common.ai.claude import CliOptions, CliTransport
 
-    envelope = json.dumps({
-        "result": '{"opportunity_score": 1}',
-        "usage": {"output_tokens": 5},
-        "modelUsage": {"claude-opus-4-8": {"outputTokens": 5}},
-    })
+    envelope = json.dumps(
+        {
+            "result": '{"opportunity_score": 1}',
+            "usage": {"output_tokens": 5},
+            "modelUsage": {"claude-opus-4-8": {"outputTokens": 5}},
+        }
+    )
     proc = FakeProc(out=envelope.encode())
     _patch_exec(monkeypatch, proc, {})
 
@@ -354,11 +367,13 @@ def test_cli_tier_mismatch_counted(monkeypatch) -> None:
 def test_cli_tier_match_not_counted(monkeypatch) -> None:
     from cmi_common.ai.claude import CliOptions, CliTransport
 
-    envelope = json.dumps({
-        "result": "{}",
-        "usage": {"output_tokens": 5},
-        "modelUsage": {"claude-haiku-4-5-20251001": {"outputTokens": 5}},
-    })
+    envelope = json.dumps(
+        {
+            "result": "{}",
+            "usage": {"output_tokens": 5},
+            "modelUsage": {"claude-haiku-4-5-20251001": {"outputTokens": 5}},
+        }
+    )
     proc = FakeProc(out=envelope.encode())
     _patch_exec(monkeypatch, proc, {})
 

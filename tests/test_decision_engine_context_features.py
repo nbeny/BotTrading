@@ -67,9 +67,12 @@ async def test_unlock_proximity_is_derived_from_the_timestamp() -> None:
     assert breakdown["fundamentals"] < 0.2
 
 
-async def test_a_malformed_unlock_date_is_ignored_rather_than_fatal() -> None:
-    # Known schedule, unreadable date: falls back to the clean reading rather
-    # than crashing the consumer loop on one bad field.
+async def test_a_malformed_unlock_date_leaves_the_axis_unmeasured() -> None:
+    # Known schedule, size known, date unreadable. It must not crash the
+    # consumer loop — and it must not land on 1.0 either, which is what the
+    # first version did: a known 5% unlock whose date failed to parse scored
+    # the axis at its *maximum*, pulling the whole score up. Fabricated safety
+    # is the same defect as a fabricated zero with the sign flipped.
     breakdown = await _breakdown(
         {
             "has_unlock_schedule": True,
@@ -77,7 +80,7 @@ async def test_a_malformed_unlock_date_is_ignored_rather_than_fatal() -> None:
             "next_unlock_pct_supply": 5.0,
         }
     )
-    assert breakdown["fundamentals"] == 1.0
+    assert "fundamentals" not in breakdown
 
 
 async def test_a_naive_unlock_date_is_read_as_utc_rather_than_crashing() -> None:

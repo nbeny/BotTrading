@@ -1,5 +1,6 @@
 # tests/test_execution_event.py
 """ExecutionEvent schema + round-trip through parse_event."""
+
 from __future__ import annotations
 
 from cmi_common.events import parse_event
@@ -25,8 +26,10 @@ def test_execution_event_roundtrip() -> None:
 
 def test_execution_rejected_carries_reason() -> None:
     ev = ExecutionEvent(
-        kind=ExecutionKind.REJECTED, symbol="DOGE",
-        risk_event_id="x", reason="unknown_symbol",
+        kind=ExecutionKind.REJECTED,
+        symbol="DOGE",
+        risk_event_id="x",
+        reason="unknown_symbol",
     )
     assert ev.reason == "unknown_symbol"
     assert ev.fill_price is None

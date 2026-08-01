@@ -36,10 +36,13 @@ class FakeCache:
                 outer.sadd.append((k, m))
 
             async def srem(self, k, m):
-                outer.sadd = [(kk, mm) for (kk, mm) in outer.sadd if not (kk == k and mm == m)]
+                outer.sadd = [
+                    (kk, mm) for (kk, mm) in outer.sadd if not (kk == k and mm == m)
+                ]
 
             async def hset(self, *a, **k):
                 return None
+
         return _C()
 
 
@@ -69,8 +72,12 @@ class FakeKraken:
 
 def _signal(**kw):
     base = dict(
-        symbol="SOL", direction=Direction.LONG, entry_price=150.0,
-        stop_loss=142.0, take_profit=165.0, confidence=0.8,
+        symbol="SOL",
+        direction=Direction.LONG,
+        entry_price=150.0,
+        stop_loss=142.0,
+        take_profit=165.0,
+        confidence=0.8,
         position_size_pct=0.04,
     )
     base.update(kw)
@@ -100,17 +107,21 @@ def test_unknown_symbol_is_rejected_not_traded() -> None:
     engine = _engine(cache, producer, kraken)
     asyncio.run(engine.handle(_signal(symbol="NOTACOIN")))
     assert kraken.orders == []
-    (_, ev), = producer.published
+    ((_, ev),) = producer.published
     assert ev.kind == ExecutionKind.REJECTED
     assert ev.reason == "unknown_symbol"
 
 
 def test_kill_switch_rejects() -> None:
-    cache, producer, kraken = FakeCache(values={"trading:runtime": {"trading_enabled": False}}), FakeProducer(), FakeKraken()
+    cache, producer, kraken = (
+        FakeCache(values={"trading:runtime": {"trading_enabled": False}}),
+        FakeProducer(),
+        FakeKraken(),
+    )
     engine = _engine(cache, producer, kraken)
     asyncio.run(engine.handle(_signal()))
     assert kraken.orders == []
-    (_, ev), = producer.published
+    ((_, ev),) = producer.published
     assert ev.kind == ExecutionKind.REJECTED
     assert ev.reason == "kill_switch"
 

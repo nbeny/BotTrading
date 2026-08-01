@@ -45,9 +45,14 @@ async def test_fake_upsert_aggregate_creates_bucket() -> None:
     repo = FakeContentRepository()
     ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
     await repo.upsert_aggregate(
-        symbol="BTC", kind="social", bucket_start=ts,
-        mentions=1, score_sum=0.5, confidence_sum=0.8,
-        weighted_score_sum=0.4, engagement_sum=2.0,
+        symbol="BTC",
+        kind="social",
+        bucket_start=ts,
+        mentions=1,
+        score_sum=0.5,
+        confidence_sum=0.8,
+        weighted_score_sum=0.4,
+        engagement_sum=2.0,
     )
     agg = repo.aggregates[("BTC", "social", ts)]
     assert agg["mentions"] == 1
@@ -60,16 +65,24 @@ async def test_fake_upsert_aggregate_is_additive() -> None:
     ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
     kw = dict(symbol="BTC", kind="social", bucket_start=ts)
     await repo.upsert_aggregate(
-        **kw, mentions=1, score_sum=0.5, confidence_sum=0.8,
-        weighted_score_sum=0.4, engagement_sum=2.0,
+        **kw,
+        mentions=1,
+        score_sum=0.5,
+        confidence_sum=0.8,
+        weighted_score_sum=0.4,
+        engagement_sum=2.0,
     )
     await repo.upsert_aggregate(
-        **kw, mentions=2, score_sum=1.8, confidence_sum=1.5,
-        weighted_score_sum=1.6, engagement_sum=5.0,
+        **kw,
+        mentions=2,
+        score_sum=1.8,
+        confidence_sum=1.5,
+        weighted_score_sum=1.6,
+        engagement_sum=5.0,
     )
     agg = repo.aggregates[("BTC", "social", ts)]
-    assert agg["mentions"] == 3          # 1 + 2
-    assert agg["score_sum"] == 2.3       # 0.5 + 1.8
+    assert agg["mentions"] == 3  # 1 + 2
+    assert agg["score_sum"] == 2.3  # 0.5 + 1.8
     assert agg["confidence_sum"] == 2.3  # 0.8 + 1.5
     assert agg["weighted_score_sum"] == 2.0  # 0.4 + 1.6
     assert agg["engagement_sum"] == 7.0  # 2.0 + 5.0
@@ -82,15 +95,25 @@ async def test_fake_compaction_rolls_hourly_into_daily() -> None:
     day = datetime(2024, 1, 1, tzinfo=timezone.utc)
     for h in (3, 9):  # two hourly buckets, same day + (symbol, kind)
         await repo.upsert_aggregate(
-            symbol="BTC", kind="social", bucket_start=day + timedelta(hours=h),
-            mentions=1, score_sum=0.5, confidence_sum=0.8,
-            weighted_score_sum=0.4, engagement_sum=2.0,
+            symbol="BTC",
+            kind="social",
+            bucket_start=day + timedelta(hours=h),
+            mentions=1,
+            score_sum=0.5,
+            confidence_sum=0.8,
+            weighted_score_sum=0.4,
+            engagement_sum=2.0,
         )
     recent = datetime(2024, 6, 1, tzinfo=timezone.utc)  # must NOT be compacted
     await repo.upsert_aggregate(
-        symbol="BTC", kind="social", bucket_start=recent,
-        mentions=1, score_sum=0.1, confidence_sum=0.2,
-        weighted_score_sum=0.02, engagement_sum=1.0,
+        symbol="BTC",
+        kind="social",
+        bucket_start=recent,
+        mentions=1,
+        score_sum=0.1,
+        confidence_sum=0.2,
+        weighted_score_sum=0.02,
+        engagement_sum=1.0,
     )
     cutoff = datetime(2024, 5, 1, tzinfo=timezone.utc)
 

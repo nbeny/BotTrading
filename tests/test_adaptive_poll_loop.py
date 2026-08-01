@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from cmi_common.sources import (
-    AdaptivePollLoop, FakeContentRepository, RateLimitedError, RawItem,
+    AdaptivePollLoop,
+    FakeContentRepository,
+    RateLimitedError,
+    RawItem,
 )
 
 
@@ -59,10 +62,18 @@ async def _run(loop: AdaptivePollLoop) -> None:
 
 async def test_polls_and_persists_then_sleeps_interval() -> None:
     repo = FakeContentRepository()
-    provider = StubProvider(items=[RawItem(source="stub", kind="social", external_id="1")])
+    provider = StubProvider(
+        items=[RawItem(source="stub", kind="social", external_id="1")]
+    )
     sleeps = Sleeps(stop_after=1)
-    loop = AdaptivePollLoop(provider, repo, FakeCache(), poll_interval=300,
-                            service="collector-social", sleep=sleeps)
+    loop = AdaptivePollLoop(
+        provider,
+        repo,
+        FakeCache(),
+        poll_interval=300,
+        service="collector-social",
+        sleep=sleeps,
+    )
     await _run(loop)
     assert provider.calls == 1
     assert len(repo.rows) == 1
@@ -73,22 +84,36 @@ async def test_rate_limited_sleeps_retry_after_and_resumes_same_provider() -> No
     repo = FakeContentRepository()
     provider = StubProvider(raises=RateLimitedError(45.0))
     sleeps = Sleeps(stop_after=1)
-    loop = AdaptivePollLoop(provider, repo, FakeCache(), poll_interval=300,
-                            service="collector-social", sleep=sleeps)
+    loop = AdaptivePollLoop(
+        provider,
+        repo,
+        FakeCache(),
+        poll_interval=300,
+        service="collector-social",
+        sleep=sleeps,
+    )
     await _run(loop)
-    assert sleeps.calls == [45.0]     # waited the API-provided reset, not the interval
-    assert provider.calls == 1        # same provider — no failover to anything else
+    assert sleeps.calls == [45.0]  # waited the API-provided reset, not the interval
+    assert provider.calls == 1  # same provider — no failover to anything else
 
 
 async def test_quota_guard_blocks_poll_and_waits_window() -> None:
     repo = FakeContentRepository()
-    provider = StubProvider(items=[RawItem(source="stub", kind="social", external_id="1")])
+    provider = StubProvider(
+        items=[RawItem(source="stub", kind="social", external_id="1")]
+    )
     sleeps = Sleeps(stop_after=1)
-    loop = AdaptivePollLoop(provider, repo, FakeCache(allow=False), poll_interval=300,
-                            service="collector-social", sleep=sleeps)
+    loop = AdaptivePollLoop(
+        provider,
+        repo,
+        FakeCache(allow=False),
+        poll_interval=300,
+        service="collector-social",
+        sleep=sleeps,
+    )
     await _run(loop)
-    assert provider.calls == 0        # never fetched — proactive budget spent
-    assert sleeps.calls == [60]       # waited the rate-limit window
+    assert provider.calls == 0  # never fetched — proactive budget spent
+    assert sleeps.calls == [60]  # waited the rate-limit window
 
 
 class RaisingRepo:
@@ -101,13 +126,22 @@ class RaisingRepo:
 async def test_persist_error_backs_off_and_does_not_kill_loop() -> None:
     # A DB failure during persist must not silently kill the source's loop —
     # it backs off like any other error and the loop lives to poll again.
-    provider = StubProvider(items=[RawItem(source="stub", kind="social", external_id="1")])
+    provider = StubProvider(
+        items=[RawItem(source="stub", kind="social", external_id="1")]
+    )
     sleeps = Sleeps(stop_after=1)
-    loop = AdaptivePollLoop(provider, RaisingRepo(), FakeCache(), poll_interval=300,
-                            service="collector-social", error_backoff=120, sleep=sleeps)
+    loop = AdaptivePollLoop(
+        provider,
+        RaisingRepo(),
+        FakeCache(),
+        poll_interval=300,
+        service="collector-social",
+        error_backoff=120,
+        sleep=sleeps,
+    )
     await _run(loop)
-    assert provider.calls == 1        # it did poll
-    assert sleeps.calls == [120]      # backed off on the persist failure, loop survived
+    assert provider.calls == 1  # it did poll
+    assert sleeps.calls == [120]  # backed off on the persist failure, loop survived
 
 
 class DroppingNormalizer:
@@ -127,12 +161,18 @@ async def test_normalizer_runs_between_fetch_and_persist() -> None:
     provider = StubProvider(items=[item])
     normalizer = DroppingNormalizer()
     sleeps = Sleeps(stop_after=1)
-    loop = AdaptivePollLoop(provider, repo, FakeCache(), poll_interval=300,
-                            service="collector-social", sleep=sleeps,
-                            normalizer=normalizer)
+    loop = AdaptivePollLoop(
+        provider,
+        repo,
+        FakeCache(),
+        poll_interval=300,
+        service="collector-social",
+        sleep=sleeps,
+        normalizer=normalizer,
+    )
     await _run(loop)
-    assert normalizer.seen == [item]   # it saw the fetched item
-    assert repo.rows == []             # and its rejection reached the repository
+    assert normalizer.seen == [item]  # it saw the fetched item
+    assert repo.rows == []  # and its rejection reached the repository
 
 
 async def test_loop_without_a_normalizer_persists_unchanged() -> None:
@@ -142,8 +182,14 @@ async def test_loop_without_a_normalizer_persists_unchanged() -> None:
         items=[RawItem(source="stub", kind="social", external_id="1")]
     )
     sleeps = Sleeps(stop_after=1)
-    loop = AdaptivePollLoop(provider, repo, FakeCache(), poll_interval=300,
-                            service="collector-social", sleep=sleeps)
+    loop = AdaptivePollLoop(
+        provider,
+        repo,
+        FakeCache(),
+        poll_interval=300,
+        service="collector-social",
+        sleep=sleeps,
+    )
     await _run(loop)
     assert len(repo.rows) == 1
 
@@ -163,10 +209,17 @@ async def test_normalizer_error_backs_off_and_does_not_persist() -> None:
         items=[RawItem(source="stub", kind="social", external_id="1")]
     )
     sleeps = Sleeps(stop_after=1)
-    loop = AdaptivePollLoop(provider, repo, FakeCache(), poll_interval=300,
-                            service="collector-social", error_backoff=120, sleep=sleeps,
-                            normalizer=RaisingNormalizer())
+    loop = AdaptivePollLoop(
+        provider,
+        repo,
+        FakeCache(),
+        poll_interval=300,
+        service="collector-social",
+        error_backoff=120,
+        sleep=sleeps,
+        normalizer=RaisingNormalizer(),
+    )
     await _run(loop)
-    assert provider.calls == 1        # it did poll
-    assert repo.rows == []            # nothing reached the repository
-    assert sleeps.calls == [120]      # backed off, loop survived
+    assert provider.calls == 1  # it did poll
+    assert repo.rows == []  # nothing reached the repository
+    assert sleeps.calls == [120]  # backed off, loop survived

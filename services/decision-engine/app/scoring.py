@@ -158,6 +158,13 @@ def _norm_liquidity(liq: float | None) -> float | None:
 #: Note the median lands at 0.378, below neutral: positive funding is the
 #: normal state of crypto perps, so the typical symbol reads mildly crowded.
 #: That is a property of the market, not a bias to calibrate away.
+#: Below this share of model weight, no score is emitted at all. Set just above
+#: the heaviest single axis (volume_growth, 0.1875) so one axis can never speak
+#: for seven, and just below the lightest legitimate pair (fundamentals +
+#: liquidity, 0.2125). Renormalisation exists so absent data stops dragging a
+#: score down; without this floor it also lets a sliver of data manufacture
+#: certainty.
+_MIN_PRESENT_WEIGHT = 0.20
 _FUNDING_SCALE = 0.0001
 #: An unlock of this share of supply is treated as maximally severe.
 _UNLOCK_FULL_SEVERITY_PCT = 5.0
@@ -217,9 +224,17 @@ def _norm_fundamentals(
     """
     unlock_term: float | None = None
     if has_schedule:
-        if unlock_pct is None or unlock_days is None:
+        if unlock_pct is None and unlock_days is None:
             # Schedule read, nothing pending: a measurement, and a good one.
             unlock_term = 1.0
+        elif unlock_pct is None or unlock_days is None:
+            # Half a reading is not a reading. An unlock we can size but not
+            # date, or date but not size, must leave the term absent — the
+            # earlier version landed both on 1.0, so a known 40% unlock whose
+            # date failed to parse scored the axis at its *maximum* and pulled
+            # the whole score up. That is the same conflation as a fabricated
+            # zero, with the sign flipped: fabricated safety.
+            unlock_term = None
         else:
             severity = max(0.0, min(1.0, unlock_pct / _UNLOCK_FULL_SEVERITY_PCT))
             proximity = max(0.0, min(1.0, 1.0 - unlock_days / _UNLOCK_HORIZON_DAYS))
@@ -262,9 +277,13 @@ def score(features: Features) -> ScoreResult:
     # was a second, hand-maintained copy of the same rule.
     breakdown = {k: v for k, v in sub.items() if v is not None}
     present_weight = sum(WEIGHTS[k] for k in breakdown)
-    if present_weight <= 0:
-        # No evidence at all. A confidence of 0 is what says so; a score would
-        # only invent a number to sit beside it.
+    if present_weight < _MIN_PRESENT_WEIGHT:
+        # Too little evidence to renormalise honestly. Dividing by a sliver of
+        # weight manufactures certainty: before this gate, a lone
+        # has_unlock_schedule=True — "DefiLlama tracks this token and nothing
+        # is due" — scored a perfect 100 on 0.10 of the model, and funding
+        # alone scored 99. Renormalisation is meant to stop absent data
+        # dragging a score down, not to let one axis speak for seven.
         return ScoreResult(0, 0.0, {})
     weighted = sum(breakdown[k] * WEIGHTS[k] for k in breakdown)
     opportunity = round(100 * weighted / present_weight)

@@ -99,7 +99,11 @@ async def test_a_zero_oi_baseline_yields_no_change_rather_than_a_division() -> N
             200,
             json=[
                 {"sumOpenInterest": "0", "sumOpenInterestValue": "0", "timestamp": 1},
-                {"sumOpenInterest": "50", "sumOpenInterestValue": "500", "timestamp": 2},
+                {
+                    "sumOpenInterest": "50",
+                    "sumOpenInterestValue": "500",
+                    "timestamp": 2,
+                },
             ],
         )
 

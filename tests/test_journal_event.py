@@ -48,8 +48,12 @@ def test_dedup_fields_default_to_null() -> None:
 
 def test_sonnet_verdict_round_trips_through_json() -> None:
     ev = _minimal(
-        escalated=True, sonnet_called=True, sonnet_validated=True,
-        sonnet_score=61, sonnet_confidence=0.52, sonnet_direction="long",
+        escalated=True,
+        sonnet_called=True,
+        sonnet_validated=True,
+        sonnet_score=61,
+        sonnet_confidence=0.52,
+        sonnet_direction="long",
     )
     restored = JournalEntryEvent.model_validate(ev.model_dump(mode="json"))
     assert restored.sonnet_validated is True

@@ -69,6 +69,7 @@ def test_an_axis_explicitly_null_is_treated_as_absent() -> None:
 def test_a_measured_zero_is_kept() -> None:
     score = dossier.build_score(_decision(breakdown={"volume_growth": 0.0}))
     assert score["axes"] == {"volume_growth": 0.0}
+    assert score["insufficient_evidence"] is False
 
 
 def test_the_haiku_four_factor_keys_are_not_mistaken_for_axes() -> None:
@@ -92,6 +93,26 @@ def test_an_empty_breakdown_is_insufficient_evidence_not_a_zero_score() -> None:
     assert score["value"] is None
     assert score["confidence"] is None
     assert score["computed_at"] is not None
+
+
+def test_every_missing_link_in_the_payload_chain_degrades_to_insufficient() -> None:
+    """`payload` est une colonne JSONB dont le défaut est `{}`, et rien ne
+    garantit qu'un producteur y ait mis `meta.breakdown`. Chaque maillon absent
+    doit retomber sur « preuves insuffisantes » sans lever — un `AttributeError`
+    ici ferait échouer le dossier entier d'un token pour un champ décoratif.
+    """
+    for payload in (
+        None,
+        {},
+        {"meta": None},
+        {"meta": {}},
+        {"meta": {"breakdown": None}},
+    ):
+        score = dossier.build_score(_decision(payload=payload))
+        assert score["axes"] == {}, payload
+        assert score["insufficient_evidence"] is True, payload
+        assert score["value"] is None, payload
+        assert score["confidence"] is None, payload
 
 
 def test_no_decision_reports_unknown_not_zero() -> None:

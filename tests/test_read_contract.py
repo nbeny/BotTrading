@@ -305,6 +305,59 @@ async def test_events_contract() -> None:
     _assert_keys("events", resp)
 
 
+def _scored_decision(**kw):
+    base = dict(
+        symbol="SOL",
+        created_at=NOW,
+        opportunity_score=84,
+        confidence=0.62,
+        payload={"meta": {"breakdown": {"volume_growth": 0.8, "positioning": 0.9}}},
+    )
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def _journal_row(**kw):
+    base = dict(
+        symbol="SOL",
+        time=NOW,
+        escalated=True,
+        sonnet_called=True,
+        sonnet_validated=False,
+        skip_reason=None,
+        decision_event_id=None,
+        risk_verdict=None,
+        risk_reason=None,
+        execution_event_id=None,
+    )
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_dossier_score_contract() -> None:
+    _assert_exact_keys("market/dossier.score", read_api.build_score(_scored_decision()))
+
+
+def test_dossier_pipeline_contract() -> None:
+    _assert_exact_keys(
+        "market/dossier.pipeline", read_api.build_pipeline(_journal_row(), None)
+    )
+
+
+async def test_dossier_contract() -> None:
+    resp = await read_api.market_token_dossier(symbol="SOL", session=_FakeSession(8))
+    _assert_keys("market/dossier", resp)
+
+
+def test_an_absent_axis_never_reaches_the_wire_as_zero() -> None:
+    """Garde-fou de bout en bout : le contrat autorise n'importe quel contenu
+    dans `axes`, donc seule cette assertion empêche un axe non mesuré de partir
+    à 0.0 vers le navigateur."""
+    score = read_api.build_score(_scored_decision())
+    assert set(score["axes"]) == {"volume_growth", "positioning"}
+    assert "fundamentals" not in score["axes"]
+
+
 # ── manifest coverage ─────────────────────────────────────────────────────────
 # Defined last on purpose: pytest runs a module's tests in definition order, so
 # every _assert_keys call above has already registered by the time this runs.

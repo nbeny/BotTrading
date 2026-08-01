@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 
 from cmi_common.events import AnalysisEvent, BaseEvent, SentimentEvent
 from cmi_common.events.base import Source
@@ -50,6 +51,30 @@ def _liquidity(raw: dict) -> float | None:
         return float(liq)
     proxy = raw.get("volume_24h_usd")
     return float(proxy) if proxy else None
+
+
+def _unlock_days(raw: dict) -> float | None:
+    """Days until the next unlock, from the absolute date the store carries.
+
+    Stored absolute and converted at read time: a stored "days remaining" would
+    silently age between the collector's poll and the decision that reads it.
+    """
+    value = raw.get("next_unlock_at")
+    if not value:
+        return None
+    try:
+        at = datetime.fromisoformat(str(value))
+    except ValueError:
+        # One unparseable field must not kill the consumer loop. The schedule
+        # flag still stands, so the axis degrades to "nothing pending" rather
+        # than to a fabricated urgency.
+        logger.warning("unparseable next_unlock_at: %r", value)
+        return None
+    if at.tzinfo is None:
+        # Nothing writes a naive timestamp today, but subtracting one from an
+        # aware now() raises TypeError, which would take the consumer down.
+        at = at.replace(tzinfo=UTC)
+    return max(0.0, (at - datetime.now(tz=UTC)).total_seconds() / 86400.0)
 
 
 class DecisionEngine:
@@ -106,6 +131,14 @@ class DecisionEngine:
             social_growth=event.social_growth,
             news_impact=1.0 if raw.get("has_news") else None,
             market_sentiment=self._market_sentiment(),
+            funding_rate_8h=raw.get("funding_rate_8h"),
+            long_short_account_ratio=raw.get("long_short_account_ratio"),
+            open_interest_change_pct_24h=raw.get("open_interest_change_pct_24h"),
+            tvl_change_pct_7d=raw.get("tvl_change_pct_7d"),
+            fees_change_pct_7d=raw.get("fees_change_pct_7d"),
+            next_unlock_pct_supply=raw.get("next_unlock_pct_supply"),
+            next_unlock_days=_unlock_days(raw),
+            has_unlock_schedule=bool(raw.get("has_unlock_schedule")),
         )
         result = score(features)
         if result.opportunity_score < self._threshold:

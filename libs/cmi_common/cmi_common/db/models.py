@@ -281,6 +281,16 @@ class RawContent(Base):
         # The existing ix_raw_content_unscored is partial (WHERE scored_at IS
         # NULL) and cannot serve a `scored_at >= W` range scan.
         Index("ix_raw_content_scored_at", "scored_at"),
+        # GIN index for `symbols @> '[...]'` containment (data_content,
+        # market_token_dossier). jsonb_path_ops over the default jsonb_ops:
+        # both call sites only use `@>`, and jsonb_path_ops is smaller/faster
+        # for that operator.
+        Index(
+            "ix_raw_content_symbols_gin",
+            "symbols",
+            postgresql_using="gin",
+            postgresql_ops={"symbols": "jsonb_path_ops"},
+        ),
     )
 
 

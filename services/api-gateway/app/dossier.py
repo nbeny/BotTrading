@@ -40,7 +40,7 @@ def _iso(v: Any) -> str | None:
     return str(v)
 
 
-def build_score(decision: Any | None) -> dict:
+def build_score(decision: Any | None) -> dict[str, Any]:
     """Décomposition par axe du dernier score connu pour un symbole.
 
     La source est ``Decision.payload["meta"]["breakdown"]`` : ``engine.py`` y
@@ -85,6 +85,28 @@ def build_score(decision: Any | None) -> dict:
     }
 
 
+#: `PipelineRejection.stage` porte la *source* de l'événement
+#: (`persister.py::_STAGE_BY_SOURCE`), pas l'id d'étage. Le reste de la
+#: plateforme — dont le graphe du Command Center — parle le vocabulaire de
+#: `systems_pipeline.py::STAGE_SPECS`, et c'est celui que le frontend sait
+#: libeller. Sans cette table, un rejet du decision-engine s'afficherait
+#: « decision_engine » en brut dans le drawer.
+_STAGE_BY_REJECTION_SOURCE = {
+    "decision_engine": "decision",
+    "risk_engine": "risk",
+}
+
+
+def _normalise_stage(stage: str) -> str:
+    """Vocabulaire de rejet -> id d'étage.
+
+    Une source non mappée passe telle quelle, pour la raison exacte que
+    `stage_for` invoque déjà : un rejeteur inattendu doit rester visible plutôt
+    que d'être silencieusement renommé ou masqué.
+    """
+    return _STAGE_BY_REJECTION_SOURCE.get(stage, stage)
+
+
 def _verdict(j: Any) -> tuple[str, str | None, str | None]:
     """``(reached_stage, blocked_at, block_reason)`` pour une ligne de journal.
 
@@ -123,17 +145,23 @@ def build_pipeline(journal: Any | None, rejection: Any | None) -> dict[str, Any]
                 "reached_stage": None,
                 "blocked_at": None,
                 "block_reason": None,
-                "escalated": False,
-                "sonnet_called": False,
+                "escalated": None,
+                "sonnet_called": None,
                 "sonnet_validated": None,
                 "last_event_at": None,
             }
+        stage = _normalise_stage(rejection.stage)
         return {
-            "reached_stage": rejection.stage,
-            "blocked_at": rejection.stage,
+            "reached_stage": stage,
+            "blocked_at": stage,
             "block_reason": rejection.reason,
-            "escalated": False,
-            "sonnet_called": False,
+            # `None`, pas `False` : sans ligne de journal on ignore si Haiku
+            # avait escaladé. Le decision-engine consomme les analyses en
+            # parallèle de Sonnet, donc un rejet déterministe ne dit rien du
+            # chemin d'escalade. Répondre `False` serait une supposition
+            # déguisée en mesure.
+            "escalated": None,
+            "sonnet_called": None,
             "sonnet_validated": None,
             "last_event_at": _iso(rejection.time),
         }

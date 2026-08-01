@@ -149,7 +149,14 @@ def _journal(**kw):
 
 
 def _rejection(**kw):
-    base = {"symbol": "SOL", "time": NOW, "stage": "risk", "reason": "max_exposure"}
+    """`stage` porte la SOURCE de l'événement (`decision_engine`/`risk_engine`),
+    jamais un id d'étage : c'est ce que `persister.stage_for` écrit réellement."""
+    base = {
+        "symbol": "SOL",
+        "time": NOW,
+        "stage": "risk_engine",
+        "reason": "max_exposure",
+    }
     base.update(kw)
     return SimpleNamespace(**base)
 
@@ -174,16 +181,43 @@ def test_risk_approval_is_not_a_block() -> None:
     v = dossier.build_pipeline(_journal(risk_verdict="approved"), None)
     assert v["reached_stage"] == "risk"
     assert v["blocked_at"] is None
+    assert v["block_reason"] is None
 
 
 def test_triage_refusal_is_a_block_at_triage() -> None:
+    """`skip_reason` reste `None` sur un refus de triage réel — ai-worker-sonnet
+    ne le renseigne que sur la branche escaladée. C'est donc le repli
+    `not_escalated` qui s'observe en production, et lui qu'il faut couvrir."""
+    v = dossier.build_pipeline(
+        _journal(escalated=False, sonnet_called=False, skip_reason=None), None
+    )
+    assert v["reached_stage"] == "triage"
+    assert v["blocked_at"] == "triage"
+    assert v["block_reason"] == "not_escalated"
+
+
+def test_an_explicit_skip_reason_wins_over_the_fallback() -> None:
     v = dossier.build_pipeline(
         _journal(escalated=False, sonnet_called=False, skip_reason="score_too_low"),
         None,
     )
-    assert v["reached_stage"] == "triage"
-    assert v["blocked_at"] == "triage"
     assert v["block_reason"] == "score_too_low"
+
+
+def test_a_published_decision_awaiting_risk_reports_the_decision_stage() -> None:
+    v = dossier.build_pipeline(_journal(decision_event_id="d1"), None)
+    assert v["reached_stage"] == "decision"
+    assert v["blocked_at"] is None
+
+
+def test_escalated_without_a_sonnet_call_stops_at_triage_without_a_block() -> None:
+    """Le cas `cooldown_or_budget` : Haiku a escaladé, Sonnet n'a pas été
+    appelé. Rien n'a refusé le signal — il a été mis de côté, ce qui n'est pas
+    la même chose et ne doit pas s'afficher comme un blocage."""
+    v = dossier.build_pipeline(_journal(escalated=True, sonnet_called=False), None)
+    assert v["reached_stage"] == "triage"
+    assert v["blocked_at"] is None
+    assert v["block_reason"] is None
 
 
 def test_escalated_but_undecided_claims_no_block() -> None:
@@ -197,9 +231,26 @@ def test_escalated_but_undecided_claims_no_block() -> None:
 
 def test_rejection_without_journal_is_the_fallback() -> None:
     v = dossier.build_pipeline(None, _rejection())
-    assert v["reached_stage"] == "risk"
+    assert v["reached_stage"] == "risk", "risk_engine doit être normalisé en risk"
     assert v["blocked_at"] == "risk"
     assert v["block_reason"] == "max_exposure"
+    assert v["escalated"] is None, (
+        "sans ligne de journal on ignore si Haiku avait escaladé : `False` "
+        "serait une supposition déguisée en mesure"
+    )
+    assert v["sonnet_called"] is None
+
+
+def test_a_decision_engine_rejection_is_normalised_too() -> None:
+    v = dossier.build_pipeline(None, _rejection(stage="decision_engine"))
+    assert v["reached_stage"] == "decision"
+
+
+def test_an_unmapped_rejector_stays_visible_under_its_own_name() -> None:
+    """`stage_for` laisse passer une source inconnue plutôt que de la masquer ;
+    la normalisation doit avoir le même réflexe."""
+    v = dossier.build_pipeline(None, _rejection(stage="some_new_service"))
+    assert v["reached_stage"] == "some_new_service"
 
 
 def test_nothing_known_reports_nulls() -> None:
@@ -208,8 +259,8 @@ def test_nothing_known_reports_nulls() -> None:
         "reached_stage": None,
         "blocked_at": None,
         "block_reason": None,
-        "escalated": False,
-        "sonnet_called": False,
+        "escalated": None,
+        "sonnet_called": None,
         "sonnet_validated": None,
         "last_event_at": None,
     }

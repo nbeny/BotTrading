@@ -1,9 +1,9 @@
 'use client';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Box, Stack, Typography } from '@mui/material';
 import { PageHeader } from '@/components/common';
-import { portfolioApi, tradingApi, riskApi, systemsApi } from '@/lib/api/endpoints';
+import { portfolioApi, tradingApi, riskApi, systemsApi, marketApi } from '@/lib/api/endpoints';
 import { useEventSubscription } from '@/lib/ws/WebSocketProvider';
 import { KpiTicker } from '@/components/command/KpiTicker';
 import { PipelineFlow } from '@/components/systems/PipelineFlow';
@@ -17,7 +17,13 @@ import { LivePnlPanel } from '@/components/command/LivePnlPanel';
 import { MarketHeatPanel } from '@/components/command/MarketHeatPanel';
 import { GuardrailPanel } from '@/components/command/GuardrailPanel';
 import { HealthRail } from '@/components/command/HealthRail';
+import { SignalsTable } from '@/components/dashboard/SignalsTable';
 import type { SystemsWindow } from '@/lib/types/systems';
+
+/** Signals card caps its height and scrolls internally — the same fix the
+ *  `/market` rebuild needed: an unbounded table here would push HealthRail
+ *  and everything below it out of view. */
+const SIGNALS_HEIGHT = 420;
 
 function useEventsPerMin() {
   const timestamps = useRef<number[]>([]);
@@ -37,6 +43,11 @@ export default function CommandCenterPage() {
   // the DOM global inside a client component.
   const [range, setRange] = useState<SystemsWindow>('24h');
   const [stageId, setStageId] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
   const portfolio = useQuery({ queryKey: ['portfolio'], queryFn: portfolioApi.get, refetchInterval: 6000 });
   const status = useQuery({ queryKey: ['trading', 'status'], queryFn: tradingApi.status, refetchInterval: 10000 });
   const exposure = useQuery({ queryKey: ['risk', 'exposure'], queryFn: riskApi.exposure, refetchInterval: 8000 });
@@ -46,6 +57,13 @@ export default function CommandCenterPage() {
     // Matches the server-side aggregate cache, so a poll lands on fresh counts
     // rather than re-reading the same cached snapshot the previous one saw.
     refetchInterval: 5000,
+  });
+  // Same cadence as `marketApi.decisions` on /market: comparable event mix
+  // (Haiku/Sonnet triage + decisions), same "live-ish, not real-time" cost.
+  const signals = useQuery({
+    queryKey: ['market', 'signals'],
+    queryFn: () => marketApi.signals(30),
+    refetchInterval: 30_000,
   });
 
   return (
@@ -79,6 +97,19 @@ export default function CommandCenterPage() {
       <Box sx={{ mt: 2, display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' } }}>
         <LivePnlPanel />
         <MarketHeatPanel />
+      </Box>
+      <Box sx={{ mt: 2, maxHeight: SIGNALS_HEIGHT, overflowY: 'auto' }}>
+        {/* Opportunities are left unfetched here: they're already owned and
+            actionable on /trading (OpportunitiesSection). Passing `undefined`
+            is a state the component supports (its Opportunities sub-section
+            just doesn't render), not an invented value. */}
+        <SignalsTable
+          signals={signals.data}
+          opportunities={undefined}
+          isLoadingSignals={signals.isLoading}
+          isLoadingOpportunities={false}
+          now={now}
+        />
       </Box>
       <Box sx={{ mt: 2 }}><HealthRail /></Box>
       <DecisionTraceDrawer correlationId={traceCid} onClose={() => setTraceCid(null)} />

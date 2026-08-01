@@ -21,7 +21,7 @@ HORIZON_DAYS = 30
 
 @dataclass(frozen=True, slots=True)
 class Unlock:
-    at: datetime       # earliest contributing event in the window
+    at: datetime  # earliest contributing event in the window
     pct_supply: float  # percentage points of max supply, summed over the window
 
 

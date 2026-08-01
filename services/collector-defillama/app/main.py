@@ -19,7 +19,10 @@ from .application.collector import DefiLlamaCollector
 from .infrastructure.llama_client import LlamaClient
 
 POLL_INTERVAL = float(os.getenv("DEFILLAMA_POLL_INTERVAL", "600"))
-MAX_UNLOCK_FETCHES = int(os.getenv("DEFILLAMA_MAX_UNLOCK_FETCHES", "3"))
+#: Floored at 1: zero would disable unlock reading entirely *and* freeze the
+#: cursor at (c + 0) % n, so the backlog of uncached protocols would never
+#: rotate — a misconfiguration that degrades silently rather than failing.
+MAX_UNLOCK_FETCHES = max(1, int(os.getenv("DEFILLAMA_MAX_UNLOCK_FETCHES", "3")))
 #: The coin_id -> symbol map changes at the pace of new listings, not of polls.
 TOKEN_CACHE_TTL = 900.0
 

@@ -52,6 +52,11 @@ class FakeClient:
     async def emission_slugs(self) -> set[str]:
         return self._slugs
 
+    async def cached_unlock(self, coin_id: str):
+        # Nothing cached by default, so the existing tests keep exercising the
+        # fetch path and its budget.
+        return False, None
+
     async def unlock(self, slug: str, coin_id: str):
         self.unlock_calls.append(slug)
         return None
@@ -148,3 +153,44 @@ async def test_a_successful_lookup_with_no_pending_unlock_reports_a_schedule() -
     aave = next(e for _, e in producer.published if e.symbol == "AAVE")
     assert aave.has_unlock_schedule is True
     assert aave.next_unlock_at is None
+
+
+async def test_cached_schedules_are_reported_for_every_eligible_token() -> None:
+    # The budget bounds 2.25 MB fetches, not map membership. A token whose
+    # schedule is already in Redis must carry has_unlock_schedule=True on every
+    # cycle -- reporting "untracked" instead drops the dilution axis, and
+    # renormalisation then scores that token *higher* than one we did read.
+    # Measured before the fix on a 40-protocol universe with everything cached:
+    # 3 tokens reported a schedule, 37 reported unknown, every cycle.
+    class CachedClient(FakeClient):
+        async def cached_unlock(self, coin_id: str):
+            return True, None
+
+        async def unlock(self, slug: str, coin_id: str):
+            raise AssertionError("must not fetch what is already cached")
+
+    producer = FakeProducer()
+    await _collector(
+        CachedClient(slugs={"aave", "uniswap"}), producer, max_unlock_fetches=1
+    ).poll_once()
+    assert {e.symbol for _, e in producer.published} == {"AAVE", "UNI"}
+    assert all(e.has_unlock_schedule for _, e in producer.published)
+
+
+async def test_the_fetch_budget_still_bounds_uncached_lookups() -> None:
+    # The other side: a cache miss is what the budget is for.
+    client = FakeClient(slugs={"aave", "uniswap"})
+    await _collector(client, FakeProducer(), max_unlock_fetches=1).poll_once()
+    assert len(client.unlock_calls) == 1
+
+
+async def test_an_empty_token_universe_is_reported_rather_than_run_silently() -> None:
+    # Otherwise a cold start or a persister outage looks byte-identical to
+    # "no DefiLlama protocol is in our universe", after paying for the 3.7 MB
+    # fees payload.
+    producer = FakeProducer()
+    collector = collector_mod.DefiLlamaCollector(
+        FakeClient(), producer, known_tokens=lambda: {}
+    )
+    assert await collector.poll_once() == 0
+    assert producer.published == []

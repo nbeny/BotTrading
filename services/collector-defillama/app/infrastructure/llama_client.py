@@ -121,6 +121,25 @@ class LlamaClient:
         """The protocol slugs that have a published unlock schedule (~4 KB)."""
         return set(await self._get(f"{DATASETS_BASE}/emissionsProtocolsList"))
 
+    async def cached_unlock(self, coin_id: str) -> tuple[bool, Unlock | None]:
+        """The cached reading for a coin id, without ever fetching.
+
+        Returns ``(False, None)`` on a miss, which the caller must keep distinct
+        from ``(True, None)`` — "read, and nothing is scheduled". Collapsing
+        those is what makes a token with a live schedule report as untracked,
+        and an untracked token scores *better* than a measured one because
+        renormalisation drops an absent axis rather than penalising it.
+
+        This exists so the caller can report every token it already knows about
+        on every cycle, and spend its fetch budget only on the misses. The
+        budget bounds 2.25 MB downloads; it has no business bounding Redis
+        reads.
+        """
+        cached = await self._cache.get_json(UNLOCK_KEY.format(coin_id=coin_id))
+        if cached is None:
+            return False, None
+        return self._from_cache(cached)
+
     async def unlock(self, slug: str, coin_id: str) -> Unlock | None:
         """The pending unlock for a protocol, cached for a day.
 

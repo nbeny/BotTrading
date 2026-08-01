@@ -2,31 +2,42 @@
 
 Both are derived from data on every cycle, never hard-coded: a token that starts
 being talked about joins the majors set on its own, and one that goes quiet
-leaves it. The pure selection functions are unit-tested; the two SQL helpers
-supply their inputs.
+leaves it. The SQL helpers and the mention floor now live in
+`cmi_common.db.universe` and are re-exported here so this module stays the
+single import site for Kraken's sweep.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cmi_common.db.models import ContentSentimentAgg, Price, Token
+from cmi_common.db.models import Token
+from cmi_common.db.universe import (
+    DEFAULT_MIN_MENTIONS,
+    majors,
+    mention_counts,
+    priced_symbols,
+)
 
 from ..domain.pairs import VenuePairSpec
 
-#: Knee of the observed mention distribution (measured 2026-07-29: 11 symbols
-#: clear 10 over 7 days, the next tier sits in single digits). See the spec.
-DEFAULT_MIN_MENTIONS = 10
+__all__ = [
+    "DEFAULT_MIN_MENTIONS",
+    "ambiguous_symbols",
+    "intersect",
+    "majors",
+    "mention_counts",
+    "priced_symbols",
+    "split_regimes",
+    "token_symbol_ranks",
+    "untradable",
+]
 
 
-def intersect(
-    specs: list[VenuePairSpec], priced_symbols: set[str]
-) -> list[VenuePairSpec]:
+def intersect(specs: list[VenuePairSpec], priced: set[str]) -> list[VenuePairSpec]:
     """Kraken-tradable pairs we also have prices for."""
-    return [s for s in specs if s.symbol in priced_symbols]
+    return [s for s in specs if s.symbol in priced]
 
 
 def split_regimes(
@@ -36,9 +47,13 @@ def split_regimes(
     min_mentions: int = DEFAULT_MIN_MENTIONS,
 ) -> tuple[list[VenuePairSpec], list[VenuePairSpec]]:
     """(majors, alts) — majors are sentiment-covered enough to fuse on."""
-    majors = [s for s in specs if mentions.get(s.symbol, 0) >= min_mentions]
-    major_symbols = {s.symbol for s in majors}
-    return majors, [s for s in specs if s.symbol not in major_symbols]
+    major_symbols = majors(
+        {s.symbol for s in specs}, mentions, min_mentions=min_mentions
+    )
+    return (
+        [s for s in specs if s.symbol in major_symbols],
+        [s for s in specs if s.symbol not in major_symbols],
+    )
 
 
 def ambiguous_symbols(rows: list[tuple[str, str, int | None]]) -> set[str]:
@@ -56,23 +71,6 @@ def ambiguous_symbols(rows: list[tuple[str, str, int | None]]) -> set[str]:
 def untradable(specs: list[VenuePairSpec], priced: set[str]) -> set[str]:
     """Symbols we price but Kraken does not list — the "cannot trade this" set."""
     return priced - {s.symbol for s in specs}
-
-
-async def priced_symbols(session: AsyncSession, *, hours: int = 24) -> set[str]:
-    since = datetime.now(tz=UTC) - timedelta(hours=hours)
-    stmt = select(Price.symbol).where(Price.time >= since).distinct()
-    return set((await session.execute(stmt)).scalars().all())
-
-
-async def mention_counts(session: AsyncSession, *, days: int = 7) -> dict[str, int]:
-    """Mentions per symbol over the window, both kinds summed."""
-    since = datetime.now(tz=UTC) - timedelta(days=days)
-    stmt = (
-        select(ContentSentimentAgg.symbol, func.sum(ContentSentimentAgg.mentions))
-        .where(ContentSentimentAgg.bucket_start >= since)
-        .group_by(ContentSentimentAgg.symbol)
-    )
-    return {sym: int(total or 0) for sym, total in (await session.execute(stmt)).all()}
 
 
 async def token_symbol_ranks(

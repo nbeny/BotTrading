@@ -23,9 +23,15 @@ def _services(**overrides):
     base = {
         s: {"status": "healthy", "throughput_per_min": 10}
         for s in (
-            "collector-coingecko", "collector-dexscreener", "collector-social",
-            "collector-news", "sentiment-service", "ai-worker-haiku",
-            "ai-worker-sonnet", "decision-engine", "risk-engine",
+            "collector-coingecko",
+            "collector-dexscreener",
+            "collector-social",
+            "collector-news",
+            "sentiment-service",
+            "ai-worker-haiku",
+            "ai-worker-sonnet",
+            "decision-engine",
+            "risk-engine",
             "trading-engine",
         )
     }
@@ -36,7 +42,13 @@ def _services(**overrides):
 def test_stages_are_ordered_and_complete() -> None:
     out = sp.build_pipeline_stages({}, _services())
     assert [s["id"] for s in out] == [
-        "collect", "sentiment", "triage", "senior", "decision", "risk", "execute",
+        "collect",
+        "sentiment",
+        "triage",
+        "senior",
+        "decision",
+        "risk",
+        "execute",
     ]
 
 
@@ -77,10 +89,12 @@ def test_zero_upstream_reports_no_conversion_rather_than_dividing() -> None:
 
 
 def test_collect_status_is_the_worst_of_its_four_collectors() -> None:
-    svc = _services(**{
-        "collector-social": {"status": "down", "throughput_per_min": 0},
-        "collector-news": {"status": "degraded", "throughput_per_min": 2},
-    })
+    svc = _services(
+        **{
+            "collector-social": {"status": "down", "throughput_per_min": 0},
+            "collector-news": {"status": "degraded", "throughput_per_min": 2},
+        }
+    )
     by = {s["id"]: s for s in sp.build_pipeline_stages({}, svc)}
     assert by["collect"]["status"] == "down"
 
@@ -91,43 +105,58 @@ def test_collect_throughput_sums_its_collectors() -> None:
 
 
 def test_throughput_is_none_when_no_collector_has_been_measured() -> None:
-    svc = _services(**{
-        s: {"status": "healthy", "throughput_per_min": None}
-        for s in ("collector-coingecko", "collector-dexscreener",
-                  "collector-social", "collector-news")
-    })
+    svc = _services(
+        **{
+            s: {"status": "healthy", "throughput_per_min": None}
+            for s in (
+                "collector-coingecko",
+                "collector-dexscreener",
+                "collector-social",
+                "collector-news",
+            )
+        }
+    )
     by = {s["id"]: s for s in sp.build_pipeline_stages({}, svc)}
     assert by["collect"]["throughput_per_min"] is None
 
 
 def test_last_item_is_serialised_with_its_summary() -> None:
-    counts = {"triage": sp.StageCounts(volume=3, last_at=NOW, last_summary="SOL · score 72")}
+    counts = {
+        "triage": sp.StageCounts(volume=3, last_at=NOW, last_summary="SOL · score 72")
+    }
     by = {s["id"]: s for s in sp.build_pipeline_stages(counts, _services())}
     assert by["triage"]["last_at"] == NOW.isoformat()
     assert by["triage"]["last_summary"] == "SOL · score 72"
 
 
 def test_signal_summary_names_the_symbol_score_and_outcome() -> None:
-    row = SimpleNamespace(symbol="SOL", opportunity_score=72, escalated=True,
-                          block_reason="unknown")
+    row = SimpleNamespace(
+        symbol="SOL", opportunity_score=72, escalated=True, block_reason="unknown"
+    )
     assert sp.summarize_signal(row) == "SOL · score 72 · escaladé"
 
 
 def test_signal_summary_says_why_a_non_escalated_signal_stopped() -> None:
-    row = SimpleNamespace(symbol="SOL", opportunity_score=13, escalated=False,
-                          block_reason="score_below_threshold")
+    row = SimpleNamespace(
+        symbol="SOL",
+        opportunity_score=13,
+        escalated=False,
+        block_reason="score_below_threshold",
+    )
     assert sp.summarize_signal(row) == "SOL · score 13 · score_below_threshold"
 
 
 def test_execution_summary_carries_status_and_fill() -> None:
-    row = SimpleNamespace(symbol="BTC", direction="long", status="filled",
-                          fill_price=101.5, pnl=12.0)
+    row = SimpleNamespace(
+        symbol="BTC", direction="long", status="filled", fill_price=101.5, pnl=12.0
+    )
     assert sp.summarize_trade(row) == "BTC · long · filled @ 101.5 · PnL 12.0"
 
 
 def test_execution_summary_omits_a_fill_it_does_not_have() -> None:
-    row = SimpleNamespace(symbol="BTC", direction="long", status="submitted",
-                          fill_price=None, pnl=None)
+    row = SimpleNamespace(
+        symbol="BTC", direction="long", status="submitted", fill_price=None, pnl=None
+    )
     assert sp.summarize_trade(row) == "BTC · long · submitted"
 
 
@@ -169,8 +198,9 @@ def test_content_summary_truncates_a_long_title_rather_than_wrapping() -> None:
 
 
 def test_content_summary_falls_back_to_body_when_there_is_no_title() -> None:
-    row = SimpleNamespace(source="reddit", kind="social", title=None,
-                          text="BTC breaking 70k")
+    row = SimpleNamespace(
+        source="reddit", kind="social", title=None, text="BTC breaking 70k"
+    )
     assert sp.summarize_content(row) == "reddit · social · BTC breaking 70k"
 
 
@@ -261,7 +291,13 @@ def test_every_stage_reports_a_count_for_the_ids_in_the_catalog() -> None:
     """A stage in the catalog with no aggregate would render a permanent blank
     that looks exactly like a dead stage."""
     assert set(sp.STAGE_IDS) == {
-        "collect", "sentiment", "triage", "senior", "decision", "risk", "execute",
+        "collect",
+        "sentiment",
+        "triage",
+        "senior",
+        "decision",
+        "risk",
+        "execute",
     }
 
 
@@ -301,22 +337,39 @@ class _FakeAggSession:
 
 def _agg_queue():
     content_row = SimpleNamespace(
-        fetched_at=NOW, source="rss", kind="news", title="BTC pumping", text="",
+        fetched_at=NOW,
+        source="rss",
+        kind="news",
+        title="BTC pumping",
+        text="",
     )
     scored_row = SimpleNamespace(scored_at=NOW, source="reddit", sentiment_score=0.42)
     signal_row = SimpleNamespace(
-        time=NOW, symbol="SOL", opportunity_score=72, escalated=True,
+        time=NOW,
+        symbol="SOL",
+        opportunity_score=72,
+        escalated=True,
         block_reason="unknown",
     )
     decision_row = SimpleNamespace(
-        created_at=NOW, symbol="BTC", direction="long", confidence=0.81,
+        created_at=NOW,
+        symbol="BTC",
+        direction="long",
+        confidence=0.81,
     )
     approved_row = SimpleNamespace(
-        created_at=NOW, symbol="BTC", direction="long", position_size_pct=0.05,
+        created_at=NOW,
+        symbol="BTC",
+        direction="long",
+        position_size_pct=0.05,
     )
     executed_row = SimpleNamespace(
-        created_at=NOW, symbol="BTC", direction="long", status="filled",
-        fill_price=101.5, pnl=12.0,
+        created_at=NOW,
+        symbol="BTC",
+        direction="long",
+        status="filled",
+        fill_price=101.5,
+        pnl=12.0,
     )
     # Every scalar below is distinct, and every one is asserted downstream. That
     # is the whole point: the fake replays results positionally, so with
@@ -417,8 +470,13 @@ async def test_a_real_query_failure_still_degrades_rather_than_raising() -> None
 
 def _signal_row(**kw):
     base = dict(
-        symbol="SOL", opportunity_score=72, confidence=0.81, factors_present=3,
-        escalated=True, block_reason="unknown", time=NOW,
+        symbol="SOL",
+        opportunity_score=72,
+        confidence=0.81,
+        factors_present=3,
+        escalated=True,
+        block_reason="unknown",
+        time=NOW,
         payload={"correlation_id": "cid-9"},
     )
     base.update(kw)
@@ -470,12 +528,16 @@ def test_an_unrecognised_status_is_reported_as_down_not_passed_through() -> None
     """The frontend types `status` as a closed union and nothing validates the
     JSON at runtime, so a fifth value would make that type quietly false — and
     the UI has neither a label nor a colour for it."""
-    svc = _services(**{"collector-social": {"status": "weird", "throughput_per_min": 1}})
+    svc = _services(
+        **{"collector-social": {"status": "weird", "throughput_per_min": 1}}
+    )
     by = {s["id"]: s for s in sp.build_pipeline_stages({}, svc)}
     assert by["collect"]["status"] == "down"
 
 
 def test_a_known_worst_status_is_still_reported_verbatim() -> None:
-    svc = _services(**{"collector-news": {"status": "degraded", "throughput_per_min": 1}})
+    svc = _services(
+        **{"collector-news": {"status": "degraded", "throughput_per_min": 1}}
+    )
     by = {s["id"]: s for s in sp.build_pipeline_stages({}, svc)}
     assert by["collect"]["status"] == "degraded"

@@ -14,7 +14,11 @@ class FakePublisher:
 
 class FakeReader:
     async def settings(self):
-        return {"mode": "dry_run", "trading_enabled": True, "auto_trading_enabled": True}
+        return {
+            "mode": "dry_run",
+            "trading_enabled": True,
+            "auto_trading_enabled": True,
+        }
 
 
 def _svc():
@@ -33,6 +37,7 @@ def test_set_mode_rejects_invalid() -> None:
     settings = _svc()
     svc = settings.SettingsService(FakePublisher(), FakeReader())
     import pytest
+
     with pytest.raises(ValueError):
         asyncio.run(svc.set_mode("banana", issued_by="admin"))
 

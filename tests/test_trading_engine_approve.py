@@ -8,16 +8,28 @@ from tests.test_trading_engine import FakeCache, FakeProducer, FakeKraken, _sign
 def _engine(cache, producer, kraken):
     mod = load_module("engine")
     config = load_module("config")
-    return mod.TradingEngine(cache, producer, kraken,
-                             config.TradingConfig(trading_enabled=True))
+    return mod.TradingEngine(
+        cache, producer, kraken, config.TradingConfig(trading_enabled=True)
+    )
 
 
 def _seed_pending(cache, event_id):
-    asyncio.run(cache.set_json(f"trading:pending:{event_id}", {
-        "symbol": "SOL", "direction": "long", "entry_price": 150.0, "stop_loss": 142.0,
-        "take_profit": 165.0, "confidence": 0.8, "position_size_pct": 0.04,
-        "correlation_id": "c1", "event_id": event_id,
-    }))
+    asyncio.run(
+        cache.set_json(
+            f"trading:pending:{event_id}",
+            {
+                "symbol": "SOL",
+                "direction": "long",
+                "entry_price": 150.0,
+                "stop_loss": 142.0,
+                "take_profit": 165.0,
+                "confidence": 0.8,
+                "position_size_pct": 0.04,
+                "correlation_id": "c1",
+                "event_id": event_id,
+            },
+        )
+    )
     asyncio.run(cache.client.sadd("trading:pending", event_id))
 
 

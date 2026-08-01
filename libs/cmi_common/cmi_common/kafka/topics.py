@@ -10,7 +10,13 @@ from ..events.control import ControlCommandEvent
 from ..events.decision import DecisionEvent
 from ..events.execution import ExecutionEvent
 from ..events.journal import JournalEntryEvent
-from ..events.market import DexEvent, PriceEvent, VolumeEvent
+from ..events.market import (
+    DerivativesEvent,
+    DexEvent,
+    FundamentalsEvent,
+    PriceEvent,
+    VolumeEvent,
+)
 from ..events.news import NewsEvent
 from ..events.risk import RiskApprovedEvent
 from ..events.sentiment import SentimentEvent
@@ -21,6 +27,8 @@ class Topic(StrEnum):
     PRICE = "market.price.events"
     VOLUME = "market.volume.events"
     DEX = "market.dex.events"
+    DERIVATIVES = "market.derivatives.events"
+    FUNDAMENTALS = "market.fundamentals.events"
     NEWS = "market.news.events"
     SOCIAL = "market.social.events"
     SENTIMENT = "market.sentiment.events"
@@ -38,6 +46,8 @@ TOPIC_EVENT = {
     Topic.PRICE: PriceEvent,
     Topic.VOLUME: VolumeEvent,
     Topic.DEX: DexEvent,
+    Topic.DERIVATIVES: DerivativesEvent,
+    Topic.FUNDAMENTALS: FundamentalsEvent,
     Topic.NEWS: NewsEvent,
     Topic.SOCIAL: SocialEvent,
     Topic.SENTIMENT: SentimentEvent,
@@ -56,6 +66,10 @@ TOPIC_PARTITIONS = {
     Topic.PRICE: 12,
     Topic.VOLUME: 6,
     Topic.DEX: 12,
+    # Funding for every perp, republished each cycle to outlive the feature TTL.
+    Topic.DERIVATIVES: 6,
+    # One event per protocol per 10 min: far quieter than the price topics.
+    Topic.FUNDAMENTALS: 3,
     Topic.NEWS: 6,
     Topic.SOCIAL: 6,
     Topic.SENTIMENT: 6,

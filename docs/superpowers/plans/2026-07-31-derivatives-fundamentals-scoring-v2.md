@@ -348,9 +348,18 @@ DEFAULT_MIN_MENTIONS = 10
 
 
 def majors(
-    symbols: set[str], mentions: dict[str, int], min_mentions: int
+    symbols: set[str],
+    mentions: dict[str, int],
+    *,
+    min_mentions: int = DEFAULT_MIN_MENTIONS,
 ) -> set[str]:
-    """The subset with enough sentiment coverage to fuse on."""
+    """Symbols with enough sentiment coverage to fuse on.
+
+    Which is also, and this is why the definition is shared, the set worth
+    spending per-symbol API budget on: collector-binance-futures pays one open
+    interest call and one long/short call per major, so the threshold decides
+    the request bill as much as it decides the strategy.
+    """
     return {s for s in symbols if mentions.get(s, 0) >= min_mentions}
 
 
@@ -390,7 +399,33 @@ __all__ = [
 ]
 ```
 
-Delete the local `DEFAULT_MIN_MENTIONS = 10` definition — it now comes from the shared module. Keep `intersect`, `split_regimes`, `ambiguous_symbols`, `untradable` and `token_symbol_ranks` where they are: they depend on `VenuePairSpec` or on the `Token` table and are Kraken's business.
+Delete the local `DEFAULT_MIN_MENTIONS = 10` definition — it now comes from the shared module. Keep `intersect`, `ambiguous_symbols`, `untradable` and `token_symbol_ranks` where they are: they depend on `VenuePairSpec` or on the `Token` table and are Kraken's business.
+
+**`split_regimes` stays in this file but must delegate to `majors()`.** Leaving it with its own
+copy of the predicate would mean this task creates a second definition of the very rule it
+exists to de-duplicate — and the shared one would serve only a consumer that does not exist
+yet, while the real consumer kept its own:
+
+```python
+def split_regimes(
+    specs: list[VenuePairSpec],
+    *,
+    mentions: dict[str, int],
+    min_mentions: int = DEFAULT_MIN_MENTIONS,
+) -> tuple[list[VenuePairSpec], list[VenuePairSpec]]:
+    """(majors, alts) — majors are sentiment-covered enough to fuse on."""
+    major_symbols = majors(
+        {s.symbol for s in specs}, mentions, min_mentions=min_mentions
+    )
+    return (
+        [s for s in specs if s.symbol in major_symbols],
+        [s for s in specs if s.symbol not in major_symbols],
+    )
+```
+
+The signature is unchanged, so `tests/test_kraken_universe.py` must stay green untouched. Add
+`majors` to both the import and `__all__`. This also removes the local `majors` list variable,
+which would otherwise shadow the imported name.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
@@ -507,11 +542,6 @@ def test_missing_max_supply_yields_no_reading_rather_than_a_zero() -> None:
 
 def test_document_without_events_yields_no_unlock() -> None:
     assert unlocks.next_unlock(_doc([]), now=NOW) is None
-
-
-def test_gecko_id_is_read_from_the_document_root() -> None:
-    assert unlocks.gecko_id_of(_doc([])) == "aave"
-    assert unlocks.gecko_id_of({"name": "No Gecko"}) is None
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -549,14 +579,8 @@ HORIZON_DAYS = 30
 
 @dataclass(frozen=True, slots=True)
 class Unlock:
-    at: datetime
-    pct_supply: float
-
-
-def gecko_id_of(document: dict[str, Any]) -> str | None:
-    """The CoinGecko id this document belongs to, or None if untracked."""
-    value = document.get("gecko_id")
-    return str(value) if value else None
+    at: datetime       # earliest contributing event in the window
+    pct_supply: float  # percentage points of max supply, summed over the window
 
 
 def next_unlock(
@@ -564,16 +588,28 @@ def next_unlock(
 ) -> Unlock | None:
     """Total supply unlocking within the horizon, dated at its earliest event.
 
-    Returns None when nothing is scheduled in the window, and also when the
-    supply denominator is missing — an unlock whose size cannot be expressed as
-    a fraction of supply is not a measurement, and must not be served as one.
-    """
-    now = now or datetime.now(tz=UTC)
-    horizon = now + timedelta(days=HORIZON_DAYS)
+    Returns None when nothing is scheduled in the window — a measurement, and
+    the good news.
 
-    max_supply = float(document.get("supplyMetrics", {}).get("maxSupply") or 0.0)
-    if max_supply <= 0:
-        return None
+    Raises ValueError when something *is* scheduled but cannot be sized, because
+    the supply denominator is missing. Returning None there would be read one
+    layer up as "we looked, nothing is coming": the client inserts the coin id
+    on any non-raising call, the mapper turns that into
+    ``has_unlock_schedule=True``, and the scorer turns *that* into a perfect
+    fundamentals score — so a token about to dilute 10% of its supply would read
+    as impeccably healthy. Raising leaves the key absent instead, so the axis
+    reports unknown and is excluded from the score.
+
+    A malformed document — a non-numeric timestamp, a null token count — raises
+    for the same reason, and by design. Do not add a tolerant ``except: continue``
+    to this loop: it would convert "unknown" into "nothing is coming", which is
+    the failure this whole module is shaped to avoid. The caller must let the
+    exception leave the key absent, which means ``next_unlock`` has to stay
+    *outside* the client's try/except around the fetch.
+    """
+    if now is None:
+        now = datetime.now(tz=UTC)
+    horizon = now + timedelta(days=HORIZON_DAYS)
 
     earliest: datetime | None = None
     tokens = 0.0
@@ -584,12 +620,23 @@ def next_unlock(
         at = datetime.fromtimestamp(int(raw_ts), tz=UTC)
         if not (now < at <= horizon):
             continue
-        tokens += sum(float(n) for n in event.get("noOfTokens") or [])
+        contributed = sum(float(n) for n in event.get("noOfTokens") or [])
+        if contributed <= 0:
+            # A zero-size marker must not date an unlock it did not cause: the
+            # date is surfaced to the frontend beside a size from another event.
+            continue
+        tokens += contributed
         if earliest is None or at < earliest:
             earliest = at
 
-    if earliest is None or tokens <= 0:
+    if earliest is None:
         return None
+
+    # Checked only now: with nothing scheduled, the denominator is irrelevant
+    # and None is the honest answer rather than a failure.
+    max_supply = float(document.get("supplyMetrics", {}).get("maxSupply") or 0.0)
+    if max_supply <= 0:
+        raise ValueError("unlock scheduled but maxSupply is missing or zero")
     return Unlock(at=earliest, pct_supply=round(100.0 * tokens / max_supply, 4))
 ```
 
@@ -691,7 +738,7 @@ def test_parent_and_child_protocols_sum_into_one_event() -> None:
         known=KNOWN,
     )
     assert len(events) == 1
-    assert events[0].tvl_usd == Decimal("8000000")
+    assert events[0].tvl_usd == Decimal("5000000")
 
 
 def test_tvl_weighted_change_is_used_when_deployments_disagree() -> None:
@@ -708,15 +755,56 @@ def test_tvl_weighted_change_is_used_when_deployments_disagree() -> None:
     assert events[0].tvl_change_pct_7d == 2.0
 
 
-def test_fees_are_attached_by_coin_id() -> None:
+def test_fees_are_joined_by_slug_not_by_gecko_id() -> None:
+    # Verified against the live API: /overview/fees carries no gecko_id at all
+    # (0 of 2514 rows), so the join has to go through slug. Keying on gecko_id
+    # would find nothing and report every protocol as fee-less.
     events = mapper.to_fundamentals_events(
-        [_protocol("aave", "aave", 1.0, 0.0)],
-        fees={"aave": {"total24h": 42_000.0, "change_7dover7d": 12.5}},
+        [_protocol("aave-v3", "aave", 1.0, 0.0)],
+        fees={"aave-v3": {"total24h": 42_000.0, "total7d": 200.0, "total14dto7d": 160.0}},
         unlocks={},
         known=KNOWN,
     )
     assert events[0].fees_24h_usd == Decimal("42000")
-    assert events[0].fees_change_pct_7d == 12.5
+    # 7d-over-7d is derived: there is no change_7dover7d field in the payload.
+    assert events[0].fees_change_pct_7d == 25.0
+
+
+def test_fees_are_summed_across_a_tokens_deployments() -> None:
+    events = mapper.to_fundamentals_events(
+        [
+            _protocol("aave-v2", "aave", 1.0, 0.0),
+            _protocol("aave-v3", "aave", 1.0, 0.0),
+        ],
+        fees={
+            "aave-v2": {"total24h": 1_000.0, "total7d": 50.0, "total14dto7d": 100.0},
+            "aave-v3": {"total24h": 3_000.0, "total7d": 150.0, "total14dto7d": 100.0},
+        },
+        unlocks={},
+        known=KNOWN,
+    )
+    assert events[0].fees_24h_usd == Decimal("4000")
+    # (200 - 200) / 200 -> 0.0, computed on the sums rather than averaged per
+    # deployment, which would have given +25%.
+    assert events[0].fees_change_pct_7d == 0.0
+
+
+def test_a_zero_fee_baseline_yields_no_change_rather_than_a_division() -> None:
+    events = mapper.to_fundamentals_events(
+        [_protocol("aave-v3", "aave", 1.0, 0.0)],
+        fees={"aave-v3": {"total24h": 10.0, "total7d": 50.0, "total14dto7d": 0.0}},
+        unlocks={},
+        known=KNOWN,
+    )
+    assert events[0].fees_change_pct_7d is None
+
+
+def test_a_protocol_with_no_fee_row_reports_no_fees() -> None:
+    events = mapper.to_fundamentals_events(
+        [_protocol("aave-v3", "aave", 1.0, 0.0)], fees={}, unlocks={}, known=KNOWN
+    )
+    assert events[0].fees_24h_usd is None
+    assert events[0].fees_change_pct_7d is None
 
 
 def test_a_known_schedule_with_a_pending_unlock_is_carried() -> None:
@@ -750,6 +838,25 @@ def test_an_untracked_token_reports_no_schedule() -> None:
         [_protocol("aave", "aave", 1.0, 0.0)], fees={}, unlocks={}, known=KNOWN
     )
     assert events[0].has_unlock_schedule is False
+
+
+def test_emission_key_uses_the_parent_slug_when_there_is_one() -> None:
+    # Measured against the live API: the emissions list contains "aave" while
+    # /protocols only ever contains "aave-v2", "aave-v3" and friends. Matching
+    # on slug alone covers 220 of 359 scheduled protocols and misses Aave
+    # outright; going through parentProtocol covers 335.
+    assert (
+        mapper.emission_key({"slug": "aave-v3", "parentProtocol": "parent#aave"})
+        == "aave"
+    )
+
+
+def test_emission_key_falls_back_to_the_slug() -> None:
+    assert mapper.emission_key({"slug": "drift"}) == "drift"
+
+
+def test_emission_key_is_absent_when_the_row_has_neither() -> None:
+    assert mapper.emission_key({"name": "nameless"}) is None
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -766,6 +873,7 @@ Create `services/collector-defillama/app/domain/mapper.py`:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
@@ -773,6 +881,41 @@ from cmi_common.events import FundamentalsEvent
 from cmi_common.events.base import Source
 
 from .unlocks import Unlock
+
+
+@dataclass(slots=True)
+class _Bucket:
+    """Per-token accumulator.
+
+    The two ``saw_*`` flags are the whole point: a bucket that starts at 0.0
+    cannot otherwise tell "no deployment reported this" from "the deployments
+    reported zero", and collapsing those is precisely the unknown-vs-measured
+    confusion this platform already shipped once.
+    """
+
+    tvl: float = 0.0
+    weighted_change: float = 0.0
+    fees_24h: float = 0.0
+    fees_7d: float = 0.0
+    fees_prev_7d: float = 0.0
+    saw_tvl: bool = False
+    saw_fees: bool = False
+
+
+def emission_key(row: dict[str, Any]) -> str | None:
+    """The slug DefiLlama's emissions list uses for this protocol row.
+
+    Emission slugs are *parent* slugs. The list contains ``aave``; ``/protocols``
+    only ever contains ``aave-v2``, ``aave-v3`` and their siblings, each carrying
+    ``parentProtocol: "parent#aave"``. Matching the emissions list against
+    ``slug`` alone covers 220 of the 359 scheduled protocols and misses Aave
+    entirely — and it misses them silently, since an unmatched protocol simply
+    reports no schedule. Going through the parent covers 335.
+    """
+    parent = row.get("parentProtocol")
+    if parent:
+        return str(parent).split("#", 1)[-1] or None
+    return row.get("slug") or None
 
 
 def to_fundamentals_events(
@@ -788,43 +931,71 @@ def to_fundamentals_events(
     whose id we do not track, is dropped rather than matched on its ticker:
     ticker collisions are real and silently wrong.
 
+    ``fees`` is keyed by protocol **slug**, because the fees payload carries no
+    ``gecko_id`` at all — verified against the live API, 0 of 2,514 rows have
+    one. Keying it by coin id would match nothing and quietly report every
+    protocol as fee-less.
+
     ``unlocks`` maps CoinGecko id -> the pending unlock, or None when the
     schedule is known and empty. A key that is simply absent means DefiLlama
     publishes no schedule for that token, which is a different statement.
     """
-    aggregated: dict[str, dict[str, float]] = {}
+    aggregated: dict[str, _Bucket] = {}
     for row in protocols:
         coin_id = row.get("gecko_id")
         if not coin_id or coin_id not in known:
             continue
-        tvl = float(row.get("tvl") or 0.0)
-        bucket = aggregated.setdefault(coin_id, {"tvl": 0.0, "weighted_change": 0.0})
-        bucket["tvl"] += tvl
-        # TVL-weighted: a $3M deployment flat and a $1M deployment up 8% is a 2%
-        # move for the token, not the 4% a plain mean would report.
-        change = row.get("change_7d")
-        if change is not None:
-            bucket["weighted_change"] += tvl * float(change)
+        bucket = aggregated.setdefault(coin_id, _Bucket())
+        raw_tvl = row.get("tvl")
+        if raw_tvl is not None:
+            bucket.saw_tvl = True
+            bucket.tvl += float(raw_tvl)
+            # TVL-weighted: a $3M deployment flat and a $1M deployment up 8% is
+            # a 2% move for the token, not the 4% a plain mean would report.
+            change = row.get("change_7d")
+            if change is not None:
+                bucket.weighted_change += float(raw_tvl) * float(change)
+        # Fees aggregate the same way TVL does. Aave alone is seven deployment
+        # rows sharing one gecko_id, so reading any single row would report a
+        # fraction of the token's revenue as if it were all of it.
+        fee_row = fees.get(row.get("slug") or "")
+        if fee_row:
+            bucket.saw_fees = True
+            bucket.fees_24h += float(fee_row.get("total24h") or 0.0)
+            bucket.fees_7d += float(fee_row.get("total7d") or 0.0)
+            bucket.fees_prev_7d += float(fee_row.get("total14dto7d") or 0.0)
 
     events: list[FundamentalsEvent] = []
     for coin_id, bucket in aggregated.items():
-        tvl = bucket["tvl"]
-        fee_row = fees.get(coin_id) or {}
-        fees_24h = fee_row.get("total24h")
-        fees_change = fee_row.get("change_7dover7d")
+        baseline = bucket.fees_prev_7d
         unlock = unlocks.get(coin_id)
         events.append(
             FundamentalsEvent(
                 source=Source.DEFILLAMA,
                 symbol=known[coin_id],
                 coin_id=coin_id,
-                tvl_usd=Decimal(str(tvl)) if tvl > 0 else None,
+                # saw_*, not truthiness. A protocol that genuinely earned $0 in
+                # fees has been measured; reporting None would make it
+                # indistinguishable from one DefiLlama does not cover — and
+                # since the scorer *excludes* an absent axis rather than
+                # penalising it, the dead protocol would outscore the live one.
+                tvl_usd=Decimal(str(bucket.tvl)) if bucket.saw_tvl else None,
                 tvl_change_pct_7d=(
-                    round(bucket["weighted_change"] / tvl, 4) if tvl > 0 else None
+                    round(bucket.weighted_change / bucket.tvl, 4)
+                    if bucket.tvl > 0
+                    else None
                 ),
-                fees_24h_usd=Decimal(str(fees_24h)) if fees_24h else None,
+                fees_24h_usd=(
+                    Decimal(str(bucket.fees_24h)) if bucket.saw_fees else None
+                ),
+                # Derived: the payload has change_30dover30d but no 7d-over-7d.
+                # A zero baseline yields None, not a division and not a 0.0 that
+                # would read as "fees held flat" — that ratio is genuinely
+                # undefined, unlike the value fields above.
                 fees_change_pct_7d=(
-                    float(fees_change) if fees_change is not None else None
+                    round(100.0 * (bucket.fees_7d - baseline) / baseline, 4)
+                    if baseline > 0
+                    else None
                 ),
                 next_unlock_at=unlock.at if unlock else None,
                 next_unlock_pct_supply=unlock.pct_supply if unlock else None,
@@ -945,9 +1116,12 @@ async def test_fetching_an_unlock_caches_the_extraction_not_the_body() -> None:
     await _client(handler, cache).unlock("aave", "aave")
     key, value, ttl = cache.writes[0]
     assert key == "defillama:unlock:aave"
+    # Pinning the value exactly is what proves the 2.25 MB body was discarded:
+    # any leakage of documentedData or the raw events would fail this equality.
+    # (An additional `"documentedData" not in str(value)` would be vacuous —
+    # the equality above already forecloses it.)
     assert value == {"at": None, "pct_supply": None}
     assert ttl == client_mod.UNLOCK_TTL_SECONDS
-    assert "documentedData" not in str(value)
 
 
 async def test_a_failed_unlock_fetch_returns_absent_without_raising() -> None:
@@ -962,26 +1136,39 @@ async def test_a_failed_unlock_fetch_returns_absent_without_raising() -> None:
     assert cache.writes == []  # nothing poisoned the cache
 
 
-async def test_protocols_and_fees_are_parsed_into_lists_and_maps() -> None:
+async def test_protocols_are_returned_as_a_list() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/protocols":
-            return httpx.Response(
-                200, json=[{"slug": "aave", "gecko_id": "aave", "tvl": 1.0}]
-            )
-        if request.url.path == "/overview/fees":
-            return httpx.Response(
-                200,
-                json={
-                    "protocols": [
-                        {"gecko_id": "aave", "total24h": 42.0, "change_7dover7d": 1.5}
-                    ]
-                },
-            )
-        raise AssertionError(f"unexpected {request.url}")
+        assert request.url.path == "/protocols"
+        return httpx.Response(
+            200, json=[{"slug": "aave-v3", "gecko_id": "aave", "tvl": 1.0}]
+        )
 
-    client = _client(handler, FakeCache())
-    assert (await client.protocols())[0]["slug"] == "aave"
-    assert (await client.fees())["aave"]["total24h"] == 42.0
+    rows = await _client(handler, FakeCache()).protocols()
+    assert rows[0]["slug"] == "aave-v3"
+
+
+async def test_fees_are_keyed_by_slug_and_exclude_the_chart_series() -> None:
+    # The exclude params take the response from 24.6 MB to 3.7 MB. Dropping
+    # them would move 3.5 GB a day to read a handful of numbers, so they are
+    # asserted rather than trusted.
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["excludeTotalDataChart"] == "true"
+        assert request.url.params["excludeTotalDataChartBreakdown"] == "true"
+        return httpx.Response(
+            200,
+            json={
+                "protocols": [
+                    {"slug": "aave-v3", "total24h": 42.0, "total7d": 200.0},
+                    {"name": "no slug", "total24h": 1.0},
+                ]
+            },
+        )
+
+    fees = await _client(handler, FakeCache()).fees()
+    assert fees["aave-v3"]["total24h"] == 42.0
+    # A row without a slug cannot be joined to anything, so it is dropped
+    # rather than keyed under an empty string.
+    assert len(fees) == 1
 
 
 async def test_emission_slugs_are_returned_as_a_set() -> None:
@@ -1021,6 +1208,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -1077,10 +1265,23 @@ class LlamaClient:
         return await self._get(f"{API_BASE}/protocols")
 
     async def fees(self) -> dict[str, dict[str, Any]]:
-        """Fee rows keyed by CoinGecko id, for the ones that carry it."""
-        payload = await self._get(f"{API_BASE}/overview/fees")
+        """Fee rows keyed by protocol **slug**.
+
+        Not by gecko_id: the fees payload carries none — verified against the
+        live API, 0 of 2,514 rows have one. The caller joins slug -> gecko_id
+        through the protocols response.
+
+        The two exclude parameters are not optional. Without them the response
+        embeds full historical chart series and weighs 24.6 MB, which at a 600s
+        cadence is 3.5 GB a day to read a handful of numbers. With them it is
+        3.7 MB.
+        """
+        payload = await self._get(
+            f"{API_BASE}/overview/fees"
+            "?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true"
+        )
         rows = payload.get("protocols", []) if isinstance(payload, dict) else []
-        return {row["gecko_id"]: row for row in rows if row.get("gecko_id")}
+        return {row["slug"]: row for row in rows if row.get("slug")}
 
     async def emission_slugs(self) -> set[str]:
         """The protocol slugs that have a published unlock schedule (~4 KB)."""
@@ -1089,22 +1290,32 @@ class LlamaClient:
     async def unlock(self, slug: str, coin_id: str) -> Unlock | None:
         """The pending unlock for a protocol, cached for a day.
 
-        Returns None both when the schedule is known and empty and when the
-        fetch failed. The caller distinguishes the two by whether the coin id is
-        present in the map it builds — a failure must leave the key absent so the
-        axis reports "unknown" rather than "nothing coming".
+        Returns None for exactly one thing: the schedule was read and nothing is
+        scheduled. **Any failure to read raises** — a transport error, an HTTP
+        error, an exhausted request budget, or the ValueError ``next_unlock``
+        throws on an unsizable schedule.
+
+        That asymmetry is the whole contract. The caller inserts the coin id
+        into its map on a non-raising call, the mapper turns membership into
+        ``has_unlock_schedule=True``, and the scorer turns that into its *best*
+        fundamentals reading. So swallowing a failure here does not degrade
+        gracefully — it awards a perfect score to a token whose dilution we
+        simply failed to read. An earlier version caught fetch errors and
+        returned None, which made this exact inversion the routine outcome of a
+        throttled cycle: the rate-limit budget is one shared key covering the
+        bulk endpoints *and* every 2.25 MB document, so exhaustion is steady
+        state rather than an edge case.
         """
         key = UNLOCK_KEY.format(coin_id=coin_id)
         cached = await self._cache.get_json(key)
         if cached is not None:
             return self._from_cache(cached)
-        try:
-            document = await self._get(
-                f"{DATASETS_BASE}/emissions/{slug}", timeout=self._unlock_timeout
-            )
-        except Exception:
-            logger.warning("unlock fetch failed for %s", slug, exc_info=True)
-            return None
+        # Deliberately unguarded: see the docstring. The caller's except is what
+        # leaves the key absent, and it can only do that if this raises.
+        document = await self._get(
+            f"{DATASETS_BASE}/emissions/{quote(slug, safe='')}",
+            timeout=self._unlock_timeout,
+        )
         unlock = next_unlock(document)
         await self._cache.set_json(
             key,
@@ -1181,8 +1392,23 @@ class FakeClient:
         self._slugs = slugs if slugs is not None else {"aave"}
 
     async def protocols(self) -> list[dict[str, Any]]:
+        # Shaped like the live payload: deployment slugs under a parent, which
+        # is what the emissions list is actually keyed by.
         return [
-            {"slug": "aave", "gecko_id": "aave", "tvl": 5_000_000.0, "change_7d": 3.5},
+            {
+                "slug": "aave-v3",
+                "parentProtocol": "parent#aave",
+                "gecko_id": "aave",
+                "tvl": 3_000_000.0,
+                "change_7d": 3.5,
+            },
+            {
+                "slug": "aave-v2",
+                "parentProtocol": "parent#aave",
+                "gecko_id": "aave",
+                "tvl": 2_000_000.0,
+                "change_7d": 3.5,
+            },
             {"slug": "uniswap", "gecko_id": "uniswap", "tvl": 4.0, "change_7d": 1.0},
         ]
 
@@ -1214,6 +1440,31 @@ async def test_only_protocols_with_a_schedule_are_ever_fetched() -> None:
     # ~320 of the 359 scheduled protocols are outside our universe, and the
     # other direction matters more: fetching a 2.25 MB document for a token with
     # no schedule at all would be pure waste.
+    client = FakeClient(slugs={"aave"})
+    collector = collector_mod.DefiLlamaCollector(
+        client, FakeProducer(), known_tokens=lambda: KNOWN
+    )
+    await collector.poll_once()
+    assert client.unlock_calls == ["aave"]
+
+
+async def test_the_parent_slug_is_what_the_emissions_list_is_matched_on() -> None:
+    # The failure this prevents: matching on the deployment slug finds nothing
+    # for "aave" and the token silently reports no unlock schedule at all.
+    # Measured on the live data, slug-matching loses 139 of 359 protocols.
+    client = FakeClient(slugs={"aave"})
+    producer = FakeProducer()
+    collector = collector_mod.DefiLlamaCollector(
+        client, producer, known_tokens=lambda: KNOWN
+    )
+    await collector.poll_once()
+    aave = next(e for _, e in producer.published if e.symbol == "AAVE")
+    assert aave.has_unlock_schedule is True
+
+
+async def test_deployments_sharing_a_parent_are_fetched_once() -> None:
+    # Aave is seven rows on the live API. One 2.25 MB document per deployment
+    # would multiply the cost by the deployment count for no new information.
     client = FakeClient(slugs={"aave"})
     collector = collector_mod.DefiLlamaCollector(
         client, FakeProducer(), known_tokens=lambda: KNOWN
@@ -1269,7 +1520,7 @@ from collections.abc import Callable
 from cmi_common.kafka import EventProducer, Topic
 from cmi_common.observability import EVENTS_PRODUCED
 
-from ..domain.mapper import to_fundamentals_events
+from ..domain.mapper import emission_key, to_fundamentals_events
 from ..domain.unlocks import Unlock
 from ..infrastructure.llama_client import LlamaClient
 
@@ -1330,12 +1581,18 @@ class DefiLlamaCollector:
         event reports "no schedule known" rather than "no unlock coming".
         """
         scheduled = await self._client.emission_slugs()
+        # emission_key, not row["slug"] — the emissions list is keyed by parent
+        # slug. Several deployment rows collapse onto the same key (Aave is
+        # seven), hence the dedupe: fetching a 2.25 MB document once per
+        # deployment would multiply the cost by the deployment count.
         eligible = sorted(
-            (row["slug"], row["gecko_id"])
-            for row in protocols
-            if row.get("slug") in scheduled
-            and row.get("gecko_id")
-            and row["gecko_id"] in known
+            {
+                (key, row["gecko_id"])
+                for row in protocols
+                if (key := emission_key(row)) in scheduled
+                and row.get("gecko_id")
+                and row["gecko_id"] in known
+            }
         )
         if not eligible:
             return {}
@@ -1756,11 +2013,62 @@ async def test_premium_index_returns_every_perp_in_one_call() -> None:
     assert [r["symbol"] for r in rows] == ["BTCUSDT", "ETHUSDT"]
 
 
-async def test_open_interest_is_returned_as_a_float() -> None:
+async def test_open_interest_history_yields_the_usd_level_and_the_24h_change() -> None:
+    # One request gives both. The level comes from sumOpenInterestValue (USD),
+    # the change from sumOpenInterest (base units) — the USD series moves with
+    # price as well as with positioning, so it cannot answer "is conviction
+    # entering the book".
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"symbol": "BTCUSDT", "openInterest": "12345.6"})
+        assert request.url.params["period"] == "1h"
+        assert request.url.params["limit"] == "25"
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "sumOpenInterest": "100.0",
+                    "sumOpenInterestValue": "1000000.0",
+                    "timestamp": 1785445200000,
+                },
+                {
+                    "sumOpenInterest": "110.0",
+                    "sumOpenInterestValue": "1100000.0",
+                    "timestamp": 1785531600000,
+                },
+            ],
+        )
 
-    assert await _client(handler).open_interest("BTCUSDT") == 12345.6
+    reading = await _client(handler).open_interest("BTCUSDT")
+    assert reading is not None
+    assert reading.usd == 1100000.0
+    assert reading.change_pct_24h == 10.0
+
+
+async def test_a_single_open_interest_point_yields_no_change() -> None:
+    # A level without a baseline is a level, not a trend. Reporting 0.0 would
+    # claim flat positioning we never measured.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "sumOpenInterest": "100.0",
+                    "sumOpenInterestValue": "1000000.0",
+                    "timestamp": 1785445200000,
+                }
+            ],
+        )
+
+    reading = await _client(handler).open_interest("BTCUSDT")
+    assert reading is not None
+    assert reading.usd == 1000000.0
+    assert reading.change_pct_24h is None
+
+
+async def test_an_empty_open_interest_history_yields_no_reading() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[])
+
+    assert await _client(handler).open_interest("BTCUSDT") is None
 
 
 async def test_long_short_ratio_reads_the_most_recent_bucket() -> None:
@@ -1825,6 +2133,7 @@ after.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -1844,6 +2153,18 @@ class BinanceRateLimited(RuntimeError):
     def __init__(self, retry_after: float | None) -> None:
         super().__init__("binance rate limited")
         self.retry_after = retry_after
+
+
+@dataclass(frozen=True, slots=True)
+class OpenInterest:
+    """USD notional now, and how it moved over 24h.
+
+    `change_pct_24h` is None when the history held a single point: a level with
+    no baseline is a level, not a trend.
+    """
+
+    usd: float
+    change_pct_24h: float | None
 
 
 class BinanceFuturesClient:
@@ -1894,10 +2215,32 @@ class BinanceFuturesClient:
         payload = await self._get("/fapi/v1/premiumIndex")
         return payload if isinstance(payload, list) else [payload]
 
-    async def open_interest(self, ticker: str) -> float | None:
-        payload = await self._get("/fapi/v1/openInterest", {"symbol": ticker})
-        raw = payload.get("openInterest")
-        return float(raw) if raw is not None else None
+    async def open_interest(self, ticker: str) -> OpenInterest | None:
+        """Current USD open interest and its 24h change, in one request.
+
+        `/futures/data/openInterestHist` at `period=1h&limit=25` spans exactly
+        24 hours and carries both the USD notional and the base-unit size, which
+        `/fapi/v1/openInterest` does not: that endpoint returns a bare base-unit
+        snapshot, leaving the change unmeasurable and the positioning axis's
+        open-interest term permanently dead.
+
+        The change is computed on base units on purpose. `sumOpenInterestValue`
+        moves with price as well as with positioning, so a 10% USD rise during a
+        10% rally is no new interest at all.
+        """
+        payload = await self._get(
+            "/futures/data/openInterestHist",
+            {"symbol": ticker, "period": "1h", "limit": 25},
+        )
+        if not payload:
+            return None
+        usd = float(payload[-1]["sumOpenInterestValue"])
+        if len(payload) < 2:
+            return OpenInterest(usd=usd, change_pct_24h=None)
+        oldest = float(payload[0]["sumOpenInterest"])
+        newest = float(payload[-1]["sumOpenInterest"])
+        change = round(100.0 * (newest - oldest) / oldest, 4) if oldest > 0 else None
+        return OpenInterest(usd=usd, change_pct_24h=change)
 
     async def long_short_ratio(self, ticker: str) -> float | None:
         """Most recent 5-minute retail long/short account ratio bucket."""
@@ -1942,6 +2285,7 @@ Create `tests/test_binance_futures_collector.py`:
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 from service_modules import load_service_module
@@ -1950,6 +2294,9 @@ from cmi_common.kafka import Topic
 
 collector_mod = load_service_module(
     "collector-binance-futures", "application.collector"
+)
+client_mod = load_service_module(
+    "collector-binance-futures", "infrastructure.binance_client"
 )
 
 
@@ -1975,9 +2322,9 @@ class FakeClient:
             {"symbol": "DOGEUSDT", "lastFundingRate": "0.0003"},
         ]
 
-    async def open_interest(self, ticker: str) -> float | None:
+    async def open_interest(self, ticker: str):
         self.oi_calls.append(ticker)
-        return 1000.0
+        return client_mod.OpenInterest(usd=1_000_000.0, change_pct_24h=7.5)
 
     async def long_short_ratio(self, ticker: str) -> float | None:
         self.ls_calls.append(ticker)
@@ -2015,10 +2362,12 @@ async def test_majors_carry_the_detail_and_others_do_not() -> None:
     await _collector(FakeClient(), producer).poll_once()
     events = {e.symbol: e for _, e in producer.published}
     assert events["BTC"].long_short_account_ratio == 1.8
-    assert events["BTC"].open_interest_usd is not None
+    assert events["BTC"].open_interest_usd == Decimal("1000000.0")
+    assert events["BTC"].open_interest_change_pct_24h == 7.5
     # A non-major is not a degraded reading; those fields were never measured.
     assert events["ETH"].long_short_account_ratio is None
     assert events["ETH"].open_interest_usd is None
+    assert events["ETH"].open_interest_change_pct_24h is None
     assert events["ETH"].funding_rate_8h == 0.0002
 
 
@@ -2138,11 +2487,10 @@ class BinanceFuturesCollector:
         have: the event goes out with whatever was measured and nothing else.
         """
         ticker = f"{event.symbol}USDT"
-        open_interest = None
+        reading = None
         ratio = None
         try:
-            raw_oi = await self._client.open_interest(ticker)
-            open_interest = Decimal(str(raw_oi)) if raw_oi is not None else None
+            reading = await self._client.open_interest(ticker)
         except Exception:
             logger.warning("open interest failed for %s", ticker, exc_info=True)
         try:
@@ -2151,11 +2499,8 @@ class BinanceFuturesCollector:
             logger.warning("long/short failed for %s", ticker, exc_info=True)
         return with_majors_detail(
             event,
-            open_interest_usd=open_interest,
-            # Binance reports open interest in base units and publishes no 24h
-            # delta; deriving one needs history this collector does not keep.
-            # Absent is the honest answer until a store exists.
-            oi_change_pct_24h=None,
+            open_interest_usd=Decimal(str(reading.usd)) if reading else None,
+            oi_change_pct_24h=reading.change_pct_24h if reading else None,
             long_short_ratio=ratio,
         )
 ```
@@ -2219,7 +2564,11 @@ class _Universe:
             mentions = await mention_counts(session)
         # Ambiguity is Kraken's venue-pair concern; nothing here can resolve a
         # ticker collision, so the set stays empty until a shared source exists.
-        self._value = (priced, majors(priced, mentions, MIN_MENTIONS), set())
+        self._value = (
+            priced,
+            majors(priced, mentions, min_mentions=MIN_MENTIONS),
+            set(),
+        )
         self._loaded_at = loop.time()
 
     def get(self) -> tuple[set[str], set[str], set[str]]:
@@ -2657,6 +3006,17 @@ Expected: FAIL with `AttributeError: module has no attribute '_norm_positioning'
 In `services/decision-engine/app/scoring.py`, add `import math` is already present; append these functions after `_norm_liquidity`:
 
 ```python
+#: Funding rate at which the crowding read saturates, measured rather than
+#: guessed: across all 854 Binance perps on 2026-07-31 the 5th percentile sits
+#: at -0.000156 and the 95th at +0.000159, with a median of +0.000050. An
+#: earlier draft used 0.0004 and spanned only 0.19 between those percentiles —
+#: an axis that varies by a fifth of its range over 90% of the book is not
+#: discriminating, it is decoration. This scale spans 0.66.
+#:
+#: Note the median lands at 0.378, below neutral: positive funding is the
+#: normal state of crypto perps, so the typical symbol reads mildly crowded.
+#: That is a property of the market, not a bias to correct out.
+_FUNDING_SCALE = 0.0001
 #: An unlock of this share of supply is treated as maximally severe.
 _UNLOCK_FULL_SEVERITY_PCT = 5.0
 #: Unlocks further out than this do not bear on a position opened today.
@@ -2688,7 +3048,7 @@ def _norm_positioning(
     """
     return _mean_present(
         [
-            None if funding is None else _sigmoid(-funding / 0.0004),
+            None if funding is None else _sigmoid(-funding / _FUNDING_SCALE),
             None if not ratio or ratio <= 0 else _sigmoid(-math.log(ratio), k=1.5),
             None if oi_change is None else _sigmoid(oi_change / 20.0),
         ]

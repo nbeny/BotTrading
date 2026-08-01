@@ -73,8 +73,8 @@ Cadence 600 s (`DEFILLAMA_POLL_INTERVAL`).
 
 | Endpoint | Per cycle | Yields |
 |---|---|---|
-| `GET api.llama.fi/protocols` | 1 | TVL, `change_1d`, `change_7d`, `gecko_id`, `slug` |
-| `GET api.llama.fi/overview/fees` | 1 | 24h and 7d fees / revenue |
+| `GET api.llama.fi/protocols` | 1 | TVL, `change_1d`, `change_7d`, `gecko_id`, `slug`, `parentProtocol` (8.5 MB) |
+| `GET api.llama.fi/overview/fees?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true` | 1 | `total24h`, `total7d`, `total14dto7d` per `slug` (3.7 MB; 24.6 MB without the params) |
 | `GET defillama-datasets.llama.fi/emissionsProtocolsList` | 1 | the 359 slugs that have an unlock schedule (4 KB) |
 | `GET defillama-datasets.llama.fi/emissions/{slug}` | ≤ 3, round-robin | `metadata.events` + `supplyMetrics.maxSupply` |
 
@@ -100,11 +100,46 @@ unlocks going back years, so the future filter is not optional.
 
 **Symbol mapping is by `gecko_id` → `Token.coin_id`, never by ticker.** A protocol without a
 `gecko_id` is dropped rather than guessed. This deliberately sidesteps the ambiguity that
-`collector-kraken`'s `ambiguous_symbols` exists to record.
+`collector-kraken`'s `ambiguous_symbols` exists to record. Measured: 2,325 of the 7,974
+protocol rows carry a `gecko_id`.
 
-When a protocol appears under several entries (parent/child protocols on DefiLlama), TVL is
-summed at the `gecko_id` level before emission, so a token's TVL is the token's, not one
-deployment's.
+**A token's rows are found through `parentProtocol`, not through a shared `gecko_id`.** This
+was got wrong first, by misreading a query that printed only the non-null ids of a family and
+so appeared to show all seven Aave rows sharing one. Measured properly: **zero of the 7,974
+rows share a `gecko_id` with another row.** The id sits on exactly one row per family, and not
+the largest — `aave-v2` carries `aave` at $109M while `aave-v3`, at $13.7B, carries `None`.
+
+So the mapper resolves each row's family (parent slug, else own slug), takes the `gecko_id`
+from whichever row in that family has one, and sums the family. Joining row-by-row instead
+shipped AAVE at **0.76%** of its real TVL, and every `jupiter-*` row is untagged so a $2.04B
+protocol shipped a *measured* `Decimal(0)` — which the scorer penalises rather than excludes,
+the platform's own rule inverted. Across the live universe: 84 tokens under-reporting, $706M
+of $22.88B.
+
+**Three different join keys are in play, and conflating them silently loses data.** All three
+were verified against the live API:
+
+| From | To | Key |
+|---|---|---|
+| `/protocols` row | our `tokens` table | `gecko_id` → `Token.coin_id` |
+| `/overview/fees` row | `/protocols` row | `slug` — the fees payload carries **no** `gecko_id` (0 of 2,514 rows) |
+| `emissionsProtocolsList` entry | `/protocols` row | `parentProtocol` minus its `parent#` prefix, falling back to `slug` |
+
+The third one is the trap. Emission slugs are *parent* slugs: the list contains `aave`, while
+`/protocols` only ever contains `aave-v2`, `aave-v3` and so on. Matching emission slugs against
+`slug` alone covers 220 of 359 protocols and drops Aave entirely; going through
+`parentProtocol` covers 335, of which 224 carry a `gecko_id` and are therefore reachable at
+all. The remaining 24 are naming variants that resolve to no protocol row; they degrade to
+"no schedule known", which is the correct answer rather than a silent zero.
+
+**Fees carry no 7-day change field either.** There is `change_30dover30d` but no
+`change_7dover7d`, so the 7-day figure is derived: `100 × (total7d − total14dto7d) /
+total14dto7d`, both of which are present. Fees are summed across a token's deployments exactly
+as TVL is, before the change is computed.
+
+`/overview/fees` must be requested with `excludeTotalDataChart=true` and
+`excludeTotalDataChartBreakdown=true`. Without them the response is **24.6 MB** — 3.5 GB/day at
+a 600 s cadence — because it embeds full historical chart series. With them it is 3.7 MB.
 
 ### `collector-binance-futures`
 
@@ -114,8 +149,17 @@ Cadence 300 s (`BINANCE_FUTURES_POLL_INTERVAL`), two tiers mirroring `CandleSwee
   funding rate for every perpetual in **one** request. Retained for symbols seen in `prices`
   over the last 24 hours.
 - **majors** — for each major from `split_regimes` (~11 symbols at
-  `KRAKEN_MAJOR_MIN_MENTIONS_7D=10`): `GET /fapi/v1/openInterest` and
+  `KRAKEN_MAJOR_MIN_MENTIONS_7D=10`): `GET /futures/data/openInterestHist` and
   `GET /futures/data/globalLongShortAccountRatio`. ~22 requests.
+
+  The open-interest endpoint is the *history* one at `period=1h&limit=25`, not
+  `/fapi/v1/openInterest`. Verified against the live API: the history spans exactly
+  24 hours and carries `sumOpenInterestValue` (USD notional) alongside
+  `sumOpenInterest` (base units), so one request yields both the level and the 24h
+  change. The snapshot endpoint returns a bare base-unit figure, which would leave
+  `open_interest_change_pct_24h` permanently null and the positioning axis's
+  open-interest term dead on arrival. The change is computed on base units, since
+  the USD series moves with price as well as with positioning.
 
 Roughly 23 requests per 5-minute cycle against a 2400 weight/minute budget. The majors set is
 read from the existing universe helpers rather than reimplemented.
@@ -197,7 +241,7 @@ broad-tier symbols and sharpens on majors, without a missing term dragging it do
 
 ```python
 # positioning — contrarian on crowding, confirmatory on engagement
-funding_term  = _sigmoid(-funding_rate_8h / 0.0004)      # +0.1% → 0.08 ; 0 → 0.5 ; -0.1% → 0.92
+funding_term  = _sigmoid(-funding_rate_8h / 0.0001)      # p05 → 0.83 ; 0 → 0.5 ; p95 → 0.17
 crowding_term = _sigmoid(-log(long_short_account_ratio), k=1.5)   # 2:1 long → 0.26 ; 1:1 → 0.5
 oi_term       = _sigmoid(open_interest_change_pct_24h / 20)       # +20% → 0.73 ; 0 → 0.5
 
@@ -221,6 +265,23 @@ not track produces no term at all.
 Funding is contrarian by construction: positive funding means longs are paying shorts, which
 is the crowded side. The sign convention must be asserted in a test, because getting it
 backwards produces a model that is confidently wrong rather than obviously broken.
+
+**The funding scale is measured, not guessed.** Across all 854 Binance perps on 2026-07-31 the
+distribution is far tighter than intuition suggests: p05 = −0.000156, median = +0.000050,
+p95 = +0.000159, with extremes at −0.0025 and +0.0019. A first draft used a 0.0004 divisor,
+calibrated on the belief that ±0.001 was the working range; that spans only **0.19** between
+p05 and p95. An axis that moves by a fifth of its range across 90% of the book is decoration,
+not signal — the term would have been effectively constant and the axis carried entirely by
+open interest and the long/short ratio. At 0.0001 the same percentiles span 0.66.
+
+One consequence worth stating rather than discovering later: the median symbol normalises to
+0.378, below neutral. Positive funding is the ordinary state of crypto perpetuals, so the
+typical symbol genuinely reads as mildly crowded-long. That is a property of the market, not a
+bias to calibrate away.
+
+The same discipline has not been applied to the long/short and open-interest terms; their
+scales (`k=1.5` on log-ratio, `/20.0` on 24h OI change) remain reasoned rather than measured,
+and are the obvious first candidates if the axis underperforms.
 
 ### Weights
 
@@ -283,15 +344,16 @@ below asserts the identity on unrounded values rather than on persisted ones.
 The iso-rate threshold is readable directly from `decision_journal`, which stores `features`,
 `score` and `confidence` for every analysis, escalated or not:
 
-```sql
--- 1. current decision rate
-SELECT count(*) FILTER (WHERE score >= 70)::float / count(*)
-FROM decision_journal WHERE time > now() - interval '7 days';
+**Superseded — do not use a SQL ratio.** `decision_journal.score`/`.confidence` are written
+from `analysis.*`, i.e. *haiku's* four-factor scorer, not this module: haiku's confidence is
+`0.25 + 0.35·liq + 0.4·(present/4)`, floored at 0.25 and unrelated to present weight. And the
+identity itself fails where it matters — v1's `_norm_news` contributed 0.25 to the numerator
+while reporting the axis absent, so the ratio overestimates `score_v2` by `5/confidence` points
+on every row without its own news (24% of samples off by >1 point, worst +33.8). Both errors
+push the threshold too high, which restores the deadlock.
 
--- 2. the v2 threshold that preserves it (substitute <rate> from step 1)
-SELECT percentile_disc(1 - <rate>) WITHIN GROUP (ORDER BY score::float / confidence)
-FROM decision_journal WHERE time > now() - interval '7 days' AND confidence > 0;
-```
+The threshold is instead chosen by recomputing v2 offline over `decision_journal.features` —
+see the deployment section of `../plans/2026-08-01-derivatives-fundamentals-RESUME.md`.
 
 Two queries run at deploy time, not a code deliverable.
 

@@ -49,10 +49,9 @@ def test_rows_without_an_outcome_are_excluded_not_counted_as_zero() -> None:
 def test_cohort_minimum_applies_per_cohort_not_globally() -> None:
     """Croiser les axes fragmente vite l'échantillon ; le plancher doit mordre
     cohorte par cohorte."""
-    rows = (
-        [{"cohort": "major", "pnl_net_pct": 2.0}] * 40
-        + [{"cohort": "small", "pnl_net_pct": 9.0}] * 5
-    )
+    rows = [{"cohort": "major", "pnl_net_pct": 2.0}] * 40 + [
+        {"cohort": "small", "pnl_net_pct": 9.0}
+    ] * 5
     out = jq.by_cohort(rows, key="cohort")
     assert out["major"]["mean"] == 2.0
     assert out["small"]["mean"] is None

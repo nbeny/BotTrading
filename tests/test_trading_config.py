@@ -3,8 +3,12 @@ from tests.trading_helpers import load_module
 
 def test_config_defaults(monkeypatch) -> None:
     for k in [
-        "TRADING_MODE", "MAX_ORDER_USD", "MAX_LEVERAGE",
-        "MAX_ORDERS_PER_HOUR", "ENTRY_TIMEOUT_S", "RECONCILE_INTERVAL_S",
+        "TRADING_MODE",
+        "MAX_ORDER_USD",
+        "MAX_LEVERAGE",
+        "MAX_ORDERS_PER_HOUR",
+        "ENTRY_TIMEOUT_S",
+        "RECONCILE_INTERVAL_S",
         "TRADING_ENABLED",
     ]:
         monkeypatch.delenv(k, raising=False)

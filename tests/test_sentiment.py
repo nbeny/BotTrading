@@ -9,7 +9,10 @@ from pathlib import Path
 _spec = importlib.util.spec_from_file_location(
     "sent_scorer",
     Path(__file__).resolve().parents[1]
-    / "services" / "sentiment-service" / "app" / "scorer.py",
+    / "services"
+    / "sentiment-service"
+    / "app"
+    / "scorer.py",
 )
 scorer_mod = importlib.util.module_from_spec(_spec)
 assert _spec.loader
@@ -65,12 +68,14 @@ def test_continuous_score_bullish_lean() -> None:
     import pytest
 
     s = _hf_scorer(
-        [{"label": "Bullish", "score": 0.7},
-         {"label": "Neutral", "score": 0.2},
-         {"label": "Bearish", "score": 0.1}]
+        [
+            {"label": "Bullish", "score": 0.7},
+            {"label": "Neutral", "score": 0.2},
+            {"label": "Bearish", "score": 0.1},
+        ]
     )
     r = s.score("btc to the moon")
-    assert r.score == pytest.approx(0.6)       # 0.7 - 0.1
+    assert r.score == pytest.approx(0.6)  # 0.7 - 0.1
     assert r.confidence == pytest.approx(0.8)  # 1 - 0.2
 
 
@@ -78,9 +83,11 @@ def test_continuous_score_neutral_is_near_zero() -> None:
     import pytest
 
     s = _hf_scorer(
-        [{"label": "Bullish", "score": 0.1},
-         {"label": "Neutral", "score": 0.8},
-         {"label": "Bearish", "score": 0.1}]
+        [
+            {"label": "Bullish", "score": 0.1},
+            {"label": "Neutral", "score": 0.8},
+            {"label": "Bearish", "score": 0.1},
+        ]
     )
     r = s.score("nothing happening")
     assert r.score == pytest.approx(0.0)

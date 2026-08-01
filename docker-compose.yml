@@ -242,6 +242,32 @@ services:
       - traefik.http.routers.krakencol.tls=true
       - traefik.http.services.krakencol.loadbalancer.server.port=8000
 
+  collector-defillama:
+    <<: *service-defaults
+    build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/collector-defillama } }
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      DEFILLAMA_POLL_INTERVAL: ${DEFILLAMA_POLL_INTERVAL:-600}
+      DEFILLAMA_MAX_UNLOCK_FETCHES: ${DEFILLAMA_MAX_UNLOCK_FETCHES:-3}
+
+  collector-binance-futures:
+    <<: *service-defaults
+    build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/collector-binance-futures } }
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      BINANCE_FUTURES_POLL_INTERVAL: ${BINANCE_FUTURES_POLL_INTERVAL:-300}
+      KRAKEN_MAJOR_MIN_MENTIONS_7D: ${KRAKEN_MAJOR_MIN_MENTIONS_7D:-10}
+
   # ----------------------------------------------------------- analytics
   sentiment-service:
     <<: *service-defaults

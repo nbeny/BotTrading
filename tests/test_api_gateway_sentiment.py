@@ -13,8 +13,15 @@ class _StubReader:
 
     async def all_windows(self, *, symbol, kind, half_life_h=None):
         self.calls.append(("all_windows", symbol, kind, half_life_h))
-        return [{"window": "1h", "avg": 0.5, "weighted_avg": 0.4,
-                 "mentions": 3, "engagement": 2.0}]
+        return [
+            {
+                "window": "1h",
+                "avg": 0.5,
+                "weighted_avg": 0.4,
+                "mentions": 3,
+                "engagement": 2.0,
+            }
+        ]
 
     async def series(self, *, symbol, kind, points):
         self.calls.append(("series", symbol, kind, points))

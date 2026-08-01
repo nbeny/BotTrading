@@ -8,7 +8,7 @@ from cmi_common.config import AISettings
 
 def test_cli_defaults() -> None:
     s = AISettings()
-    assert s.transport == "api"          # backward compatible default
+    assert s.transport == "api"  # backward compatible default
     assert s.cli_path == "claude"
     assert s.cli_timeout_ms == 120000
     assert s.cli_concurrency == 4

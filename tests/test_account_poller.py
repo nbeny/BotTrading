@@ -28,8 +28,11 @@ class FakeCache:
 
 class FakeClient:
     def __init__(self, snap=None, error=None) -> None:
-        self._snap = snap or {"equity_usd": 10.0, "cash_usd": 4.0,
-                              "balances": {"ZUSD": 4.0}}
+        self._snap = snap or {
+            "equity_usd": 10.0,
+            "cash_usd": 4.0,
+            "balances": {"ZUSD": 4.0},
+        }
         self._error = error
         self.calls = 0
 
@@ -41,8 +44,7 @@ class FakeClient:
 
 
 def _cfg(*, key: str, secret: str):
-    return SimpleNamespace(read_api_key=key, read_api_secret=secret,
-                           account_poll_s=60)
+    return SimpleNamespace(read_api_key=key, read_api_secret=secret, account_poll_s=60)
 
 
 async def test_one_poll_publishes_and_caches() -> None:
@@ -59,8 +61,9 @@ async def test_an_exchange_failure_publishes_nothing() -> None:
     """Mieux vaut pas de snapshot qu'un snapshot faux : l'absence se traduit par
     « non connecté » côté lecture, un zéro se traduirait par « vous n'avez rien »."""
     p, c = FakeProducer(), FakeCache()
-    poller = acc.AccountPoller(FakeClient(error=RuntimeError("boom")), p, c,
-                               venue="kraken_spot")
+    poller = acc.AccountPoller(
+        FakeClient(error=RuntimeError("boom")), p, c, venue="kraken_spot"
+    )
     await poller.poll_once()
     assert p.sent == []
     assert c.written == {}
@@ -70,8 +73,9 @@ async def test_a_failure_does_not_stop_the_loop() -> None:
     """Une clé temporairement rejetée ou un timeout ne doit pas tuer la boucle
     pour le reste de la vie du processus."""
     p, c = FakeProducer(), FakeCache()
-    poller = acc.AccountPoller(FakeClient(error=RuntimeError("boom")), p, c,
-                               venue="kraken_spot")
+    poller = acc.AccountPoller(
+        FakeClient(error=RuntimeError("boom")), p, c, venue="kraken_spot"
+    )
     await poller.poll_once()
     await poller.poll_once()  # ne doit pas lever
 
@@ -88,6 +92,7 @@ def test_a_configured_key_produces_a_poller() -> None:
     """Le pendant du test précédent : sans lui, un `return None` inconditionnel
     passerait."""
     import base64
+
     poller = acc.build_poller(
         _cfg(key="k" * 56, secret=base64.b64encode(b"s" * 64).decode()), None, None
     )

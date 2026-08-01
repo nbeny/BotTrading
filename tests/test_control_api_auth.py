@@ -19,5 +19,6 @@ def test_login_rejects_bad_credentials(monkeypatch) -> None:
     monkeypatch.setenv("CONTROL_ADMIN_PASSWORD", "pw")
     auth = load_module("routers.auth")
     import pytest
+
     with pytest.raises(auth.AuthError):
         asyncio.run(auth.issue_token("admin", "wrong"))

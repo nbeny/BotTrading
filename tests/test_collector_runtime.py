@@ -45,7 +45,7 @@ async def test_set_runtime_merges_and_persists() -> None:
     cache = _FakeCache()
     out = await runtime.set_runtime(cache, {"platforms": {"cryptocompare": False}})
     assert out["platforms"]["cryptocompare"] is False
-    assert out["platforms"]["gdelt"] is True          # untouched -> default on
+    assert out["platforms"]["gdelt"] is True  # untouched -> default on
     assert out["social_enabled"] is True
     # persisted so the poll loops see it
     assert await runtime.is_enabled(cache, "news", "cryptocompare") is False

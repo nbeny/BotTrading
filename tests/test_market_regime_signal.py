@@ -63,8 +63,14 @@ def _market(score: float) -> SentimentEvent:
 
 
 def test_a_symbols_own_sentiment_always_wins_over_the_regime() -> None:
-    own = scoring.score(scoring.Features(sentiment_score=0.8, market_sentiment=-0.9))
-    without = scoring.score(scoring.Features(sentiment_score=0.8))
+    own = scoring.score(
+        scoring.Features(
+            price_change_pct_24h=0.0, sentiment_score=0.8, market_sentiment=-0.9
+        )
+    )
+    without = scoring.score(
+        scoring.Features(price_change_pct_24h=0.0, sentiment_score=0.8)
+    )
     assert own.breakdown["news_score"] == without.breakdown["news_score"]
 
 
@@ -72,9 +78,15 @@ def test_the_regime_moves_the_score_in_the_direction_of_the_mood() -> None:
     # Baseline is a *neutral* regime, not Features(): with no signal at all
     # _norm_news short-circuits to 0.0, which is also what maximally bearish
     # scores. That conflation predates this change and is left alone here.
-    bullish = scoring.score(scoring.Features(market_sentiment=0.8))
-    flat = scoring.score(scoring.Features(market_sentiment=0.0))
-    bearish = scoring.score(scoring.Features(market_sentiment=-0.8))
+    bullish = scoring.score(
+        scoring.Features(price_change_pct_24h=0.0, market_sentiment=0.8)
+    )
+    flat = scoring.score(
+        scoring.Features(price_change_pct_24h=0.0, market_sentiment=0.0)
+    )
+    bearish = scoring.score(
+        scoring.Features(price_change_pct_24h=0.0, market_sentiment=-0.8)
+    )
     assert (
         bearish.breakdown["news_score"]
         < flat.breakdown["news_score"]
@@ -85,9 +97,19 @@ def test_the_regime_moves_the_score_in_the_direction_of_the_mood() -> None:
 def test_the_regime_is_damped_relative_to_a_symbols_own_reading() -> None:
     # Same number, but market-wide: it must move the score less than a direct
     # read would, because it is not about this symbol.
-    direct = scoring.score(scoring.Features(sentiment_score=0.8))
-    regime = scoring.score(scoring.Features(market_sentiment=0.8))
-    neutral = scoring.score(scoring.Features())
+    direct = scoring.score(
+        scoring.Features(price_change_pct_24h=0.0, sentiment_score=0.8)
+    )
+    regime = scoring.score(
+        scoring.Features(price_change_pct_24h=0.0, market_sentiment=0.8)
+    )
+    # The baseline is a *measured* neutral, not an empty symbol: since
+    # renormalisation, knowing nothing excludes the news axis entirely rather
+    # than valuing it at the midpoint, so an empty Features has no news_score
+    # to subtract from.
+    neutral = scoring.score(
+        scoring.Features(price_change_pct_24h=0.0, sentiment_score=0.0)
+    )
     direct_lift = direct.breakdown["news_score"] - neutral.breakdown["news_score"]
     regime_lift = regime.breakdown["news_score"] - neutral.breakdown["news_score"]
     assert 0 < regime_lift < direct_lift
@@ -96,10 +118,15 @@ def test_the_regime_is_damped_relative_to_a_symbols_own_reading() -> None:
 def test_the_regime_does_not_inflate_confidence() -> None:
     # Confidence measures symbol-specific evidence. A market read is identical
     # for every symbol, so counting it would lift the whole book at once.
-    assert (
-        scoring.score(scoring.Features(market_sentiment=0.9)).confidence
-        == scoring.score(scoring.Features()).confidence
-    )
+    # Both carry the same symbol-specific evidence -- enough of it to clear the
+    # minimum-evidence floor on their own -- so the only difference is the
+    # regime read.
+    anchor = dict(price_change_pct_24h=0.0, volume_spike_ratio=2.0)
+    with_regime = scoring.score(scoring.Features(**anchor, market_sentiment=0.9))
+    without = scoring.score(scoring.Features(**anchor))
+    assert with_regime.confidence == without.confidence
+    # And it does reach the score — it is confidence it must not touch.
+    assert "news_score" in with_regime.breakdown
 
 
 def test_weights_still_sum_to_one() -> None:

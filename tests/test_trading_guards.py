@@ -5,6 +5,7 @@ from tests.trading_helpers import load_module
 
 class FakeCache:
     """Minimal async Cache stand-in: get + allow."""
+
     def __init__(self, values=None, allow=True):
         self._values = values or {}
         self._allow = allow
@@ -37,7 +38,9 @@ def test_rate_limit_blocks() -> None:
     config_mod = load_module("config")
     cache = FakeCache(allow=False)
     reason = asyncio.run(
-        guards.check_guards(cache, _cfg(config_mod, trading_enabled=True, max_orders_per_hour=10))
+        guards.check_guards(
+            cache, _cfg(config_mod, trading_enabled=True, max_orders_per_hour=10)
+        )
     )
     assert reason == "rate_limit"
     assert cache.allow_calls == [("trading:orders", 10, 3600)]

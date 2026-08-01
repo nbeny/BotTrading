@@ -22,5 +22,13 @@ def test_approve_and_reject_publish() -> None:
     svc = opp.OpportunitiesService(pub, FakeReader())
     asyncio.run(svc.approve("e1", issued_by="admin"))
     asyncio.run(svc.reject("e2", reason="no", issued_by="admin"))
-    assert (ControlCommand.APPROVE_OPPORTUNITY, {"event_id": "e1"}, "admin") in pub.calls
-    assert (ControlCommand.REJECT_OPPORTUNITY, {"event_id": "e2", "reason": "no"}, "admin") in pub.calls
+    assert (
+        ControlCommand.APPROVE_OPPORTUNITY,
+        {"event_id": "e1"},
+        "admin",
+    ) in pub.calls
+    assert (
+        ControlCommand.REJECT_OPPORTUNITY,
+        {"event_id": "e2", "reason": "no"},
+        "admin",
+    ) in pub.calls

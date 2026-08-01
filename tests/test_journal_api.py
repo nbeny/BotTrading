@@ -55,20 +55,51 @@ async def test_q3_compares_within_the_escalated_population() -> None:
     escaladés et non escaladés mesurerait le gate, pas l'analyste."""
     now = datetime(2026, 7, 25, tzinfo=UTC)
     rows = (
-        [{"symbol": "A", "escalated": True, "sonnet_called": True,
-          "sonnet_validated": True, "risk_verdict": None, "dominant_factor": "momentum",
-          "dedup_trigger": None, "market_cap_rank": 10, "confidence": 0.8,
-          "time": now}] * 5
-        + [{"symbol": "B", "escalated": True, "sonnet_called": True,
-            "sonnet_validated": False, "risk_verdict": None,
-            "dominant_factor": "volume",
-            "dedup_trigger": None, "market_cap_rank": 20, "confidence": 0.6,
-            "time": now}] * 5
-        + [{"symbol": "C", "escalated": False, "sonnet_called": False,
-            "sonnet_validated": None, "risk_verdict": None,
-            "dominant_factor": "sentiment",
-            "dedup_trigger": None, "market_cap_rank": 300, "confidence": 0.5,
-            "time": now}] * 90
+        [
+            {
+                "symbol": "A",
+                "escalated": True,
+                "sonnet_called": True,
+                "sonnet_validated": True,
+                "risk_verdict": None,
+                "dominant_factor": "momentum",
+                "dedup_trigger": None,
+                "market_cap_rank": 10,
+                "confidence": 0.8,
+                "time": now,
+            }
+        ]
+        * 5
+        + [
+            {
+                "symbol": "B",
+                "escalated": True,
+                "sonnet_called": True,
+                "sonnet_validated": False,
+                "risk_verdict": None,
+                "dominant_factor": "volume",
+                "dedup_trigger": None,
+                "market_cap_rank": 20,
+                "confidence": 0.6,
+                "time": now,
+            }
+        ]
+        * 5
+        + [
+            {
+                "symbol": "C",
+                "escalated": False,
+                "sonnet_called": False,
+                "sonnet_validated": None,
+                "risk_verdict": None,
+                "dominant_factor": "sentiment",
+                "dedup_trigger": None,
+                "market_cap_rank": 300,
+                "confidence": 0.5,
+                "time": now,
+            }
+        ]
+        * 90
     )
     resp = await japi.journal_summary(window="30d", session=FakeSession(rows))
     assert resp["sample"]["escalated"] == 10
@@ -99,8 +130,11 @@ async def test_questions_are_answered_per_horizon() -> None:
     detention courte realiste, +24 h une tendance plus large. Les collapser en
     un seul chiffre jetterait cette distinction."""
     resp = await japi.journal_summary(window="7d", session=FakeSession())
-    for question in ("q1_rejected_vs_approved", "q2_gate_discrimination",
-                     "q3_sonnet_value"):
+    for question in (
+        "q1_rejected_vs_approved",
+        "q2_gate_discrimination",
+        "q3_sonnet_value",
+    ):
         assert set(resp[question]) == set(japi.HORIZONS), question
 
 
@@ -110,11 +144,22 @@ async def test_comparisons_read_the_per_horizon_pnl_field() -> None:
     rapporter n=0 a chaque question pour toujours — un endpoint qui a l'air
     vivant et ne repond jamais."""
     rows = [
-        {"symbol": "A", "escalated": True, "sonnet_called": True,
-         "sonnet_validated": True, "risk_verdict": "rejected", "confidence": 0.8,
-         "dominant_factor": "momentum", "dedup_trigger": None,
-         "market_cap_rank": 10, "time": _T, "entry_price": 100.0,
-         "stop_loss": 95.0, "take_profit": 110.0, "sonnet_direction": "long"}
+        {
+            "symbol": "A",
+            "escalated": True,
+            "sonnet_called": True,
+            "sonnet_validated": True,
+            "risk_verdict": "rejected",
+            "confidence": 0.8,
+            "dominant_factor": "momentum",
+            "dedup_trigger": None,
+            "market_cap_rank": 10,
+            "time": _T,
+            "entry_price": 100.0,
+            "stop_loss": 95.0,
+            "take_profit": 110.0,
+            "sonnet_direction": "long",
+        }
     ]
     resp = await japi.journal_summary(window="7d", session=FakeSession(rows))
     # Aucun prix enregistre -> outcome no_data -> pnl None -> exclu du compte.

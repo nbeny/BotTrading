@@ -47,8 +47,12 @@ def _price(symbol="BTC", chg=5.0):
     from cmi_common.events.base import Source
 
     return PriceEvent(
-        source=Source.COINGECKO, symbol=symbol, coin_id="bitcoin",
-        price_usd=100.0, price_change_pct_24h=chg, volume_24h_usd=2e10,
+        source=Source.COINGECKO,
+        symbol=symbol,
+        coin_id="bitcoin",
+        price_usd=100.0,
+        price_change_pct_24h=chg,
+        volume_24h_usd=2e10,
     )
 
 
@@ -57,8 +61,11 @@ def _volume(symbol="BTC", ratio=3.0):
     from cmi_common.events.base import Source
 
     return VolumeEvent(
-        source=Source.COINGECKO, symbol=symbol, coin_id="bitcoin",
-        volume_24h_usd=2e10, volume_spike_ratio=ratio,
+        source=Source.COINGECKO,
+        symbol=symbol,
+        coin_id="bitcoin",
+        volume_24h_usd=2e10,
+        volume_spike_ratio=ratio,
     )
 
 
@@ -66,8 +73,12 @@ def _sentiment(symbol="BTC", score=0.4):
     from cmi_common.events import SentimentEvent
 
     return SentimentEvent(
-        symbol=symbol, sentiment_score=score, confidence=0.8,
-        model_name="m", input_kind="news", sample_size=10,
+        symbol=symbol,
+        sentiment_score=score,
+        confidence=0.8,
+        model_name="m",
+        input_kind="news",
+        sample_size=10,
     )
 
 
@@ -90,8 +101,9 @@ class Clock:
 
 
 # ── ce qui n'est jamais perdu ────────────────────────────────────────────────
-async def test_every_event_updates_the_features_even_when_no_analysis_is_emitted(
-) -> None:
+async def test_every_event_updates_the_features_even_when_no_analysis_is_emitted() -> (
+    None
+):
     """Le point central : agréger l'inférence ne doit pas filtrer les entrées."""
     store, producer, clock = FakeStore(), FakeProducer(), Clock()
     w = _worker(store, producer, clock)

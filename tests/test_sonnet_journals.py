@@ -129,9 +129,15 @@ async def test_journal_failure_does_not_suppress_the_decision() -> None:
             class R:
                 @staticmethod
                 def json():
-                    return {"validated": True, "direction": "long",
-                            "opportunity_score": 71, "confidence": 0.8,
-                            "rationale": "ok", "key_risks": []}
+                    return {
+                        "validated": True,
+                        "direction": "long",
+                        "opportunity_score": 71,
+                        "confidence": 0.8,
+                        "rationale": "ok",
+                        "key_risks": [],
+                    }
+
             return R()
 
     p = ExplodingJournal()

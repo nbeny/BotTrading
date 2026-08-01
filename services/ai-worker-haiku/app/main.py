@@ -38,7 +38,14 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     )
     consumer = EventConsumer(
         settings.kafka,
-        [Topic.PRICE, Topic.VOLUME, Topic.DEX, Topic.SENTIMENT],
+        [
+            Topic.PRICE,
+            Topic.VOLUME,
+            Topic.DEX,
+            Topic.SENTIMENT,
+            Topic.DERIVATIVES,
+            Topic.FUNDAMENTALS,
+        ],
         worker.handle,
         group_id="ai-worker-haiku",
     )

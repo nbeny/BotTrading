@@ -17,7 +17,9 @@ def test_publish_builds_control_event() -> None:
     commands = load_module("commands")
     producer = FakeProducer()
     pub = commands.CommandPublisher(producer)
-    asyncio.run(pub.publish(ControlCommand.SET_MODE, {"mode": "live"}, issued_by="admin"))
+    asyncio.run(
+        pub.publish(ControlCommand.SET_MODE, {"mode": "live"}, issued_by="admin")
+    )
     topic, ev = producer.published[0]
     assert topic == Topic.CONTROL
     assert ev.command == ControlCommand.SET_MODE

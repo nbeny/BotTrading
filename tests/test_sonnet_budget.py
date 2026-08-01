@@ -30,7 +30,11 @@ class _FakeCache:
 
 def _worker(cache, cap):
     return SonnetWorker(
-        claude=None, producer=None, cache=cache, max_calls_per_hour=cap, symbol_cooldown_s=900
+        claude=None,
+        producer=None,
+        cache=cache,
+        max_calls_per_hour=cap,
+        symbol_cooldown_s=900,
     )
 
 

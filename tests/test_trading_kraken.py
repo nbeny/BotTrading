@@ -39,10 +39,16 @@ def test_base_url_per_mode() -> None:
 
 def test_dry_run_send_order_makes_no_network_call() -> None:
     kraken, client = _client("dry_run")
-    result = asyncio.run(client.send_order(
-        pair="PF_SOLUSD", side="buy", order_type="lmt",
-        size=2.0, limit_price=150.0, cli_ord_id="evt-1",
-    ))
+    result = asyncio.run(
+        client.send_order(
+            pair="PF_SOLUSD",
+            side="buy",
+            order_type="lmt",
+            size=2.0,
+            limit_price=150.0,
+            cli_ord_id="evt-1",
+        )
+    )
     assert result["result"] == "success"
     assert result["order_id"].startswith("DRYRUN-")
     assert result["dry_run"] is True

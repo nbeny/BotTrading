@@ -13,7 +13,11 @@ import respx
 _spec = importlib.util.spec_from_file_location(
     "gdelt_provider",
     Path(__file__).resolve().parents[1]
-    / "services" / "collector-news" / "app" / "providers" / "gdelt.py",
+    / "services"
+    / "collector-news"
+    / "app"
+    / "providers"
+    / "gdelt.py",
 )
 gd = importlib.util.module_from_spec(_spec)
 assert _spec.loader
@@ -25,17 +29,28 @@ from cmi_common.sources import RateLimitedError  # noqa: E402
 
 def _article(url: str, title: str) -> dict:
     return {
-        "url": url, "title": title, "seendate": "20240102T120000Z",
-        "domain": "example.com", "language": "English", "sourcecountry": "US",
+        "url": url,
+        "title": title,
+        "seendate": "20240102T120000Z",
+        "domain": "example.com",
+        "language": "English",
+        "sourcecountry": "US",
     }
 
 
 @respx.mock
 async def test_maps_articles_to_rawitems() -> None:
-    respx.get(gd.DOC_URL).mock(return_value=httpx.Response(200, json={
-        "articles": [_article("https://x/a", "Bitcoin surges"),
-                     _article("https://x/b", "Ether update")],
-    }))
+    respx.get(gd.DOC_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "articles": [
+                    _article("https://x/a", "Bitcoin surges"),
+                    _article("https://x/b", "Ether update"),
+                ],
+            },
+        )
+    )
     provider = gd.GdeltProvider()
     items = await provider.fetch()
     await provider.close()

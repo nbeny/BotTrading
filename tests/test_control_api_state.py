@@ -13,9 +13,16 @@ class FakeCache:
 
 def test_read_settings_returns_runtime() -> None:
     state = load_module("state")
-    cache = FakeCache({"trading:runtime": {"mode": "demo", "trading_enabled": True,
-                                           "auto_trading_enabled": False,
-                                           "max_order_usd": 500.0}})
+    cache = FakeCache(
+        {
+            "trading:runtime": {
+                "mode": "demo",
+                "trading_enabled": True,
+                "auto_trading_enabled": False,
+                "max_order_usd": 500.0,
+            }
+        }
+    )
     reader = state.StateReader(cache, db=None)
     settings = asyncio.run(reader.settings())
     assert settings["mode"] == "demo"

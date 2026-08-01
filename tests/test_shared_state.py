@@ -2,8 +2,11 @@ import asyncio
 
 
 class FakeRedis:
-    def __init__(self, members): self._members = members
-    async def smembers(self, key): return set(self._members)
+    def __init__(self, members):
+        self._members = members
+
+    async def smembers(self, key):
+        return set(self._members)
 
 
 class FakeCache:
@@ -11,7 +14,8 @@ class FakeCache:
         self._values = values
         self.client = FakeRedis(members)
 
-    async def get_json(self, key): return self._values.get(key)
+    async def get_json(self, key):
+        return self._values.get(key)
 
 
 def test_positions_injects_event_id():

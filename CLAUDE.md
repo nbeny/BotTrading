@@ -84,7 +84,15 @@ plane from `app/read_api.py` (mounted at root): `/portfolio*`, `/market/*`, `/ri
 `/api/v1/{opportunities,decisions,trades}`).
 Response shapes are locked to the TS contract by a manifest (`app/read_contract.py`) enforced by an
 offline parity test (`tests/test_read_contract.py`) and a live harness (`scripts/verify_read_live.py`).
-Every frontend read path has a matching route; live mode is wired. See
+Every frontend read path has a matching route; live mode is wired.
+
+**`/market` is a scan surface, not a stream.** The token table is bounded (15 rows, search + sort,
+never `autoHeight` — it once grew to ~124 rows and pushed every other panel six screens down), and
+everything token-specific lives in a right-hand drawer driven by `?token=SYMBOL` in the URL. One
+endpoint feeds it, `GET /market/tokens/{symbol}/dossier` (`app/dossier.py` holds its pure assembly):
+score breakdown over the seven axes, pipeline verdict, decisions, news+social, exposure. The drawer
+deliberately has **no** live feed — `LiveEventStream` belongs to `/command`, and duplicating it here
+is what made the page unreadable. See
 `memory/web-terminal-backend-gap.md` and `memory/control-api-owns-frontend-control.md`.
 
 **Pipeline graph (`app/systems_pipeline.py`).** Each of the 7 Command Center stages reports a
@@ -123,7 +131,26 @@ penalised, **an unmeasured value that leaks in as a confident reading always mov
 direction of that reading**. Keeping `None` and a measured `0` distinct is load-bearing at each
 hop — collector, mapper, cache, feature store, scorer — not a stylistic preference. Fourteen
 defects of exactly that shape were found building this, none of which raised, logged, or failed a
-test.
+test; eleven more surfaced building the `/market` drawer, which surfaces these same values.
+
+**The axis list lives in three independent copies** — `decision-engine/app/scoring.py::WEIGHTS`,
+`api-gateway/app/dossier.py::AXIS_KEYS`, `frontend/src/lib/types/dossier.ts::SCORE_AXES` — and none
+imports another (api-gateway must not depend on decision-engine). Nothing checks they stay aligned:
+an eighth axis added to the scorer would simply never appear in the drawer, with no error and no
+failing test. All three move together, or the new axis is invisible.
+
+Two false friends around the same values, both of which cost a debugging round here.
+`DecisionJournal.factors` is **not** the seven axes — it carries the Haiku four-factor triage
+(`momentum`/`volume`/`sentiment`/`liquidity`), a disjoint namespace; the v2 breakdown lives in
+`Decision.payload["meta"]["breakdown"]`. And `PipelineRejection.stage` holds the event *source*
+(`decision_engine`/`risk_engine`, via `persister.stage_for`), not a `systems_pipeline::STAGE_SPECS`
+id — anything rendering it must normalise first.
+
+**Opportunity scores travel on two scales.** `map_token` and `map_decision` divide by 100, so
+`MarketToken`/`WorkerDecision` carry 0–1 and `ScoreChip` multiplies back for display; the dossier's
+`score.value` is the raw 0–100 `Decision.opportunity_score`. Both appear in the *same* dossier
+response. A mapper that forgets to divide, or a component that forgets to multiply, renders a
+plausible wrong number rather than failing.
 
 **Deployment:** `docker-compose.vps.yml` + `.github/workflows/deploy.yml` build every service to
 GHCR and auto-deploy to the Hostinger VPS behind the shared Traefik on push to `master`

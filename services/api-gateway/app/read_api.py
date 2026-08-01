@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cmi_common.db import (
     AccountSnapshot,
     Decision,
+    DecisionJournal,
     Price,
     ServiceHealth,
     Signal,
@@ -37,6 +38,7 @@ from cmi_common.db import (
 from cmi_common.db.models import ContentSentimentAgg, PipelineRejection, RawContent
 from cmi_common.sources import SqlCandleReader, SqlSentimentAggReader
 
+from .dossier import build_pipeline, build_score
 from .funnel import SCORE_BUCKET_WIDTH, build_funnel
 from .routers import get_session_dep
 from .systems_pipeline import (
@@ -422,6 +424,122 @@ async def market_token_prices(
     )
     rows = (await session.execute(stmt)).scalars().all()
     return [map_price_point(r) for r in rows]
+
+
+#: Bornage des listes du dossier. Le drawer est une lecture de contexte, pas un
+#: explorateur : au-delà, l'utilisateur passe par /data.
+DOSSIER_LIMIT = 20
+
+
+@router.get("/market/tokens/{symbol}/dossier")
+async def market_token_dossier(
+    symbol: str, session: AsyncSession = Depends(get_session_dep)
+) -> dict[str, Any]:
+    """Tout ce que la plateforme sait d'un token, en un aller-retour.
+
+    Sert le drawer de /market. Monté sur ce routeur, donc authentifié :
+    ``main.py`` inclut ``read_api.router`` avec ``Depends(require_principal)``.
+
+    Répond 200 même pour un symbole sans historique — un 404 dirait « inconnu »
+    là où la réponse est « rien d'analysé pour l'instant ».
+    """
+    sym = symbol.upper()
+
+    # Deux sources distinctes, à ne pas confondre : la décomposition en sept
+    # axes vit dans `Decision.payload["meta"]["breakdown"]`, tandis que le
+    # journal porte le parcours (escalade, verdict Sonnet, verdict risque).
+    scored = (
+        (
+            await session.execute(
+                select(Decision)
+                .where(Decision.symbol == sym)
+                .order_by(Decision.created_at.desc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    journal = (
+        (
+            await session.execute(
+                select(DecisionJournal)
+                .where(DecisionJournal.symbol == sym)
+                .order_by(DecisionJournal.time.desc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    rejection = (
+        (
+            await session.execute(
+                select(PipelineRejection)
+                .where(PipelineRejection.symbol == sym)
+                .order_by(PipelineRejection.time.desc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    decisions = (
+        (
+            await session.execute(
+                select(Decision)
+                .where(Decision.symbol == sym)
+                .order_by(Decision.created_at.desc())
+                .limit(DOSSIER_LIMIT)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # news ET social : le drawer montre tout ce qui nomme le symbole, là où
+    # /market/news filtre sur kind == "news".
+    content = (
+        (
+            await session.execute(
+                select(RawContent)
+                .where(RawContent.symbols.contains([sym]))
+                .order_by(RawContent.published_at.desc().nullslast())
+                .limit(DOSSIER_LIMIT)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    trades = (
+        (
+            await session.execute(
+                select(Trade)
+                .where(Trade.symbol == sym)
+                .order_by(Trade.created_at.desc())
+                .limit(DOSSIER_LIMIT)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    # Réutilisé et non re-dérivé : `map_position` convertit une *fraction* de
+    # taille en quantité via le capital de référence, donc recalculer ici ferait
+    # afficher au drawer une taille différente de /portfolio pour la même
+    # position.
+    positions, _snapshot, capital = await _portfolio_basis(session)
+
+    return {
+        "symbol": sym,
+        "score": build_score(scored),
+        "pipeline": build_pipeline(journal, rejection),
+        "decisions": [map_decision(d) for d in decisions],
+        "content": [map_news(c) for c in content],
+        "exposure": {
+            "open_positions": [p for p in positions if p["symbol"] == sym],
+            "recent_trades": [map_portfolio_trade(t, capital) for t in trades],
+        },
+    }
 
 
 @router.get("/market/news")

@@ -1681,7 +1681,9 @@ describe('PipelineVerdictPanel', () => {
         }}
       />,
     );
-    expect(screen.getByText(/Risque/)).toBeInTheDocument();
+    // « Risque » apparaît deux fois quand l'étage atteint et l'étage de
+    // blocage coïncident — le cas courant. `getByText` exigerait l'unicité.
+    expect(screen.getAllByText(/Risque/).length).toBeGreaterThan(0);
     expect(screen.getByText(/score_below_threshold/)).toBeInTheDocument();
   });
 
@@ -1697,14 +1699,37 @@ describe('PipelineVerdictPanel', () => {
           reached_stage: null,
           blocked_at: null,
           block_reason: null,
-          escalated: false,
-          sonnet_called: false,
+          escalated: null,
+          sonnet_called: null,
           sonnet_validated: null,
           last_event_at: null,
         }}
       />,
     );
     expect(screen.getByText(/Jamais analysé/)).toBeInTheDocument();
+  });
+
+  it('une escalade inconnue ne s’affiche pas comme « non escaladé »', () => {
+    // Cas du rejet sans ligne de journal : on ignore si Haiku avait escaladé.
+    // Ne rien afficher est honnête ; afficher « non » serait une affirmation
+    // que personne n'a mesurée.
+    render(
+      <PipelineVerdictPanel
+        verdict={{ ...base, escalated: null, sonnet_called: null, sonnet_validated: null }}
+      />,
+    );
+    expect(screen.queryByText(/Escaladé/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Sonnet/)).not.toBeInTheDocument();
+  });
+
+  it('distingue un Sonnet non validé d’un verdict Sonnet inconnu', () => {
+    const { rerender } = render(
+      <PipelineVerdictPanel verdict={{ ...base, sonnet_validated: false }} />,
+    );
+    expect(screen.getByText(/Sonnet — non validé/)).toBeInTheDocument();
+
+    rerender(<PipelineVerdictPanel verdict={{ ...base, sonnet_validated: null }} />);
+    expect(screen.getByText(/Sonnet — verdict inconnu/)).toBeInTheDocument();
   });
 });
 ```
@@ -1768,10 +1793,13 @@ export function PipelineVerdictPanel({ verdict }: Props) {
     <Box>
       <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
         <Chip size="small" label={`Atteint : ${label(verdict.reached_stage)}`} />
-        {verdict.escalated && (
+        {/* `=== true` et non `&&` : les deux se comportent pareil pour `null`,
+            mais celui-ci dit l'intention — seul un oui MESURÉ affiche un chip.
+            `null` veut dire « on ne sait pas », jamais « non ». */}
+        {verdict.escalated === true && (
           <Chip size="small" color="warning" variant="outlined" label="Escaladé" />
         )}
-        {verdict.sonnet_called && (
+        {verdict.sonnet_called === true && (
           <Chip
             size="small"
             color={verdict.sonnet_validated ? 'success' : 'default'}

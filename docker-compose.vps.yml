@@ -235,6 +235,32 @@ services:
       KRAKEN_MAJORS_CADENCE: ${KRAKEN_MAJORS_CADENCE:-300}
       KRAKEN_MAJOR_MIN_MENTIONS_7D: ${KRAKEN_MAJOR_MIN_MENTIONS_7D:-10}
 
+  collector-defillama:
+    <<: *svc
+    image: ${REGISTRY:-ghcr.io/nbeny}/bottrading-collector-defillama:${TAG:-latest}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      DEFILLAMA_POLL_INTERVAL: ${DEFILLAMA_POLL_INTERVAL:-600}
+      DEFILLAMA_MAX_UNLOCK_FETCHES: ${DEFILLAMA_MAX_UNLOCK_FETCHES:-3}
+
+  collector-binance-futures:
+    <<: *svc
+    image: ${REGISTRY:-ghcr.io/nbeny}/bottrading-collector-binance-futures:${TAG:-latest}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      BINANCE_FUTURES_POLL_INTERVAL: ${BINANCE_FUTURES_POLL_INTERVAL:-300}
+      KRAKEN_MAJOR_MIN_MENTIONS_7D: ${KRAKEN_MAJOR_MIN_MENTIONS_7D:-10}
+
   # ----------------------------------------------------------- analytics
   sentiment-service:
     <<: *svc

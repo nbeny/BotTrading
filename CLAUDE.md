@@ -98,6 +98,33 @@ so "not measured" was served as a confident `0`. Metric names are now shared con
 `cmi_common.observability`. Aggregates sit behind a 30s TTL cache; a failed query reports stale or
 unknown, never zero.
 
+**Positioning & fundamentals (`collector-binance-futures`, `collector-defillama`).** Two keyless
+sources feed two new scoring axes: `positioning` (funding, open interest, long/short — contrarian
+on crowding) and `fundamentals` (TVL, fees, token unlocks). Both republish every cycle because
+`FeatureStore` expires at 900s while funding moves every 8h.
+
+Three facts about these APIs cost real debugging and are worth not rediscovering. **Unlocks are
+not on DefiLlama's free API** (`/emissions` → 402); they come from the `defillama-datasets.llama.fi`
+CDN at ~2.25 MB per protocol, so the collector fetches at most 3 per cycle round-robin and caches
+the *extraction* for 24h — but reads the cache for **every** eligible token each cycle, because the
+budget bounds downloads, not reporting. **Emission slugs are parent slugs** (`aave`, never
+`aave-v2`), and **no two `/protocols` rows share a `gecko_id`** — so a token's TVL is rolled up
+through `parentProtocol`, without which AAVE reports 0.76% of its real TVL. `/overview/fees` needs
+`excludeTotalDataChart*` or it is 24.6 MB, and carries no `gecko_id` at all.
+
+**Scoring is now seven axes renormalised over present weight** (`decision-engine/app/scoring.py`) —
+an absent axis is *excluded*, not scored 0.0. That was the `RISK_MIN_SCORE=70` / max-observed-68
+deadlock: absent data was priced as worst-case data. `confidence` is the share of weight backed by
+**symbol-specific** evidence (the market-wide regime read informs the score but not confidence,
+since it is identical for every symbol).
+
+The corollary governs every layer that feeds it: because an absent axis is excluded rather than
+penalised, **an unmeasured value that leaks in as a confident reading always moves the score in the
+direction of that reading**. Keeping `None` and a measured `0` distinct is load-bearing at each
+hop — collector, mapper, cache, feature store, scorer — not a stylistic preference. Fourteen
+defects of exactly that shape were found building this, none of which raised, logged, or failed a
+test.
+
 **Deployment:** `docker-compose.vps.yml` + `.github/workflows/deploy.yml` build every service to
 GHCR and auto-deploy to the Hostinger VPS behind the shared Traefik on push to `master`
 (single host `crypto.nbeny.fr`, REST proxied server-side by Next.js). See

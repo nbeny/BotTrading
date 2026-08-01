@@ -60,6 +60,8 @@ jobs:
           - { name: collector-social,      dockerfile: docker/Dockerfile,     path: services/collector-social }
           - { name: collector-news,        dockerfile: docker/Dockerfile,     path: services/collector-news }
           - { name: collector-kraken,      dockerfile: docker/Dockerfile,     path: services/collector-kraken }
+          - { name: collector-defillama,   dockerfile: docker/Dockerfile,     path: services/collector-defillama }
+          - { name: collector-binance-futures, dockerfile: docker/Dockerfile, path: services/collector-binance-futures }
           - { name: decision-engine,       dockerfile: docker/Dockerfile,     path: services/decision-engine }
           - { name: risk-engine,           dockerfile: docker/Dockerfile,     path: services/risk-engine }
           - { name: trading-engine,        dockerfile: docker/Dockerfile,     path: services/trading-engine }

@@ -445,21 +445,6 @@ async def market_token_dossier(
     """
     sym = symbol.upper()
 
-    # Deux sources distinctes, à ne pas confondre : la décomposition en sept
-    # axes vit dans `Decision.payload["meta"]["breakdown"]`, tandis que le
-    # journal porte le parcours (escalade, verdict Sonnet, verdict risque).
-    scored = (
-        (
-            await session.execute(
-                select(Decision)
-                .where(Decision.symbol == sym)
-                .order_by(Decision.created_at.desc())
-                .limit(1)
-            )
-        )
-        .scalars()
-        .first()
-    )
     journal = (
         (
             await session.execute(
@@ -484,6 +469,10 @@ async def market_token_dossier(
         .scalars()
         .first()
     )
+    # Deux sources distinctes, à ne pas confondre : la décomposition en sept
+    # axes vit dans `Decision.payload["meta"]["breakdown"]`, tandis que le
+    # journal (déjà chargé ci-dessus) porte le parcours (escalade, verdict
+    # Sonnet, verdict risque).
     decisions = (
         (
             await session.execute(
@@ -496,14 +485,24 @@ async def market_token_dossier(
         .scalars()
         .all()
     )
+    # `decisions` est trié comme l'était la requête limit(1) qu'il remplace :
+    # sa tête EST la dernière décision. Une requête de moins sur un chemin qui
+    # part à chaque clic de ligne.
+    scored = decisions[0] if decisions else None
     # news ET social : le drawer montre tout ce qui nomme le symbole, là où
     # /market/news filtre sur kind == "news".
+    #
+    # Tri sur `fetched_at`, comme `data_content`, et non sur `published_at` :
+    # quatre des sept sources sociales (bluesky, reddit, mastodon, fourchan) ne
+    # renseignent jamais `published_at`. Trier dessus reléguerait tout ce social
+    # en fin de liste quelle que soit sa fraîcheur, et la section n'afficherait
+    # que des news — sans erreur ni test rouge.
     content = (
         (
             await session.execute(
                 select(RawContent)
                 .where(RawContent.symbols.contains([sym]))
-                .order_by(RawContent.published_at.desc().nullslast())
+                .order_by(RawContent.fetched_at.desc())
                 .limit(DOSSIER_LIMIT)
             )
         )

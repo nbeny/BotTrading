@@ -27,15 +27,34 @@ class _Result:
 
 
 class _EmptySession:
+    """Session factice qui compte ses appels.
+
+    Le comptage n'est pas une coquetterie : sans lui, ces tests passent encore
+    si une requête disparaît du handler — vérifié en supprimant la requête
+    `content`, les trois assertions de forme restaient vertes.
+    """
+
+    def __init__(self) -> None:
+        self.executed = 0
+
     async def execute(self, _stmt, _params=None):
+        self.executed += 1
         return _Result()
 
     async def scalar(self, _stmt):
         return 0
 
 
+# Cinq requêtes propres au dossier (journal, rejet, décisions, contenu,
+# trades — `scored` est dérivé de `decisions`, plus de requête à part) plus
+# trois de `_portfolio_basis` (`_account_snapshot`, puis `_open_positions` :
+# trades ouverts + derniers prix). 5 + 3 = 8.
+EXPECTED_QUERIES = 8
+
+
 async def test_unknown_symbol_returns_an_honest_empty_dossier() -> None:
-    resp = await read_api.market_token_dossier(symbol="sol", session=_EmptySession())
+    session = _EmptySession()
+    resp = await read_api.market_token_dossier(symbol="sol", session=session)
 
     assert resp["symbol"] == "SOL"
     assert resp["score"]["value"] is None
@@ -48,8 +67,18 @@ async def test_unknown_symbol_returns_an_honest_empty_dossier() -> None:
 
 
 async def test_symbol_is_upper_cased() -> None:
-    resp = await read_api.market_token_dossier(symbol="eth", session=_EmptySession())
+    session = _EmptySession()
+    resp = await read_api.market_token_dossier(symbol="eth", session=session)
     assert resp["symbol"] == "ETH"
+
+
+async def test_the_dossier_issues_every_query_it_claims_to() -> None:
+    """Cinq requêtes propres au dossier — décision, journal, rejet, contenu,
+    trades — plus celles de `_portfolio_basis`, qui a les siennes. Ce test fige
+    le total : le voir bouger doit être un choix, pas un accident."""
+    session = _EmptySession()
+    await read_api.market_token_dossier(symbol="SOL", session=session)
+    assert session.executed == EXPECTED_QUERIES
 
 
 def test_the_dossier_route_lives_on_the_authenticated_router() -> None:

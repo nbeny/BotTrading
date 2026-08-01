@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import {
   Box,
   Card,
@@ -21,6 +22,8 @@ interface Props {
   decisions: WorkerDecision[];
   loading: boolean;
   now: number;
+  /** `true` dans le drawer : pas de Card ni de titre, le conteneur les porte. */
+  bare?: boolean;
 }
 
 const WORKER_META: Record<
@@ -32,6 +35,7 @@ const WORKER_META: Record<
 };
 
 function DecisionCard({ d, now }: { d: WorkerDecision; now: number }) {
+  const [expanded, setExpanded] = useState(false);
   const meta = WORKER_META[d.worker];
 
   return (
@@ -100,18 +104,40 @@ function DecisionCard({ d, now }: { d: WorkerDecision; now: number }) {
         </Stack>
       </Stack>
 
-      {/* Justification — key feature, displayed prominently */}
+      {/* Justification — key feature, displayed prominently; folds to 3 lines so one
+          card can't push the rest of the drawer out of view. */}
       <Box
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        onClick={() => setExpanded((v) => !v)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setExpanded((v) => !v);
+          }
+        }}
         sx={{
           p: 1.5,
           borderRadius: 1.5,
           bgcolor: 'rgba(0,0,0,0.2)',
           border: '1px solid rgba(255,255,255,0.05)',
+          cursor: 'pointer',
+          '&:focus-visible': {
+            outline: '2px solid',
+            outlineColor: 'primary.main',
+            outlineOffset: 2,
+          },
         }}
       >
-        <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 0.6, display: 'block', mb: 0.75 }}>
-          Justification
-        </Typography>
+        <Stack direction="row" alignItems="center" spacing={0.5} sx={{ mb: 0.75 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: 0.6 }}>
+            Justification
+          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ fontSize: 10, lineHeight: 1 }}>
+            {expanded ? '▲' : '▼'}
+          </Typography>
+        </Stack>
         <Typography
           variant="body2"
           sx={{
@@ -120,6 +146,14 @@ function DecisionCard({ d, now }: { d: WorkerDecision; now: number }) {
             fontSize: 13,
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-word',
+            ...(expanded
+              ? {}
+              : {
+                  display: '-webkit-box',
+                  WebkitLineClamp: 3,
+                  WebkitBoxOrient: 'vertical',
+                  overflow: 'hidden',
+                }),
           }}
         >
           {d.justification}
@@ -156,7 +190,9 @@ function WorkerGroup({
   );
 }
 
-export function WorkerDecisionsPanel({ decisions, loading, now }: Props) {
+export function WorkerDecisionsPanel({ decisions, loading, now, bare }: Props) {
+  // The loading skeleton and the empty state already render without a Card
+  // wrapper, so both are `bare`-compatible as-is — nothing to branch on here.
   if (loading) {
     return (
       <Stack spacing={1.5}>
@@ -174,20 +210,26 @@ export function WorkerDecisionsPanel({ decisions, loading, now }: Props) {
   const haikuDecisions = decisions.filter((d) => d.worker === 'haiku');
   const sonnetDecisions = decisions.filter((d) => d.worker === 'sonnet');
 
+  const body = (
+    <Stack spacing={3} divider={<Divider sx={{ borderColor: 'rgba(255,255,255,0.06)' }} />}>
+      {sonnetDecisions.length > 0 && (
+        <WorkerGroup worker="sonnet" decisions={sonnetDecisions} now={now} />
+      )}
+      {haikuDecisions.length > 0 && (
+        <WorkerGroup worker="haiku" decisions={haikuDecisions} now={now} />
+      )}
+    </Stack>
+  );
+
+  if (bare) return body;
+
   return (
     <Card sx={{ height: '100%' }}>
       <CardContent>
         <Typography variant="h6" sx={{ mb: 2 }}>
           Décisions des workers Claude
         </Typography>
-        <Stack spacing={3} divider={<Divider sx={{ borderColor: 'rgba(255,255,255,0.06)' }} />}>
-          {sonnetDecisions.length > 0 && (
-            <WorkerGroup worker="sonnet" decisions={sonnetDecisions} now={now} />
-          )}
-          {haikuDecisions.length > 0 && (
-            <WorkerGroup worker="haiku" decisions={haikuDecisions} now={now} />
-          )}
-        </Stack>
+        {body}
       </CardContent>
     </Card>
   );

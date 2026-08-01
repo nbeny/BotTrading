@@ -113,6 +113,35 @@ CONTRACT: dict[str, set[str]] = {
         "escalated",
         "created_at",
     },
+    # Le dossier d'un token — les trois formes sont déclarées séparément parce
+    # que `score` et `pipeline` sont des objets imbriqués : une dérive à
+    # l'intérieur est invisible d'un contrôle de clés au premier niveau et
+    # n'apparaîtrait que comme `undefined` dans le navigateur.
+    "market/dossier": {
+        "symbol",
+        "score",
+        "pipeline",
+        "decisions",
+        "content",
+        "exposure",
+    },
+    "market/dossier.score": {
+        "value",
+        "confidence",
+        "axes",
+        "axes_total",
+        "insufficient_evidence",
+        "computed_at",
+    },
+    "market/dossier.pipeline": {
+        "reached_stage",
+        "blocked_at",
+        "block_reason",
+        "escalated",
+        "sonnet_called",
+        "sonnet_validated",
+        "last_event_at",
+    },
     "risk/exposure": {
         "total_exposure_usd",
         "total_exposure_pct",

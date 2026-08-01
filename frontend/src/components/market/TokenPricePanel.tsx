@@ -38,9 +38,11 @@ function StatItem({ label, value }: StatItemProps) {
 
 interface Props {
   token: MarketToken;
+  /** `true` dans le drawer : ni Card ni en-tête, le conteneur les porte déjà. */
+  bare?: boolean;
 }
 
-export function TokenPricePanel({ token }: Props) {
+export function TokenPricePanel({ token, bare = false }: Props) {
   const [range, setRange] = useState<Range>('1d');
 
   const { data: prices = [], isLoading } = useQuery({
@@ -49,11 +51,18 @@ export function TokenPricePanel({ token }: Props) {
     refetchInterval: 60_000,
   });
 
-  return (
-    <Card sx={{ height: '100%' }}>
-      <CardContent>
-        {/* Header */}
-        <Stack direction="row" justifyContent="space-between" alignItems="flex-start" flexWrap="wrap" gap={1} sx={{ mb: 2 }}>
+  const body = (
+    <>
+      {/* Header — masqué dans le drawer, qui affiche déjà symbole, nom et prix */}
+      <Stack
+        direction="row"
+        justifyContent={bare ? 'flex-end' : 'space-between'}
+        alignItems="flex-start"
+        flexWrap="wrap"
+        gap={1}
+        sx={{ mb: 2 }}
+      >
+        {!bare && (
           <Box>
             <Typography variant="h6" sx={{ fontWeight: 700 }}>
               {token.symbol}
@@ -65,68 +74,76 @@ export function TokenPricePanel({ token }: Props) {
               {fmtUsd(token.price_usd)}
             </Typography>
           </Box>
-          <ToggleButtonGroup
-            size="small"
-            exclusive
-            value={range}
-            onChange={(_, v: Range | null) => v && setRange(v)}
-          >
-            {(['1d', '7d', '30d'] as Range[]).map((r) => (
-              <ToggleButton key={r} value={r} sx={{ px: 1.5, py: 0.25, fontSize: 12 }}>
-                {r}
-              </ToggleButton>
-            ))}
-          </ToggleButtonGroup>
-        </Stack>
-
-        {/* Stat strip */}
-        <Box
-          sx={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))',
-            gap: 2,
-            mb: 2,
-            p: 1.5,
-            borderRadius: 1.5,
-            bgcolor: 'rgba(255,255,255,0.03)',
-            border: '1px solid rgba(255,255,255,0.06)',
-          }}
-        >
-          <StatItem
-            label="Variation 24h"
-            value={<DeltaText value={token.price_change_pct_24h} variant="body2" />}
-          />
-          <StatItem
-            label="Volume 24h"
-            value={
-              <Typography variant="body2" className="mono">
-                {fmtUsdCompact(token.volume_24h_usd)}
-              </Typography>
-            }
-          />
-          <StatItem
-            label="Liquidité"
-            value={
-              <Typography variant="body2" className="mono">
-                {fmtUsdCompact(token.liquidity_usd)}
-              </Typography>
-            }
-          />
-          <StatItem
-            label="Sentiment"
-            value={<SentimentChip score={token.sentiment_score} />}
-          />
-        </Box>
-
-        {/* Chart */}
-        {isLoading ? (
-          <Skeleton variant="rectangular" height={240} sx={{ borderRadius: 1 }} />
-        ) : prices.length === 0 ? (
-          <EmptyState message="Pas de données de prix disponibles." />
-        ) : (
-          <PriceAreaChart data={prices} height={240} color="#5b8def" dataKey="price" />
         )}
-      </CardContent>
+        <ToggleButtonGroup
+          size="small"
+          exclusive
+          value={range}
+          onChange={(_, v: Range | null) => v && setRange(v)}
+        >
+          {(['1d', '7d', '30d'] as Range[]).map((r) => (
+            <ToggleButton key={r} value={r} sx={{ px: 1.5, py: 0.25, fontSize: 12 }}>
+              {r}
+            </ToggleButton>
+          ))}
+        </ToggleButtonGroup>
+      </Stack>
+
+      {/* Stat strip */}
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))',
+          gap: 2,
+          mb: 2,
+          p: 1.5,
+          borderRadius: 1.5,
+          bgcolor: 'rgba(255,255,255,0.03)',
+          border: '1px solid rgba(255,255,255,0.06)',
+        }}
+      >
+        <StatItem
+          label="Variation 24h"
+          value={<DeltaText value={token.price_change_pct_24h} variant="body2" />}
+        />
+        <StatItem
+          label="Volume 24h"
+          value={
+            <Typography variant="body2" className="mono">
+              {fmtUsdCompact(token.volume_24h_usd)}
+            </Typography>
+          }
+        />
+        <StatItem
+          label="Liquidité"
+          value={
+            <Typography variant="body2" className="mono">
+              {fmtUsdCompact(token.liquidity_usd)}
+            </Typography>
+          }
+        />
+        <StatItem
+          label="Sentiment"
+          value={<SentimentChip score={token.sentiment_score} />}
+        />
+      </Box>
+
+      {/* Chart */}
+      {isLoading ? (
+        <Skeleton variant="rectangular" height={240} sx={{ borderRadius: 1 }} />
+      ) : prices.length === 0 ? (
+        <EmptyState message="Pas de données de prix disponibles." />
+      ) : (
+        <PriceAreaChart data={prices} height={240} color="#5b8def" dataKey="price" />
+      )}
+    </>
+  );
+
+  if (bare) return <Box>{body}</Box>;
+
+  return (
+    <Card sx={{ height: '100%' }}>
+      <CardContent>{body}</CardContent>
     </Card>
   );
 }

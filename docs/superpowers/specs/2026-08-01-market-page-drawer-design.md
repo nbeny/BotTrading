@@ -281,8 +281,8 @@ Tests spécifiques à écrire :
 |---|---|
 | `frontend/src/components/market/TokenDossierDrawer.tsx` | conteneur du drawer, orchestre les sections |
 | `frontend/src/components/market/ScoreBreakdown.tsx` | section 3 — les 7 axes, `—` pour un axe absent |
-| `frontend/src/components/market/PipelineVerdict.tsx` | section 4 — étage atteint / étage de mort |
-| `frontend/src/components/market/TokenExposure.tsx` | section 7 — positions et trades |
+| `frontend/src/components/market/PipelineVerdictPanel.tsx` | section 4 — étage atteint / étage de mort |
+| `frontend/src/components/market/TokenExposurePanel.tsx` | section 7 — positions et trades |
 | `frontend/src/app/api/mock/market/tokens/[symbol]/dossier/route.ts` | parité mock |
 
 ### Modifiés

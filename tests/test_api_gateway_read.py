@@ -160,8 +160,23 @@ def test_map_signal_event_shape() -> None:
     )
     d = map_signal_event(row)
     assert d["event_type"] == "AnalysisEvent"
-    assert d["opportunity_score"] == 82
+    assert d["opportunity_score"] == 0.82
     assert d["escalate"] is True
+
+
+def test_map_signal_event_normalises_the_score_to_the_frontend_scale() -> None:
+    """`Signal` stores 0-100, the frontend speaks 0-1 everywhere else — and the
+    mock store already emitted 0-1 for this same event type, so live and mock
+    disagreed until this was fixed."""
+    row = SimpleNamespace(
+        symbol="BTC",
+        opportunity_score=79,
+        confidence=0.8,
+        reason="x",
+        escalated=False,
+        time=NOW,
+    )
+    assert map_signal_event(row)["opportunity_score"] == 0.79
 
 
 def test_map_decision_shape() -> None:

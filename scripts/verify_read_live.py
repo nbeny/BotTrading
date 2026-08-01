@@ -112,6 +112,10 @@ async def main() -> int:
             ("market/tokens", read_api.market_tokens(session=s)),
             ("market/news", read_api.market_news(limit=20, session=s)),
             ("market/decisions", read_api.market_decisions(limit=30, session=s)),
+            (
+                "market/dossier",
+                read_api.market_token_dossier(symbol="BTC", session=s),
+            ),
             ("risk/exposure", read_api.risk_exposure(session=s)),
             ("risk/limits", read_api.risk_limits(session=s)),
             ("risk/alerts", read_api.risk_alerts(limit=30, session=s)),

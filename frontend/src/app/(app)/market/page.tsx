@@ -1,21 +1,35 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Box, Card, CardContent, Skeleton, Typography } from '@mui/material';
+import { Suspense, useCallback, useEffect, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Box, Card, CardContent, Typography } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
 import { marketApi } from '@/lib/api/endpoints';
 import { PageHeader } from '@/components/common';
-import { LiveEventStream } from '@/components/command/LiveEventStream';
 import { TokensTable } from '@/components/market/TokensTable';
-import { TokenPricePanel } from '@/components/market/TokenPricePanel';
 import { WorkerDecisionsPanel } from '@/components/market/WorkerDecisionsPanel';
 import { NewsPanel } from '@/components/market/NewsPanel';
+import { TokenDossierDrawer } from '@/components/market/TokenDossierDrawer';
 
-export default function MarketPage() {
-  const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
+/** Hauteur des deux colonnes de flux : elles scrollent en interne pour que la
+ *  page garde une hauteur constante, quel que soit le volume de contenu. */
+const FEED_HEIGHT = 420;
+
+/**
+ * Corps de la page. Séparé de `MarketPage` parce que `useSearchParams` exige
+ * une frontière `Suspense` en App Router (Next 15) — sans elle, le build
+ * statique échoue sur cette route. Voir la frontière posée par `MarketPage`
+ * ci-dessous.
+ */
+function MarketPageContent() {
+  const router = useRouter();
+  const params = useSearchParams();
+  // La sélection vit dans l'URL : le dossier devient partageable, et le bouton
+  // retour du navigateur le referme au lieu de quitter la page.
+  const selectedSymbol = params.get('token');
+
   const [now, setNow] = useState(() => Date.now());
 
-  // Tick relative times every 30s
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(id);
@@ -39,12 +53,11 @@ export default function MarketPage() {
     refetchInterval: 30_000,
   });
 
-  // Auto-select the first token once loaded
-  useEffect(() => {
-    if (!selectedSymbol && tokens.length > 0) {
-      setSelectedSymbol(tokens[0].symbol);
-    }
-  }, [tokens, selectedSymbol]);
+  const select = useCallback(
+    (symbol: string) => router.push(`/market?token=${symbol}`, { scroll: false }),
+    [router],
+  );
+  const close = useCallback(() => router.push('/market', { scroll: false }), [router]);
 
   const selectedToken = tokens.find((t) => t.symbol === selectedSymbol) ?? null;
 
@@ -52,10 +65,9 @@ export default function MarketPage() {
     <Box>
       <PageHeader
         title="Intelligence de marché"
-        subtitle="Tokens, prix, news et décisions des workers Claude en temps réel"
+        subtitle="Balayez le marché, cliquez un token pour ouvrir son dossier complet"
       />
 
-      {/* ── Tokens table — full width ─────────────────────────────────────── */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Typography variant="h6" sx={{ mb: 2 }}>
@@ -65,42 +77,13 @@ export default function MarketPage() {
             tokens={tokens}
             loading={tokensLoading}
             selectedSymbol={selectedSymbol}
-            onSelect={setSelectedSymbol}
+            onSelect={select}
           />
         </CardContent>
       </Card>
 
-      {/* ── Middle row: chart+stats | decisions ──────────────────────────── */}
-      <Box
-        sx={{
-          display: 'grid',
-          gap: 3,
-          gridTemplateColumns: { xs: '1fr', lg: '1fr 1fr' },
-          mb: 3,
-          alignItems: 'start',
-        }}
-      >
-        {/* Left: price chart for selected token */}
-        {tokensLoading ? (
-          <Skeleton variant="rectangular" height={420} sx={{ borderRadius: 2 }} />
-        ) : selectedToken ? (
-          <TokenPricePanel token={selectedToken} />
-        ) : null}
-
-        {/* Right: worker decisions */}
-        <Box sx={{ overflowY: 'auto', maxHeight: 520 }}>
-          <WorkerDecisionsPanel
-            decisions={decisions}
-            loading={decisionsLoading}
-            now={now}
-          />
-        </Box>
-      </Box>
-
-      {/* ── Bottom row: news | live feed ─────────────────────────────────── */}
-      {/* `alignItems: start` so the feed keeps its own height: the news column
-          is far taller, and a stretched feed card would be mostly empty space
-          below the pagination control. */}
+      {/* Flux globaux. Le contenu filtré par token vit dans le drawer — le
+          garder aussi ici ferait deux chemins pour la même donnée. */}
       <Box
         sx={{
           display: 'grid',
@@ -109,20 +92,23 @@ export default function MarketPage() {
           alignItems: 'start',
         }}
       >
-        <NewsPanel news={news} loading={newsLoading} now={now} />
-        {/* Wrapped: SectionCard sets `height: 100%`, which resolves against the
-            grid area and would stretch the feed to the height of the news
-            column. The intermediate Box is auto-height, so the card keeps its
-            own size. No trace drawer here, so no `onSelect` — rows stay
-            read-only. */}
-        <Box>
-          <LiveEventStream
-            height={420}
-            title="Analyses IA en direct"
-            subtitle="Historique archivé + flux temps réel"
-          />
+        <Box sx={{ maxHeight: FEED_HEIGHT, overflowY: 'auto' }}>
+          <WorkerDecisionsPanel decisions={decisions} loading={decisionsLoading} now={now} />
+        </Box>
+        <Box sx={{ maxHeight: FEED_HEIGHT, overflowY: 'auto' }}>
+          <NewsPanel news={news} loading={newsLoading} now={now} />
         </Box>
       </Box>
+
+      <TokenDossierDrawer token={selectedToken} onClose={close} now={now} />
     </Box>
+  );
+}
+
+export default function MarketPage() {
+  return (
+    <Suspense fallback={null}>
+      <MarketPageContent />
+    </Suspense>
   );
 }

@@ -19,6 +19,8 @@ interface Props {
   news: NewsItem[];
   loading: boolean;
   now: number;
+  /** `true` dans le drawer : ni Card ni titre, le conteneur les porte déjà. */
+  bare?: boolean;
 }
 
 function NewsCard({ item, now }: { item: NewsItem; now: number }) {
@@ -72,26 +74,27 @@ function NewsCard({ item, now }: { item: NewsItem; now: number }) {
   );
 }
 
-export function NewsPanel({ news, loading, now }: Props) {
-  if (loading) {
-    return (
-      <Card>
-        <CardContent>
-          <Typography variant="h6" sx={{ mb: 2 }}>
-            News importantes
-          </Typography>
-          <Stack spacing={1}>
-            {Array.from({ length: 5 }).map((_, i) => (
-              <Box key={i} sx={{ py: 1 }}>
-                <Skeleton variant="text" height={20} width="90%" />
-                <Skeleton variant="text" height={16} width="50%" sx={{ mt: 0.5 }} />
-              </Box>
-            ))}
-          </Stack>
-        </CardContent>
-      </Card>
-    );
-  }
+export function NewsPanel({ news, loading, now, bare = false }: Props) {
+  const body = loading ? (
+    <Stack spacing={1}>
+      {Array.from({ length: 5 }).map((_, i) => (
+        <Box key={i} sx={{ py: 1 }}>
+          <Skeleton variant="text" height={20} width="90%" />
+          <Skeleton variant="text" height={16} width="50%" sx={{ mt: 0.5 }} />
+        </Box>
+      ))}
+    </Stack>
+  ) : news.length === 0 ? (
+    <EmptyState message="Aucune news disponible." />
+  ) : (
+    <Box>
+      {news.map((item) => (
+        <NewsCard key={item.id} item={item} now={now} />
+      ))}
+    </Box>
+  );
+
+  if (bare) return <Box>{body}</Box>;
 
   return (
     <Card>
@@ -99,15 +102,7 @@ export function NewsPanel({ news, loading, now }: Props) {
         <Typography variant="h6" sx={{ mb: 2 }}>
           News importantes
         </Typography>
-        {news.length === 0 ? (
-          <EmptyState message="Aucune news disponible." />
-        ) : (
-          <Box>
-            {news.map((item) => (
-              <NewsCard key={item.id} item={item} now={now} />
-            ))}
-          </Box>
-        )}
+        {body}
       </CardContent>
     </Card>
   );

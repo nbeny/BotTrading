@@ -126,3 +126,90 @@ def test_no_decision_reports_unknown_not_zero() -> None:
         "aucune décision n'est pas la même chose que des preuves insuffisantes : "
         "dans le premier cas rien n'a été tenté"
     )
+
+
+def _journal(**kw):
+    """Une ligne `decision_journal`. Source du *parcours* uniquement — sa
+    colonne `factors` porte le triage Haiku à quatre facteurs, pas les sept
+    axes, et n'est donc jamais lue par le dossier."""
+    base = {
+        "symbol": "SOL",
+        "time": NOW,
+        "escalated": True,
+        "sonnet_called": True,
+        "sonnet_validated": False,
+        "skip_reason": None,
+        "decision_event_id": None,
+        "risk_verdict": None,
+        "risk_reason": None,
+        "execution_event_id": None,
+    }
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def _rejection(**kw):
+    base = {"symbol": "SOL", "time": NOW, "stage": "risk", "reason": "max_exposure"}
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_execution_reached_is_reported_as_execute() -> None:
+    v = dossier.build_pipeline(_journal(execution_event_id="x1"), None)
+    assert v["reached_stage"] == "execute"
+    assert v["blocked_at"] is None
+    assert v["block_reason"] is None
+
+
+def test_risk_rejection_names_the_stage_and_the_reason() -> None:
+    v = dossier.build_pipeline(
+        _journal(risk_verdict="rejected", risk_reason="score_below_threshold"), None
+    )
+    assert v["reached_stage"] == "risk"
+    assert v["blocked_at"] == "risk"
+    assert v["block_reason"] == "score_below_threshold"
+
+
+def test_risk_approval_is_not_a_block() -> None:
+    v = dossier.build_pipeline(_journal(risk_verdict="approved"), None)
+    assert v["reached_stage"] == "risk"
+    assert v["blocked_at"] is None
+
+
+def test_triage_refusal_is_a_block_at_triage() -> None:
+    v = dossier.build_pipeline(
+        _journal(escalated=False, sonnet_called=False, skip_reason="score_too_low"),
+        None,
+    )
+    assert v["reached_stage"] == "triage"
+    assert v["blocked_at"] == "triage"
+    assert v["block_reason"] == "score_too_low"
+
+
+def test_escalated_but_undecided_claims_no_block() -> None:
+    """Sonnet appelé sans décision en aval : en vol ou abandonné, on ne peut pas
+    trancher. Affirmer un blocage serait inventer une mesure."""
+    v = dossier.build_pipeline(_journal(), None)
+    assert v["reached_stage"] == "senior"
+    assert v["blocked_at"] is None
+    assert v["block_reason"] is None
+
+
+def test_rejection_without_journal_is_the_fallback() -> None:
+    v = dossier.build_pipeline(None, _rejection())
+    assert v["reached_stage"] == "risk"
+    assert v["blocked_at"] == "risk"
+    assert v["block_reason"] == "max_exposure"
+
+
+def test_nothing_known_reports_nulls() -> None:
+    v = dossier.build_pipeline(None, None)
+    assert v == {
+        "reached_stage": None,
+        "blocked_at": None,
+        "block_reason": None,
+        "escalated": False,
+        "sonnet_called": False,
+        "sonnet_validated": None,
+        "last_event_at": None,
+    }

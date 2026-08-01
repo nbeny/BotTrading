@@ -83,3 +83,68 @@ def build_score(decision: Any | None) -> dict:
         "insufficient_evidence": insufficient,
         "computed_at": _iso(decision.created_at),
     }
+
+
+def _verdict(j: Any) -> tuple[str, str | None, str | None]:
+    """``(reached_stage, blocked_at, block_reason)`` pour une ligne de journal.
+
+    Le persister complète la ligne de journal en aval (``risk_verdict``,
+    ``execution_event_id``), donc un seul enregistrement porte tout le parcours.
+
+    On ne déclare un blocage que sur preuve positive. « Sonnet appelé, pas de
+    décision » peut être un vol en cours autant qu'un abandon : afficher
+    « bloqué » y serait une mesure inventée, exactement la faute que ce projet
+    cherche à ne plus commettre.
+    """
+    if j.execution_event_id:
+        return "execute", None, None
+    if j.risk_verdict == "rejected":
+        return "risk", "risk", j.risk_reason
+    if j.risk_verdict == "approved":
+        return "risk", None, None
+    if j.decision_event_id:
+        return "decision", None, None
+    if j.sonnet_called:
+        return "senior", None, None
+    if not j.escalated:
+        return "triage", "triage", j.skip_reason or "not_escalated"
+    return "triage", None, None
+
+
+def build_pipeline(journal: Any | None, rejection: Any | None) -> dict[str, Any]:
+    """Parcours du dernier signal connu pour un symbole.
+
+    ``journal`` fait autorité quand il existe. ``rejection`` n'est qu'un repli,
+    pour les refus qui n'ont jamais eu de ligne de journal.
+    """
+    if journal is None:
+        if rejection is None:
+            return {
+                "reached_stage": None,
+                "blocked_at": None,
+                "block_reason": None,
+                "escalated": False,
+                "sonnet_called": False,
+                "sonnet_validated": None,
+                "last_event_at": None,
+            }
+        return {
+            "reached_stage": rejection.stage,
+            "blocked_at": rejection.stage,
+            "block_reason": rejection.reason,
+            "escalated": False,
+            "sonnet_called": False,
+            "sonnet_validated": None,
+            "last_event_at": _iso(rejection.time),
+        }
+
+    reached, blocked, reason = _verdict(journal)
+    return {
+        "reached_stage": reached,
+        "blocked_at": blocked,
+        "block_reason": reason,
+        "escalated": bool(journal.escalated),
+        "sonnet_called": bool(journal.sonnet_called),
+        "sonnet_validated": journal.sonnet_validated,
+        "last_event_at": _iso(journal.time),
+    }

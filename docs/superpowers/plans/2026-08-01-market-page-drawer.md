@@ -730,12 +730,18 @@ async def market_token_dossier(
     )
     # news ET social : le drawer montre tout ce qui nomme le symbole, là où
     # /market/news filtre sur kind == "news".
+    #
+    # Tri sur `fetched_at`, comme `data_content`, et non sur `published_at` :
+    # quatre des sept sources sociales (bluesky, reddit, mastodon, fourchan) ne
+    # renseignent jamais `published_at`. Trier dessus reléguerait tout ce social
+    # en fin de liste quelle que soit sa fraîcheur, et la section n'afficherait
+    # que des news — sans erreur ni test rouge.
     content = (
         (
             await session.execute(
                 select(RawContent)
                 .where(RawContent.symbols.contains([sym]))
-                .order_by(RawContent.published_at.desc().nullslast())
+                .order_by(RawContent.fetched_at.desc())
                 .limit(DOSSIER_LIMIT)
             )
         )

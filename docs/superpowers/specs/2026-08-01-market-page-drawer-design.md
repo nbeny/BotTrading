@@ -226,7 +226,14 @@ Le dossier normalise vers les ids `STAGE_SPECS`, qui sont ceux que le frontend s
 source non mappée passe telle quelle, pour la même raison que `stage_for` le fait déjà : un
 rejeteur inattendu doit rester visible plutôt que d'être silencieusement renommé.
 | `decisions` | `Decision` where `symbol = :sym` order by `created_at` desc, limite 20 |
-| `content` | `RawContent` where `symbols @> [:sym]` order by `published_at` desc, limite 20 — même prédicat que `/data/content` (`read_api.py:463`) |
+| `content` | `RawContent` where `symbols @> [:sym]` order by **`fetched_at`** desc, limite 20 — même prédicat *et même tri* que `/data/content` (`read_api.py:463`) |
+
+**Le tri est `fetched_at`, pas `published_at`.** Sur les sept sources de `collector-social`, seules
+`lens`, `neynar` et `youtube` renseignent `published_at` ; `bluesky`, `reddit`, `mastodon` et
+`fourchan` le laissent à `None`. Un `ORDER BY published_at DESC NULLS LAST` reléguerait donc la
+majorité du social en fin de tri quelle que soit sa fraîcheur, et la section « News & social »
+n'afficherait que des news — sans erreur ni test rouge. `data_content` trie déjà par `fetched_at`
+pour cette raison exacte.
 | `exposure` | `_portfolio_basis(session)` (`read_api.py:983`) puis filtre par symbole, plus `Trade` where `symbol = :sym` order by `created_at` desc, limite 20 |
 
 Aucune migration, aucune donnée nouvelle à collecter : tout existe en base et n'est

@@ -74,7 +74,7 @@ Sept sections, dans cet ordre :
 |---|---|---|
 | 1 | En-tête — symbole, nom, prix, variation 24 h, badges *trending* / score | `MarketToken` déjà en mémoire, réaffiché immédiatement (pas d'attente réseau) |
 | 2 | Prix — graphique 1d/7d/30d + volume, liquidité, market cap, sentiment | `GET /market/tokens/{symbol}/prices` (existant) |
-| 3 | Décomposition du score — les 7 axes | `DecisionJournal.factors` |
+| 3 | Décomposition du score — les 7 axes | `Decision.payload["meta"]["breakdown"]` |
 | 4 | Verdict du pipeline — étage atteint, étage de mort, motif | `DecisionJournal` + `PipelineRejection` |
 | 5 | Décisions des workers sur ce symbole | `Decision` filtré par `symbol` |
 | 6 | News & social mentionnant ce symbole | `RawContent.symbols` |
@@ -85,11 +85,31 @@ Les sections 3, 4 et 7 n'existent nulle part dans le frontend aujourd'hui.
 Les justifications des workers (section 5) sont tronquées à 3 lignes avec expansion au clic —
 sans quoi une seule carte remplit le drawer.
 
-#### Section 3 — la règle qui gouverne l'affichage
+#### Section 3 — d'où vient la décomposition
 
-`DecisionJournal.factors` est un `dict[str, float]` dont les clés sont les axes de
+**Attention au faux ami.** `DecisionJournal.factors` **n'est pas** la décomposition v2 : c'est le
+triage Haiku à quatre facteurs — `momentum`, `volume`, `sentiment`, `liquidity`
+(`ai-worker-haiku/app/scorer.py:178`), recopié tel quel dans le journal par
+`ai-worker-sonnet/app/journal.py:54`. Lire les 7 axes dedans renverrait un dict vide en
+permanence : sept tirets à l'écran, pour toujours, indiscernables d'un vrai « rien mesuré ».
+
+La décomposition v2 vit dans `Decision.payload["meta"]["breakdown"]` :
+`decision-engine/app/engine.py:190` publie `meta={"breakdown": result.breakdown}`, et le
+persister sérialise l'événement entier dans la colonne `payload`
+(`api-gateway/app/persister.py:257`). Ses clés sont les axes de
 `services/decision-engine/app/scoring.py:37` : `volume_growth`, `social_score`, `news_score`,
 `market_trend`, `liquidity_score`, `positioning`, `fundamentals`.
+
+Deux corollaires :
+
+- **`dominant_factor` ne figure pas dans le dossier.** `journal.py:22` le calcule dans l'espace
+  quatre facteurs de Haiku, donc il nommerait un facteur absent de la liste des sept axes
+  affichés juste à côté. Une incohérence garantie à l'écran, pour un champ purement décoratif.
+- **Un `breakdown` vide n'est pas un score de zéro.** Sous `_MIN_PRESENT_WEIGHT`,
+  `scoring.py:288` renvoie `ScoreResult(0, 0.0, {})` — « trop peu de preuves pour renormaliser
+  honnêtement ». Rendre « 0/100 » dans ce cas serait précisément le défaut que ce panneau
+  existe pour empêcher. La réponse porte donc un booléen `insufficient_evidence`, et `value`
+  vaut `null` — pas `0` — quand il est vrai.
 
 **Un axe absent est une clé absente du dict, pas une clé à `0.0`.** Le scoring v2 renormalise
 sur le poids présent : un axe non mesuré est *exclu*, pas noté zéro. L'affichage doit refléter
@@ -143,7 +163,7 @@ Forme de la réponse :
 {
   "symbol": "SOL",
   "score": {
-    "value": 84,              // int | null — null si aucun signal récent
+    "value": 84,              // int | null — null si aucune décision, ou preuves insuffisantes
     "confidence": 0.62,       // float | null
     "axes": {                 // uniquement les axes MESURÉS
       "volume_growth": 0.81,
@@ -155,8 +175,9 @@ Forme de la réponse :
       // "fundamentals" absent — non mesuré
     },
     "axes_total": 7,
-    "dominant_factor": "positioning",       // str | null
-    "dominant_factor_share": 0.28,          // float | null
+    // true = une décision existe mais le poids présent était sous le seuil de
+    // renormalisation. Distinct de « aucune décision », où il vaut false.
+    "insufficient_evidence": false,
     "computed_at": "2026-08-01T09:12:00Z"   // str | null
   },
   "pipeline": {
@@ -189,7 +210,8 @@ Règles de nullité, non négociables :
 
 | Champ | Requête |
 |---|---|
-| `score`, `pipeline.*` sauf `blocked_at` | dernier `DecisionJournal` du symbole (`factors`, `score`, `confidence`, `dominant_factor*`, `escalated`, `sonnet_*`, `skip_reason`) |
+| `score` | dernière `Decision` du symbole — `opportunity_score`, `confidence`, `created_at`, et `payload["meta"]["breakdown"]` pour les axes |
+| `pipeline.*` sauf `blocked_at` | dernier `DecisionJournal` du symbole (`escalated`, `sonnet_*`, `skip_reason`, `risk_verdict`, `execution_event_id`) |
 | `pipeline.blocked_at`, `block_reason` | dernier `PipelineRejection` du symbole (`stage`, `reason`), recoupé avec `Signal.block_reason` |
 | `decisions` | `Decision` where `symbol = :sym` order by `created_at` desc, limite 20 |
 | `content` | `RawContent` where `symbols @> [:sym]` order by `published_at` desc, limite 20 — même prédicat que `/data/content` (`read_api.py:463`) |
@@ -220,11 +242,14 @@ Ce repo verrouille les formes de réponse par manifeste. Le nouvel endpoint doit
 
 Tests spécifiques à écrire :
 
-1. **Axe non mesuré** — un `DecisionJournal` dont `factors` omet `fundamentals` produit une
-   réponse où `axes` omet la clé. Assertion explicite que la valeur n'est ni `0`, ni `0.0`,
-   ni `null` *dans* le dict : la clé est absente.
-2. **Symbole sans historique** — un symbole avec un prix mais aucun `DecisionJournal` renvoie
-   `score.value = null`, `axes = {}`, listes vides, et **200**, pas 404.
+1. **Axe non mesuré** — une `Decision` dont `payload["meta"]["breakdown"]` omet `fundamentals`
+   produit une réponse où `axes` omet la clé. Assertion explicite que la valeur n'est ni `0`,
+   ni `0.0`, ni `null` *dans* le dict : la clé est absente.
+2. **Symbole sans historique** — un symbole avec un prix mais aucune `Decision` renvoie
+   `score.value = null`, `axes = {}`, `insufficient_evidence = false`, listes vides, et
+   **200**, pas 404.
+2 bis. **Preuves insuffisantes** — un `breakdown` vide sur une décision existante donne
+   `insufficient_evidence = true` et `value = null`, jamais `value = 0`.
 3. **Authentification** — l'endpoint répond 401 sans jeton. Test de régression contre un
    futur montage hors du routeur authentifié.
 4. **Rendu frontend** — un axe absent rend `—`, jamais `0`.
@@ -281,7 +306,9 @@ réellement : c'est le cas que le développement front risque de ne jamais voir 
 2. À 1080 p, aucun panneau de la page n'est entièrement sous le pli.
 3. Un clic sur une ligne ouvre le dossier ; l'URL reflète la sélection ; le retour navigateur
    le referme.
-4. Le dossier montre les 7 axes, dont les absents en `—` avec la mention « exclu du calcul ».
+4. Le dossier montre les 7 axes, dont les absents en `—` avec la mention « exclu du calcul »,
+   et les axes proviennent de `Decision.payload["meta"]["breakdown"]` — un dossier de token
+   réellement scoré affiche des valeurs, pas sept tirets.
 5. Le dossier dit à quel étage le signal est mort et pourquoi.
 6. Un token sans historique de décision affiche un dossier honnête (`—` partout), pas une
    erreur et pas des zéros.

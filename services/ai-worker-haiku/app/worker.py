@@ -17,7 +17,9 @@ import time
 from cmi_common.events import (
     AnalysisEvent,
     BaseEvent,
+    DerivativesEvent,
     DexEvent,
+    FundamentalsEvent,
     PriceEvent,
     SentimentEvent,
     VolumeEvent,
@@ -196,6 +198,51 @@ class HaikuWorker:
             elif event.input_kind == "social":
                 fields["has_social"] = True
             return event.symbol, fields, Topic.SENTIMENT.value
+        if isinstance(event, DerivativesEvent):
+            # Context, not a trigger: _ready() is deliberately not relaxed for
+            # these. Scoring a symbol we have no price for would invent an
+            # opportunity out of an exchange statistic.
+            return (
+                event.symbol,
+                {
+                    "funding_rate_8h": event.funding_rate_8h,
+                    "funding_annualized_pct": event.funding_annualized_pct,
+                    "open_interest_usd": (
+                        float(event.open_interest_usd)
+                        if event.open_interest_usd is not None
+                        else None
+                    ),
+                    "open_interest_change_pct_24h": event.open_interest_change_pct_24h,
+                    "long_short_account_ratio": event.long_short_account_ratio,
+                },
+                Topic.DERIVATIVES.value,
+            )
+        if isinstance(event, FundamentalsEvent):
+            # has_unlock_schedule is a bool and False is meaningful, but the
+            # store only drops None on merge, so False survives — which is what
+            # keeps "DefiLlama does not track this" distinct from "we read the
+            # schedule and nothing is coming".
+            return (
+                event.symbol,
+                {
+                    "tvl_usd": (
+                        float(event.tvl_usd) if event.tvl_usd is not None else None
+                    ),
+                    "tvl_change_pct_7d": event.tvl_change_pct_7d,
+                    "fees_change_pct_7d": event.fees_change_pct_7d,
+                    # Stored absolute rather than as days remaining: a stored
+                    # countdown would age silently between the collector's poll
+                    # and the decision that reads it.
+                    "next_unlock_at": (
+                        event.next_unlock_at.isoformat()
+                        if event.next_unlock_at
+                        else None
+                    ),
+                    "next_unlock_pct_supply": event.next_unlock_pct_supply,
+                    "has_unlock_schedule": event.has_unlock_schedule,
+                },
+                Topic.FUNDAMENTALS.value,
+            )
         return None, {}, ""
 
     def _score(self, symbol: str, features: dict, correlation_id: str) -> AnalysisEvent:

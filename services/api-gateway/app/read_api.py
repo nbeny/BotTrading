@@ -203,12 +203,20 @@ def map_news(row: Any) -> dict:
 
 
 def map_signal_event(row: Any) -> dict:
-    """A signals row surfaced as an AnalysisEvent (the frontend's signal union)."""
+    """A signals row surfaced as an AnalysisEvent (the frontend's signal union).
+
+    `opportunity_score` is divided by 100 like `map_decision` does: `Signal`
+    stores it as an int 0-100, while the whole frontend — and the mock store —
+    speak 0-1. Passing it through raw made the dashboard's ScoreChip render a
+    correct-looking number for the wrong reason, and cancelled out against a
+    second bug in that component; fixing one without the other turns 79 into
+    7900.
+    """
     return {
         "event_type": "AnalysisEvent",
         "source": "haiku_worker",
         "symbol": row.symbol,
-        "opportunity_score": row.opportunity_score,
+        "opportunity_score": round(_num(row.opportunity_score) / 100, 2),
         "confidence": _num(row.confidence),
         "reason": row.reason,
         "escalate": bool(row.escalated),

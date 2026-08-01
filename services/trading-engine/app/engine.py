@@ -33,14 +33,42 @@ def _order_id(resp: dict) -> str | None:
 
 
 def _signal_payload(event) -> dict:
+    """Shape stored under `trading:pending:*` — control-api's `list_pending`
+    (services/control-api/app/routers/opportunities.py) returns this dict
+    verbatim, and the frontend renders it as `Opportunity`
+    (frontend/src/lib/types/domain.ts). Every field that type declares must be
+    present here, or the terminal renders `undefined`/`NaN`.
+
+    `correlation_id` and `event_id` are not part of that contract but are kept
+    so `approve_opportunity`/`reject_opportunity` below can reconstruct the
+    RiskApprovedEvent from this same Redis record.
+    """
     return {
+        "opportunity_id": event.event_id,
         "symbol": event.symbol,
         "direction": event.direction,
+        # DecisionEvent (and therefore RiskApprovedEvent) carries the score on a
+        # 0..100 int scale; the whole frontend speaks 0..1 (ScoreChip renders
+        # `score * 100`). Convert at this edge only, mirroring
+        # api-gateway/app/read_api.py::map_decision — passing the raw int
+        # through turns a real score of 79 into a rendered 7900%.
+        "opportunity_score": (
+            round(event.opportunity_score / 100, 2)
+            if event.opportunity_score is not None
+            else 0.0
+        ),
+        "confidence": event.confidence,
         "entry_price": event.entry_price,
         "stop_loss": event.stop_loss,
         "take_profit": event.take_profit,
-        "confidence": event.confidence,
         "position_size_pct": event.position_size_pct,
+        "risk_reward_ratio": event.risk_reward_ratio,
+        "rationale": event.rationale,
+        "key_risks": event.key_risks,
+        "ai_validated": event.ai_validated,
+        "source": event.source,
+        "status": "pending",
+        "created_at": event.occurred_at.isoformat(),
         "correlation_id": event.correlation_id,
         "event_id": event.event_id,
     }

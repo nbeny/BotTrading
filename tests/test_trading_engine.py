@@ -126,6 +126,61 @@ def test_kill_switch_rejects() -> None:
     assert ev.reason == "kill_switch"
 
 
+def test_signal_payload_matches_frontend_opportunity_contract() -> None:
+    """`_signal_payload` is stored under `trading:pending:*` and returned
+    verbatim by control-api's `list_pending`; the frontend renders it as
+    `Opportunity`. This literal is the frontend's contract
+    (frontend/src/lib/types/domain.ts) copied by hand -- it is the only thing
+    holding the Python payload and the TS type in sync, since nothing else
+    checks them against each other across the language boundary."""
+    frontend_opportunity_fields = {
+        "opportunity_id",
+        "symbol",
+        "direction",
+        "opportunity_score",
+        "confidence",
+        "entry_price",
+        "stop_loss",
+        "take_profit",
+        "position_size_pct",
+        "risk_reward_ratio",
+        "rationale",
+        "key_risks",
+        "ai_validated",
+        "source",
+        "status",
+        "created_at",
+    }
+    mod = load_module("engine")
+    sig = _signal(
+        opportunity_score=79,
+        rationale="Momentum breakout confirmed",
+        key_risks=["Volatilite macro elevee"],
+        ai_validated=True,
+        risk_reward_ratio=2.0,
+    )
+    payload = mod._signal_payload(sig)
+
+    assert frontend_opportunity_fields <= payload.keys()
+    assert payload["opportunity_id"] == sig.event_id
+    # 0..100 int -> 0..1 float; ScoreChip renders `score * 100`.
+    assert payload["opportunity_score"] == 0.79
+    assert payload["status"] == "pending"
+    assert payload["rationale"] == "Momentum breakout confirmed"
+    assert payload["key_risks"] == ["Volatilite macro elevee"]
+    assert payload["ai_validated"] is True
+    assert payload["risk_reward_ratio"] == 2.0
+
+
+def test_signal_payload_defaults_unset_score_to_zero() -> None:
+    """A RiskApprovedEvent built without opportunity_score (older producer /
+    backward-compat default) must still produce a numeric field -- the TS
+    contract does not allow undefined -- not raise or leak None through."""
+    mod = load_module("engine")
+    payload = mod._signal_payload(_signal())  # opportunity_score defaults None
+    assert payload["opportunity_score"] == 0.0
+
+
 def test_idempotent_on_redelivery() -> None:
     cache, producer, kraken = FakeCache(), FakeProducer(), FakeKraken()
     engine = _engine(cache, producer, kraken)

@@ -123,9 +123,17 @@ export function StatCard({
   );
 }
 
-/** Opportunity / analysis score chip colored by threshold. */
+/**
+ * Badge de score d'opportunité.
+ *
+ * `score` arrive sur **0–1** : les mappers du backend (`map_token`,
+ * `map_decision`) et le store mock divisent tous par 100. `scoreColor` raisonne
+ * en revanche sur 0–100. Sans cette conversion, tout score non nul s'affichait
+ * `1` en rouge — la colonne ne transmettait aucune information.
+ */
 export function ScoreChip({ score, size = 'small' }: { score: number; size?: ChipProps['size'] }) {
-  return <Chip label={Math.round(score)} color={scoreColor(score)} size={size} variant="filled" />;
+  const pct = Math.round(score * 100);
+  return <Chip label={pct} color={scoreColor(pct)} size={size} variant="filled" />;
 }
 
 /** Directional long/short chip. */

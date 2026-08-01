@@ -5,6 +5,8 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
+import pytest
+
 from service_modules import load_service_module
 
 from cmi_common.kafka import Topic
@@ -110,6 +112,40 @@ async def test_detail_tier_is_skipped_near_the_weight_ceiling() -> None:
     assert len(producer.published) == 3
 
 
+async def test_a_raising_broad_tier_is_counted_as_unavailable() -> None:
+    # The failure mode that matters. Every real way Binance goes away -- 451
+    # geo-block, 429, 418 ban, 5xx -- raises. An earlier version counted only an
+    # empty HTTP 200, which premiumIndex essentially never returns, so the guard
+    # written to catch a geo-block could not see one.
+    class BlockedClient(FakeClient):
+        async def premium_index(self):
+            raise RuntimeError("451 geo-blocked")
+
+    collector = _collector(BlockedClient(), FakeProducer())
+    for _ in range(2):
+        with pytest.raises(RuntimeError):
+            await collector.poll_once()
+    assert collector.unavailable_cycles == 2
+
+
+async def test_a_rate_limited_detail_call_aborts_the_majors_tier() -> None:
+    # BinanceRateLimitedError exists so a caller can back off. Swallowing it
+    # meant firing 22 requests per cycle into an endpoint that had said stop,
+    # which is how Binance escalates a 429 into an 418 ban.
+    from service_modules import load_service_module
+
+    cm = load_service_module(
+        "collector-binance-futures", "infrastructure.binance_client"
+    )
+
+    class LimitedClient(FakeClient):
+        async def open_interest(self, ticker: str):
+            raise cm.BinanceRateLimitedError(retry_after=60.0)
+
+    with pytest.raises(cm.BinanceRateLimitedError):
+        await _collector(LimitedClient(), FakeProducer()).poll_once()
+
+
 async def test_an_empty_broad_tier_is_counted_for_the_outage_warning() -> None:
     # Binance geo-blocks some IP ranges. Renormalisation would absorb a
     # permanently absent positioning axis without a murmur, so the collector
@@ -121,14 +157,14 @@ async def test_an_empty_broad_tier_is_counted_for_the_outage_warning() -> None:
     collector = _collector(EmptyClient(), FakeProducer())
     await collector.poll_once()
     await collector.poll_once()
-    assert collector.empty_cycles == 2
+    assert collector.unavailable_cycles == 2
 
 
 async def test_a_recovered_broad_tier_resets_the_outage_counter() -> None:
     collector = _collector(FakeClient(), FakeProducer())
-    collector.empty_cycles = 5
+    collector.unavailable_cycles = 5
     await collector.poll_once()
-    assert collector.empty_cycles == 0
+    assert collector.unavailable_cycles == 0
 
 
 async def test_an_empty_universe_is_reported_rather_than_run_silently() -> None:

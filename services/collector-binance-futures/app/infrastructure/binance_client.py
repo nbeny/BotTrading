@@ -16,6 +16,7 @@ the positioning axis with one of its three terms unable to ever produce a value.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -30,6 +31,22 @@ SERVICE = "collector-binance-futures"
 BASE_URL = "https://fapi.binance.com"
 #: Binance allows 2400 weight/minute; stay well under it.
 WEIGHT_CEILING = 1800
+
+
+def _finite(raw: object) -> float | None:
+    """A usable float, or None for anything an upstream payload might send.
+
+    Covers absent, null, empty, non-numeric — and NaN/Infinity, which float()
+    accepts and Pydantic passes through, so they would reach the scorer as a
+    *present* axis and then crash it. Unusable is unmeasured.
+    """
+    if raw is None or raw == "":
+        return None
+    try:
+        value = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
 
 
 class BinanceRateLimitedError(RuntimeError):
@@ -47,7 +64,11 @@ class OpenInterest:
     0.0 would assert a flatness never measured.
     """
 
-    usd: float
+    #: Nullable, and independently of the change. sumOpenInterestValue absent or
+    #: null used to raise out of the whole reading, so a failure in the field
+    #: nothing scores silently deleted open_interest_change_pct_24h, which is
+    #: the field the positioning axis actually reads.
+    usd: float | None
     change_pct_24h: float | None
 
 
@@ -113,12 +134,15 @@ class BinanceFuturesClient:
         )
         if not payload:
             return None
-        usd = float(payload[-1]["sumOpenInterestValue"])
-        if len(payload) < 2:
-            return OpenInterest(usd=usd, change_pct_24h=None)
-        oldest = float(payload[0]["sumOpenInterest"])
-        newest = float(payload[-1]["sumOpenInterest"])
-        change = round(100.0 * (newest - oldest) / oldest, 4) if oldest > 0 else None
+        usd = _finite(payload[-1].get("sumOpenInterestValue"))
+        change = None
+        if len(payload) >= 2:
+            oldest = _finite(payload[0].get("sumOpenInterest"))
+            newest = _finite(payload[-1].get("sumOpenInterest"))
+            if oldest is not None and newest is not None and oldest > 0:
+                change = round(100.0 * (newest - oldest) / oldest, 4)
+        if usd is None and change is None:
+            return None
         return OpenInterest(usd=usd, change_pct_24h=change)
 
     async def long_short_ratio(self, ticker: str) -> float | None:
@@ -133,4 +157,8 @@ class BinanceFuturesClient:
         )
         if not payload:
             return None
-        return float(payload[-1]["longShortRatio"])
+        ratio = _finite(payload[-1].get("longShortRatio"))
+        # A ratio of zero cannot happen and would be log(0) in the scorer. The
+        # event schema rejects it -- but model_copy skips validation, so this
+        # producer would otherwise slip it past.
+        return ratio if ratio is not None and ratio > 0 else None

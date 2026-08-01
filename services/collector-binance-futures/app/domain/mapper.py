@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+import math
 from decimal import Decimal
 
 from cmi_common.events import DerivativesEvent
 from cmi_common.events.base import Source
 
 from .symbols import resolve
+
+logger = logging.getLogger(__name__)
 
 #: Binance settles funding every 8 hours: three periods a day.
 PERIODS_PER_YEAR = 3 * 365
@@ -33,7 +37,30 @@ def to_derivatives_events(
         raw_rate = row.get("lastFundingRate")
         if raw_rate is None or raw_rate == "":
             continue
-        rate = float(raw_rate)
+        try:
+            rate = float(raw_rate)
+        except (TypeError, ValueError):
+            # Skip the row, never the batch. One unparseable rate among 854
+            # used to raise out of this loop and return zero events, so a
+            # single-symbol defect took the whole positioning axis down for
+            # the cycle.
+            logger.warning(
+                "unparseable funding rate %r for %s; skipping row",
+                raw_rate,
+                row.get("symbol"),
+            )
+            continue
+        if not math.isfinite(rate):
+            # float() accepts "NaN" and "Infinity", and Pydantic allows both by
+            # default. A NaN reaches the scorer as a *present* axis -- it is
+            # not None, so renormalisation includes it -- and then kills
+            # int(round(...)) at the service boundary. Unusable is unmeasured.
+            logger.warning(
+                "non-finite funding rate %r for %s; skipping row",
+                raw_rate,
+                row.get("symbol"),
+            )
+            continue
         events.append(
             DerivativesEvent(
                 source=Source.BINANCE_FUTURES,

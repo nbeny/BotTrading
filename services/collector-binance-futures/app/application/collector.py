@@ -8,20 +8,27 @@ from decimal import Decimal
 
 from cmi_common.events import DerivativesEvent
 from cmi_common.kafka import EventProducer, Topic
-from cmi_common.observability import EVENTS_PRODUCED
+from cmi_common.observability import EVENTS_PRODUCED, UNMEASURED
 
 from ..domain.mapper import to_derivatives_events, with_majors_detail
-from ..infrastructure.binance_client import BinanceFuturesClient
+from ..infrastructure.binance_client import (
+    BinanceFuturesClient,
+    BinanceRateLimitedError,
+)
 
 logger = logging.getLogger(__name__)
 SERVICE = "collector-binance-futures"
 
-#: Binance geo-blocks some IP ranges. An empty broad tier for this many cycles
-#: means the source is gone, not that the market went quiet — and since the
-#: scoring model *excludes* an absent axis rather than penalising it,
-#: renormalisation would absorb a permanently missing positioning axis without
-#: a murmur. The collector has to say so itself or nothing will.
-EMPTY_CYCLES_BEFORE_WARNING = 3
+#: Consecutive cycles with no usable broad tier before the collector says so.
+#:
+#: It counts *unavailability*, not empty responses, and that distinction is the
+#: whole point. An earlier version counted only an HTTP 200 carrying an empty
+#: list — which /fapi/v1/premiumIndex essentially never returns — while every
+#: real way Binance goes away (451 geo-block, 429, 418 ban, 5xx) raises before
+#: reaching the counter. The guard written precisely because renormalisation
+#: would absorb a permanently missing positioning axis without a murmur could
+#: not, in fact, see any of those.
+UNAVAILABLE_CYCLES_BEFORE_WARNING = 3
 
 #: (priced, majors, ambiguous)
 Universe = Callable[[], tuple[set[str], set[str], set[str]]]
@@ -38,7 +45,8 @@ class BinanceFuturesCollector:
         self._client = client
         self._producer = producer
         self._universe = universe
-        self.empty_cycles = 0
+        #: Consecutive cycles with no usable broad tier, however it failed.
+        self.unavailable_cycles = 0
 
     async def poll_once(self) -> int:
         priced, majors, ambiguous = self._universe()
@@ -48,16 +56,15 @@ class BinanceFuturesCollector:
             logger.warning("binance futures poll skipped: priced universe is empty")
             return 0
 
-        rows = await self._client.premium_index()
+        try:
+            rows = await self._client.premium_index()
+        except Exception as exc:
+            self._broad_tier_unavailable(type(exc).__name__)
+            raise
         if not rows:
-            self.empty_cycles += 1
-            if self.empty_cycles >= EMPTY_CYCLES_BEFORE_WARNING:
-                logger.warning(
-                    "binance broad tier empty for %d cycles — geo-block or outage?",
-                    self.empty_cycles,
-                )
+            self._broad_tier_unavailable("empty")
             return 0
-        self.empty_cycles = 0
+        self.unavailable_cycles = 0
 
         events = to_derivatives_events(rows, priced=priced, ambiguous=ambiguous)
         detailed = 0
@@ -76,6 +83,17 @@ class BinanceFuturesCollector:
         )
         return len(events)
 
+    def _broad_tier_unavailable(self, reason: str) -> None:
+        self.unavailable_cycles += 1
+        UNMEASURED.labels(SERVICE, "funding_rate", reason).inc()
+        if self.unavailable_cycles >= UNAVAILABLE_CYCLES_BEFORE_WARNING:
+            logger.warning(
+                "binance broad tier unavailable for %d cycles (%s) — "
+                "geo-block, ban or outage?",
+                self.unavailable_cycles,
+                reason,
+            )
+
     async def _detail(self, event: DerivativesEvent) -> DerivativesEvent:
         """Fold in the per-symbol readings, tolerating either one failing.
 
@@ -88,13 +106,23 @@ class BinanceFuturesCollector:
         ticker = f"{event.symbol}USDT"
         reading = None
         ratio = None
+        # BinanceRateLimitedError deliberately escapes both handlers. It exists
+        # so a caller can back off, and swallowing it meant the collector kept
+        # firing 22 requests per cycle into an endpoint that had already said
+        # stop -- which is how Binance escalates a 429 into an 418 ban.
         try:
             reading = await self._client.open_interest(ticker)
-        except Exception:
+        except BinanceRateLimitedError:
+            raise
+        except Exception as exc:
+            UNMEASURED.labels(SERVICE, "open_interest", type(exc).__name__).inc()
             logger.warning("open interest failed for %s", ticker, exc_info=True)
         try:
             ratio = await self._client.long_short_ratio(ticker)
-        except Exception:
+        except BinanceRateLimitedError:
+            raise
+        except Exception as exc:
+            UNMEASURED.labels(SERVICE, "long_short_ratio", type(exc).__name__).inc()
             logger.warning("long/short failed for %s", ticker, exc_info=True)
         return with_majors_detail(
             event,

@@ -1320,6 +1320,117 @@ git commit -m "test(frontend): mettre en place vitest, couvrir axisValue"
 
 ---
 
+## Task 7 bis : l'échelle de `ScoreChip`
+
+> Découvert en implémentant la Task 6, hors du périmètre initial. Ce n'est pas une
+> régression de ce chantier : le bug est en production aujourd'hui, sur quatre pages.
+
+**Le défaut.** `ScoreChip` (`frontend/src/components/common/index.tsx:127`) rend
+`Math.round(score)` et colore via `scoreColor` (`frontend/src/lib/format.ts:91`), dont les
+seuils sont `>= 75` / `>= 50` / `> 0` — donc une échelle 0–100. Or les trois mappers qui
+alimentent ses appelants divisent par 100 :
+
+| Source | Échelle produite |
+|---|---|
+| `map_token` (`read_api.py:167`) | 0–1 |
+| `map_decision` (`read_api.py:224`) | 0–1 |
+| Store mock (6 sites) | 0–1 |
+
+Un token scoré 0.79 affiche donc **`1`**, en **rouge** (`0.79 > 0` tombe dans la branche
+`error`). Tous les tokens scorés affichent `1` en rouge, les non scorés `0` en gris. La
+colonne « Score opp. » ne transmet aucune information.
+
+Quatre sites d'appel : `TokensTable`, `WorkerDecisionsPanel`, `SignalsTable`,
+`OpportunitiesSection` — pages market, dashboard et trading.
+
+**Le choix de correction.** On corrige `ScoreChip`, pas les quatre appelants : les quatre
+reçoivent la même échelle 0–1, donc le défaut est dans le composant qui la mésinterprète, et
+le corriger là évite d'avoir à se souvenir de multiplier à chaque nouvel appel.
+
+**Files:**
+- Modify: `frontend/src/components/common/index.tsx`
+- Test: `frontend/src/components/common/__tests__/ScoreChip.test.tsx`
+
+- [ ] **Step 1 : écrire le test qui échoue**
+
+```tsx
+import { render, screen } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
+import { ScoreChip } from '../index';
+
+describe('ScoreChip', () => {
+  it('rend un score 0–1 en pourcentage entier', () => {
+    render(<ScoreChip score={0.79} />);
+    expect(screen.getByText('79')).toBeInTheDocument();
+  });
+
+  it('colore selon le score réel, pas selon la valeur brute', () => {
+    // 0.79 -> 79 -> success. Avant correction, scoreColor(0.79) tombait dans
+    // la branche `> 0` et rendait tout en rouge.
+    const { container } = render(<ScoreChip score={0.79} />);
+    expect(container.querySelector('.MuiChip-colorSuccess')).not.toBeNull();
+  });
+
+  it('distingue un zéro mesuré d’un score faible', () => {
+    render(<ScoreChip score={0} />);
+    expect(screen.getByText('0')).toBeInTheDocument();
+  });
+});
+```
+
+- [ ] **Step 2 : lancer, vérifier l'échec**
+
+```bash
+cd frontend && npm run test:run -- ScoreChip
+```
+Attendu : le premier test échoue en trouvant `1` au lieu de `79`.
+
+- [ ] **Step 3 : corriger**
+
+Dans `frontend/src/components/common/index.tsx` :
+
+```tsx
+/**
+ * Badge de score d'opportunité.
+ *
+ * `score` arrive sur **0–1** : les trois mappers du backend (`map_token`,
+ * `map_decision`) et le store mock divisent tous par 100. `scoreColor` raisonne
+ * en revanche sur 0–100. Sans cette conversion, tout score non nul s'affichait
+ * `1` en rouge — la colonne ne transmettait aucune information.
+ */
+export function ScoreChip({ score, size = 'small' }: { score: number; size?: ChipProps['size'] }) {
+  const pct = Math.round(score * 100);
+  return <Chip label={pct} color={scoreColor(pct)} size={size} variant="filled" />;
+}
+```
+
+- [ ] **Step 4 : vérifier**
+
+```bash
+cd frontend && npm run test:run && npm run typecheck && npm run lint
+```
+Attendu : tout vert.
+
+Vérifier aussi visuellement en mock que les quatre pages affichent des scores plausibles :
+
+```bash
+cd frontend && NEXT_PUBLIC_USE_MOCK=1 npm run dev
+```
+puis `/market`, `/dashboard`, `/trading`.
+
+- [ ] **Step 5 : commit**
+
+```bash
+git add frontend/src/components/common/index.tsx "frontend/src/components/common/__tests__/ScoreChip.test.tsx"
+git commit -m "fix(frontend): ScoreChip interprétait une échelle 0-1 comme 0-100
+
+Les trois mappers qui l'alimentent divisent par 100, scoreColor raisonne sur
+0-100 : tout score non nul s'affichait 1 en rouge, sur market, dashboard et
+trading. La colonne Score ne transmettait aucune information."
+```
+
+---
+
 ## Task 8 : composant `ScoreBreakdown`
 
 **Files:**

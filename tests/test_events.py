@@ -58,6 +58,32 @@ def test_risk_approved_long_level_validation() -> None:
         )
 
 
+def test_risk_approved_event_new_fields_default_for_backward_compat() -> None:
+    """opportunity_score/rationale/key_risks/ai_validated were added so
+    RiskApprovedEvent can describe a full Opportunity for the frontend. An
+    older producer's event -- or a payload rebuilt from a partial Redis record
+    (see trading-engine's approve_opportunity/reject_opportunity, which only
+    pass the pre-existing keys) -- must still validate without them."""
+    e = RiskApprovedEvent(
+        symbol="SOL",
+        direction=Direction.LONG,
+        entry_price=150,
+        stop_loss=142,
+        take_profit=165,
+        confidence=0.87,
+    )
+    # None, not 0 -- an absent score must stay distinguishable from a measured
+    # zero (the same corollary scoring.py is built on).
+    assert e.opportunity_score is None
+    assert e.rationale == ""
+    assert e.key_risks == []
+    assert e.ai_validated is False
+    # decision_source (analysis provenance, distinct from `source` -- this
+    # event's own producer) is the same idiom: absent for an older producer,
+    # not coerced to a fake value.
+    assert e.decision_source is None
+
+
 def test_score_bounds_enforced() -> None:
     with pytest.raises(ValueError):
         AnalysisEvent(symbol="X", opportunity_score=150, confidence=0.5, reason="r")

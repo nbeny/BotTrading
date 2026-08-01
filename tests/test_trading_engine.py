@@ -1,6 +1,7 @@
 # tests/test_trading_engine.py
 import asyncio
 
+from cmi_common.events.base import Source
 from cmi_common.events.execution import ExecutionEvent, ExecutionKind
 from cmi_common.events.risk import RiskApprovedEvent
 from cmi_common.events.decision import Direction
@@ -124,6 +125,87 @@ def test_kill_switch_rejects() -> None:
     ((_, ev),) = producer.published
     assert ev.kind == ExecutionKind.REJECTED
     assert ev.reason == "kill_switch"
+
+
+def test_signal_payload_matches_frontend_opportunity_contract() -> None:
+    """`_signal_payload` is stored under `trading:pending:*` and returned
+    verbatim by control-api's `list_pending`; the frontend renders it as
+    `Opportunity`. This literal is the frontend's contract
+    (frontend/src/lib/types/domain.ts) copied by hand -- it is the only thing
+    holding the Python payload and the TS type in sync, since nothing else
+    checks them against each other across the language boundary."""
+    frontend_opportunity_fields = {
+        "opportunity_id",
+        "symbol",
+        "direction",
+        "opportunity_score",
+        "confidence",
+        "entry_price",
+        "stop_loss",
+        "take_profit",
+        "position_size_pct",
+        "risk_reward_ratio",
+        "rationale",
+        "key_risks",
+        "ai_validated",
+        "source",
+        "status",
+        "created_at",
+    }
+    mod = load_module("engine")
+    sig = _signal(
+        opportunity_score=79,
+        rationale="Momentum breakout confirmed",
+        key_risks=["Volatilite macro elevee"],
+        ai_validated=True,
+        risk_reward_ratio=2.0,
+    )
+    payload = mod._signal_payload(sig)
+
+    assert frontend_opportunity_fields <= payload.keys()
+    assert payload["opportunity_id"] == sig.event_id
+    # 0..100 int -> 0..1 float; ScoreChip renders `score * 100`.
+    assert payload["opportunity_score"] == 0.79
+    assert payload["status"] == "pending"
+    assert payload["rationale"] == "Momentum breakout confirmed"
+    assert payload["key_risks"] == ["Volatilite macro elevee"]
+    assert payload["ai_validated"] is True
+    assert payload["risk_reward_ratio"] == 2.0
+
+
+def test_signal_payload_defaults_unset_score_to_zero() -> None:
+    """A RiskApprovedEvent built without opportunity_score (older producer /
+    backward-compat default) must still produce a numeric field -- the TS
+    contract does not allow undefined -- not raise or leak None through."""
+    mod = load_module("engine")
+    payload = mod._signal_payload(_signal())  # opportunity_score defaults None
+    assert payload["opportunity_score"] == 0.0
+
+
+def test_signal_payload_source_prefers_decision_provenance() -> None:
+    """The mock -- the de-facto contract the frontend was built against --
+    fills `Opportunity.source` with analysis provenance (frontend/src/lib/
+    mock/store.ts: haiku_triage/sonnet_decision/manual), not the approving
+    service. `event.source` on a RiskApprovedEvent is always risk-engine (the
+    approver); `decision_source`, propagated from the DecisionEvent, is what
+    must land in the payload."""
+    mod = load_module("engine")
+    sig = _signal(decision_source=Source.AI_SONNET)
+    assert sig.source == Source.RISK_ENGINE  # sanity: approver, not analysis
+    payload = mod._signal_payload(sig)
+    assert payload["source"] == Source.AI_SONNET
+
+
+def test_signal_payload_source_falls_back_when_decision_source_absent() -> None:
+    """An older producer's event -- or a payload reconstructed from a partial
+    Redis record -- never set `decision_source`. `_signal_payload` must still
+    emit a usable, non-null `source` rather than leaking the field's None
+    default through to the frontend."""
+    mod = load_module("engine")
+    sig = _signal()  # decision_source defaults None
+    payload = mod._signal_payload(sig)
+    assert payload["source"] == Source.RISK_ENGINE
+    assert payload["source"] is not None
 
 
 def test_idempotent_on_redelivery() -> None:

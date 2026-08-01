@@ -72,6 +72,13 @@ class RiskEngine:
             position_size_pct=levels.position_size_pct,
             risk_reward_ratio=levels.risk_reward_ratio,
             decision_event_id=event.event_id,
+            # Opportunity metadata the frontend needs — carried by the decision
+            # this approval was raised for, not computed here.
+            opportunity_score=event.opportunity_score,
+            rationale=event.rationale,
+            key_risks=event.key_risks,
+            ai_validated=event.ai_validated,
+            decision_source=event.source,
         )
         await self._cache.set_json(
             EXPOSURE_KEY, round(exposure + levels.position_size_pct, 4), ttl_seconds=0

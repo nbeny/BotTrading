@@ -749,45 +749,52 @@ def aggregate(repos: Sequence[RepoStats], now: datetime) -> CoinActivity | None:
             all_repos_archived=True,
         )
 
-    # ATTENTION — décision à prendre ici, pas ailleurs. `star_growth_pct` divise
-    # par `stars_at - stars_prev_at`, et chaque dépôt a *ses* deux instants : le
-    # round-robin ne les rafraîchit pas ensemble. Sommer les étoiles puis
-    # diviser par un intervalle inventé pour l'ensemble redonnerait exactement
-    # le défaut que la tâche 2 a corrigé.
-    #
-    # Recommandation : calculer le taux **par dépôt**, puis en faire une moyenne
-    # pondérée par `stars_prev`. C'est identique à la somme quand les intervalles
-    # coïncident, et correct quand ils divergent. Ne pas prendre `min`/`max` des
-    # instants : la fenêtre la plus étroite surestime le taux, donc biaise à la
-    # hausse — le mauvais sens.
+    # `merged` ne porte ni `stars`/`stars_prev` ni `pushed_at` : les deux se
+    # calculent par dépôt plus bas, jamais sur une somme ou un agrégat
+    # d'horodatages. Les y remettre serait trompeur — un lecteur qui voit des
+    # champs étoiles ou date sur `merged` en conclurait raisonnablement que la
+    # croissance d'étoiles ou la fraîcheur en découlent, ce qui est
+    # exactement l'erreur que les deux blocs ci-dessous existent pour éviter.
     merged = RepoStats(
         owner=live[0].owner,
         repo=f"<{len(live)} repos>",
-        stars=_sum_or_none([r.stars for r in live]),
-        pushed_at=max((r.pushed_at for r in live if r.pushed_at), default=None),
         commits_4w=_sum_or_none([r.commits_4w for r in live]),
-        commits_median_52w=_sum_median([r.commits_median_52w for r in live]),
+        commits_median_52w=_sum_or_none([r.commits_median_52w for r in live]),
         pr_merged_4w=_sum_or_none([r.pr_merged_4w for r in live]),
         pr_merged_52w=_sum_or_none([r.pr_merged_52w for r in live]),
-        stars_prev=_sum_or_none([r.stars_prev for r in live]),
     )
-    freshness = days_since_push(merged, now)
+
+    # Fraîcheur : par dépôt, pas sur un `max(pushed_at)` agrégé. Le `max`
+    # ferait gagner le dépôt le plus mal daté avant même de savoir si son
+    # horodatage est crédible — un seul dépôt à l'horloge décalée écraserait
+    # alors la fraîcheur mesurée de tous les dépôts sains du même coin.
+    # `days_since_push` filtre déjà la gigue d'horloge au niveau d'un dépôt ;
+    # on ne fait ici que garder le plus petit nombre de jours parmi les
+    # dépôts dont l'horodatage a été cru, et ignorer les autres plutôt que de
+    # laisser l'un d'eux invalider le lot.
+    per_repo_freshness = [days_since_push(r, now) for r in live]
+    believed = [f for f in per_repo_freshness if f is not None]
+    freshness = min(believed) if believed else None
+    # Un rejet individuel reste rapporté même quand un autre dépôt sauve la
+    # fraîcheur du coin : c'est un signal d'observabilité pour l'appelant
+    # (qui seul a le droit d'incrémenter un compteur), pas une condition sur
+    # le résultat final.
+    push_timestamp_rejected = any(
+        r.pushed_at is not None and f is None
+        for r, f in zip(live, per_repo_freshness, strict=True)
+    )
+
     return CoinActivity(
         repo_count=len(live),
         commit_ratio_4w=commit_ratio(merged),
         pr_ratio_4w=pr_ratio(merged),
         days_since_push=freshness,
         # Plus de `now` : l'intervalle court d'un snapshot à l'autre, pas
-        # jusqu'à l'horloge du cycle. Voir la note ci-dessus sur l'agrégation.
+        # jusqu'à l'horloge du cycle. Voir la note dans `_weighted_star_growth`
+        # sur l'agrégation par dépôt plutôt que sur une somme d'étoiles.
         star_growth_pct_7d=_weighted_star_growth(live),
         all_repos_archived=False,
-        # Rapporté, pas compté : ce module reste pur, et c'est l'appelant qui
-        # incrémente la métrique. L'horodatage existait mais n'a pas été cru —
-        # horloge décalée au-delà de CLOCK_SKEW_TOLERANCE. Sans cette
-        # remontée la perte serait invisible : freshness pèse 0.25 de l'axe,
-        # et une dérive d'horloge l'annule pour *tous* les dépôts récemment
-        # poussés d'un coup, l'axe se renormalisant en silence sur 0.75.
-        push_timestamp_rejected=merged.pushed_at is not None and freshness is None,
+        push_timestamp_rejected=push_timestamp_rejected,
     )
 
 
@@ -802,6 +809,11 @@ def _weighted_star_growth(live: Sequence[RepoStats]) -> float | None:
 
     Pondéré par ``stars_prev`` parce qu'un dépôt de documentation à 30 étoiles
     ne doit pas peser autant que le client principal à 40 000.
+
+    Une lecture partielle (certains dépôts sans taux utilisable) ne se
+    transforme jamais en lecture complète : seuls les dépôts dont le taux est
+    effectivement calculable entrent dans la moyenne, et si aucun ne l'est le
+    résultat reste ``None`` plutôt qu'un 0.0 fabriqué.
     """
     rates = [
         (star_growth_pct(r), r.stars_prev)
@@ -813,17 +825,6 @@ def _weighted_star_growth(live: Sequence[RepoStats]) -> float | None:
         return None
     total = sum(base for _, base in usable)
     return sum(rate * base for rate, base in usable) / total
-
-
-def _sum_median(values: Sequence[float | None]) -> float | None:
-    """Somme des médianes hebdomadaires.
-
-    Ce n'est pas la médiane de la somme, et c'est volontaire : on ne dispose
-    que des médianes par dépôt, et leur somme est la meilleure estimation du
-    rythme de croisière de l'ensemble sans redemander les 52 séries.
-    """
-    present = [v for v in values if v is not None]
-    return sum(present) if present else None
 ```
 
 - [ ] **Step 4 : lancer le test, vérifier qu'il passe**
@@ -2233,6 +2234,20 @@ class GitHubCollector:
                 continue
             if activity.push_timestamp_rejected:
                 UNMEASURED.labels(SERVICE, "days_since_push", "clock_skew").inc()
+            if not activity.all_repos_archived and not any(
+                (
+                    activity.commit_ratio_4w,
+                    activity.pr_ratio_4w,
+                    activity.days_since_push,
+                    activity.star_growth_pct_7d,
+                )
+            ):
+                # Des dépôts existent mais aucune mesure n'a abouti — tous en
+                # 202, par exemple. L'événement serait valide au sens du schéma
+                # et n'affirmerait rien : le FeatureStore n'y trouverait que
+                # `dev_repo_count`, et l'axe resterait absent de toute façon.
+                # Ne pas publier vaut mieux que publier du vide.
+                continue
             try:
                 event = DeveloperEvent(
                     source=Source.GITHUB,

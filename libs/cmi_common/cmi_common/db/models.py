@@ -206,7 +206,9 @@ class Decision(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     event_id: Mapped[str] = mapped_column(String(64), unique=True)
-    correlation_id: Mapped[str | None] = mapped_column(String(64), index=True, default=None)
+    correlation_id: Mapped[str | None] = mapped_column(
+        String(64), index=True, default=None
+    )
     symbol: Mapped[str] = mapped_column(String(32), index=True)
     direction: Mapped[str] = mapped_column(String(8))
     opportunity_score: Mapped[int] = mapped_column(Integer)
@@ -225,7 +227,9 @@ class Trade(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     event_id: Mapped[str] = mapped_column(String(64), unique=True)
-    correlation_id: Mapped[str | None] = mapped_column(String(64), index=True, default=None)
+    correlation_id: Mapped[str | None] = mapped_column(
+        String(64), index=True, default=None
+    )
     decision_id: Mapped[int | None] = mapped_column(ForeignKey("decisions.id"))
     symbol: Mapped[str] = mapped_column(String(32), index=True)
     direction: Mapped[str] = mapped_column(String(8))
@@ -275,8 +279,11 @@ class RawContent(Base):
         UniqueConstraint(
             "source", "external_id", name="uq_raw_content_source_external"
         ),
-        Index("ix_raw_content_unscored", "fetched_at",
-              postgresql_where=sa_text("scored_at IS NULL")),
+        Index(
+            "ix_raw_content_unscored",
+            "fetched_at",
+            postgresql_where=sa_text("scored_at IS NULL"),
+        ),
         Index("ix_raw_content_fetched_at", "fetched_at"),
         # The existing ix_raw_content_unscored is partial (WHERE scored_at IS
         # NULL) and cannot serve a `scored_at >= W` range scan.
@@ -447,6 +454,100 @@ class VenuePair(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class CryptoProjectRegistry(Base):
+    """Projets crypto recensés par les deux listes de référence.
+
+    Un projet sans ticker résolu garde ``symbol = NULL`` et reste ici : le
+    registre est un catalogue, pas la table de scoring. ``NULL`` veut dire « pas
+    de rattachement connu », ce qui n'affirme rien sur l'activité du projet.
+
+    ``homepage_url`` est ``NULL`` pour tout ce qui vient de best-of-crypto, qui
+    n'en publie pas. La déduire du lien GitHub inventerait une URL, et une
+    chaîne vide se lirait comme « ce projet n'a pas de site » — deux affirmations
+    que la donnée ne porte pas.
+    """
+
+    __tablename__ = "crypto_project_registry"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    github_url: Mapped[str] = mapped_column(String(255), unique=True)
+    name: Mapped[str] = mapped_column(String(128))
+    homepage_url: Mapped[str | None] = mapped_column(String(512), default=None)
+    description: Mapped[str | None] = mapped_column(Text, default=None)
+    category: Mapped[str | None] = mapped_column(String(64), default=None)
+    source_list: Mapped[str] = mapped_column(String(32))
+    symbol: Mapped[str | None] = mapped_column(String(32), default=None, index=True)
+    #: Jamais écrasé au réimport : c'est la seule trace de la date d'entrée d'un
+    #: projet dans les listes.
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class CoinRepoMap(Base):
+    """Rattachement de confiance ``coin -> dépôt``.
+
+    ``origin`` distingue le mapping officiel CoinGecko (``links.repos_url.github``)
+    d'une promotion depuis une awesome-list. Les deux ne se valent pas, et un
+    doute futur sur la qualité de l'axe se tranchera en filtrant là-dessus.
+    """
+
+    __tablename__ = "coin_repo_map"
+
+    coin_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    owner: Mapped[str] = mapped_column(String(128), primary_key=True)
+    repo: Mapped[str] = mapped_column(String(128), primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    origin: Mapped[str] = mapped_column(String(16))
+    resolved_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class GithubRepoSnapshot(Base):
+    """Une lecture d'un dépôt à un instant donné.
+
+    Existe pour une seule raison : les deltas. GitHub ne publie pas
+    d'historique d'étoiles exploitable, donc la croissance se calcule entre
+    deux snapshots — et vaut ``None`` tant qu'il n'y en a qu'un.
+
+    Toutes les colonnes de mesure sont nullables, sans défaut à zéro ni côté
+    Python ni côté serveur. Un ``NOT NULL DEFAULT 0`` transformerait « pas
+    encore lu » en « mesuré à zéro » au niveau du schéma, c'est-à-dire à
+    l'endroit le plus coûteux à rattraper ensuite. ``archived`` et ``is_fork``
+    échappent à la règle parce qu'ils ne sont pas des mesures : un dépôt dont
+    on a lu la fiche est archivé ou ne l'est pas.
+    """
+
+    __tablename__ = "github_repo_snapshot"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(String(128))
+    repo: Mapped[str] = mapped_column(String(128))
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    stars: Mapped[int | None] = mapped_column(Integer, default=None)
+    forks: Mapped[int | None] = mapped_column(Integer, default=None)
+    commits_4w: Mapped[int | None] = mapped_column(Integer, default=None)
+    commits_median_52w: Mapped[float | None] = mapped_column(Float, default=None)
+    pr_merged_4w: Mapped[int | None] = mapped_column(Integer, default=None)
+    pr_merged_52w: Mapped[int | None] = mapped_column(Integer, default=None)
+    pushed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_fork: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    #: `stats_from_rows` lit les deux dernières lignes d'un dépôt à chaque cycle
+    #: de publication, pour chaque symbole suivi. Sans cet index composite, c'est
+    #: un scan séquentiel par symbole et par cycle.
+    __table_args__ = (Index("ix_github_snapshot_repo", "owner", "repo", "observed_at"),)
 
 
 # Tables that become Timescale hypertables (time-partitioned).

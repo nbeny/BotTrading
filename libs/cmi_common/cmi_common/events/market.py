@@ -1,5 +1,5 @@
-"""Market data events: price, volume, DEX activity, derivatives positioning
-and protocol fundamentals."""
+"""Market data events: price, volume, DEX activity, derivatives positioning,
+protocol fundamentals and developer activity."""
 
 from __future__ import annotations
 
@@ -140,6 +140,48 @@ class FundamentalsEvent(BaseEvent):
     next_unlock_at: datetime | None = None
     next_unlock_pct_supply: float | None = Field(default=None, ge=0)
     has_unlock_schedule: bool = False
+
+    def partition_key(self) -> str:
+        return self.symbol
+
+
+class DeveloperEvent(BaseEvent):
+    """Activité de développement agrégée par token, sur ``market.developer.events``.
+
+    Tous les champs de mesure transportent des **ratios bruts**, pas des valeurs
+    mises à l'échelle : la mise à l'échelle vit dans ``decision-engine`` comme
+    pour les sept autres axes.
+
+    ``all_repos_archived`` est le seul zéro légitime de cette chaîne. Il dit
+    « on a regardé, tous les dépôts connus sont archivés ou forkés » — une
+    observation, à distinguer d'une absence de mesure, qui reste ``None``.
+    """
+
+    event_type: Literal[EventType.DEVELOPER] = EventType.DEVELOPER
+    symbol: str
+    coin_id: str = Field(
+        ...,
+        description=(
+            "CoinGecko id, e.g. 'aave' — joint directement Token.coin_id, comme "
+            "FundamentalsEvent."
+        ),
+    )
+    #: Dépôts retenus dans l'agrégat (archivés et forks exclus). Un décompte,
+    #: pas une mesure. ``0`` est légal et n'accompagne qu'un cas :
+    #: ``all_repos_archived=True``, où il dit « des dépôts existent, aucun n'est
+    #: vivant ». Quand *aucun* dépôt n'a pu être lu, le collector ne publie pas
+    #: d'événement du tout, plutôt qu'un événement à zéro.
+    repo_count: int = Field(..., ge=0)
+    #: commits sur 4 semaines / (médiane hebdomadaire sur 52 semaines × 4).
+    #: 1.0 = rythme habituel. Borné en bas à 0 : c'est un rapport de comptages.
+    commit_ratio_4w: float | None = Field(default=None, ge=0)
+    pr_ratio_4w: float | None = Field(default=None, ge=0)
+    #: Jours depuis le push le plus récent, tous dépôts confondus.
+    days_since_push: int | None = Field(default=None, ge=0)
+    #: Croissance des étoiles sur 7 jours, en fraction (0.02 = +2 %). Peut être
+    #: négative : un dépôt perd des étoiles.
+    star_growth_pct_7d: float | None = None
+    all_repos_archived: bool = False
 
     def partition_key(self) -> str:
         return self.symbol

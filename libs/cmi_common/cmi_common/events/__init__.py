@@ -21,6 +21,7 @@ from .execution import ExecutionEvent, ExecutionKind
 from .journal import JournalEntryEvent
 from .market import (
     DerivativesEvent,
+    DeveloperEvent,
     DexEvent,
     FundamentalsEvent,
     PriceEvent,
@@ -45,6 +46,7 @@ AnyEvent = Annotated[
         | DexEvent
         | DerivativesEvent
         | FundamentalsEvent
+        | DeveloperEvent
         | NewsEvent
         | SocialEvent
         | SentimentEvent
@@ -81,6 +83,7 @@ __all__ = [
     "ControlCommandEvent",
     "DecisionEvent",
     "DerivativesEvent",
+    "DeveloperEvent",
     "DexEvent",
     "Direction",
     "EventType",

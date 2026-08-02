@@ -12,6 +12,7 @@ from ..events.execution import ExecutionEvent
 from ..events.journal import JournalEntryEvent
 from ..events.market import (
     DerivativesEvent,
+    DeveloperEvent,
     DexEvent,
     FundamentalsEvent,
     PriceEvent,
@@ -29,6 +30,7 @@ class Topic(StrEnum):
     DEX = "market.dex.events"
     DERIVATIVES = "market.derivatives.events"
     FUNDAMENTALS = "market.fundamentals.events"
+    DEVELOPER = "market.developer.events"
     NEWS = "market.news.events"
     SOCIAL = "market.social.events"
     SENTIMENT = "market.sentiment.events"
@@ -48,6 +50,7 @@ TOPIC_EVENT = {
     Topic.DEX: DexEvent,
     Topic.DERIVATIVES: DerivativesEvent,
     Topic.FUNDAMENTALS: FundamentalsEvent,
+    Topic.DEVELOPER: DeveloperEvent,
     Topic.NEWS: NewsEvent,
     Topic.SOCIAL: SocialEvent,
     Topic.SENTIMENT: SentimentEvent,
@@ -70,6 +73,9 @@ TOPIC_PARTITIONS = {
     Topic.DERIVATIVES: 6,
     # One event per protocol per 10 min: far quieter than the price topics.
     Topic.FUNDAMENTALS: 3,
+    # One event per token per collector cycle (hours, not minutes): the
+    # quietest market topic, on par with fundamentals.
+    Topic.DEVELOPER: 3,
     Topic.NEWS: 6,
     Topic.SOCIAL: 6,
     Topic.SENTIMENT: 6,

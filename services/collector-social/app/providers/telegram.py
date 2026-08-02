@@ -37,6 +37,16 @@ BACKFILL = 20
 MAX_PER_CYCLE = 100
 #: Telegram posts run to 4096 chars, mostly disclaimer boilerplate past the call.
 MAX_TEXT = 4000
+#: Source health, written by the provider and rendered in the terminal:
+#: ``{"ok": bool, "reason": str | None, "channels": {handle: reason}}``.
+#: Both faults it carries are otherwise invisible outside the container logs —
+#: AdaptivePollLoop turns every exception into a warning and a 120s backoff, so
+#: a revoked session or a written-off channel can run for weeks with nothing
+#: reaching the operator who could fix it.
+STATUS_KEY = "collectors:status:telegram"
+#: Kept short enough to render in a table cell — the raw telethon message is a
+#: sentence that repeats the handle already shown in the same row.
+MAX_REASON = 80
 
 
 def _default_client_factory(
@@ -89,7 +99,11 @@ class TelegramProvider:
         # unique index absorbs the overlap.
         self._entities: dict[str, Any] = {}
         self._cursor: dict[str, int] = {}
-        self._dead: set[str] = set()
+        # Handle -> why it was written off. The reason travels with the handle
+        # rather than being logged and dropped: it is what the terminal shows,
+        # and "this channel is contributing nothing" is not actionable without
+        # it (renamed, gone private and banned all need different fixes).
+        self._dead: dict[str, str] = {}
 
     async def close(self) -> None:
         if self._client is None:
@@ -99,6 +113,12 @@ class TelegramProvider:
 
     async def fetch(self) -> list[RawItem]:
         channels = await self._active_channels()
+        if not channels:
+            # Before any session setup, not after: with nobody to poll, a dead
+            # session denies us nothing, and raising on it would report a fault
+            # every 120s for a source that is behaving exactly as configured.
+            await self._publish_status(ok=True, reason=None)
+            return []
         client, errors = await self._ensure_client()
         items: list[RawItem] = []
         for channel in channels:
@@ -121,10 +141,11 @@ class TelegramProvider:
                 # ResolveUsername calls forever, so write it off until a restart
                 # or until the operator takes it off the list (see
                 # ``_active_channels``).
-                self._dead.add(channel)
+                self._dead[channel] = _reason(exc)
                 logger.warning(
                     "telegram: dropping %s — %s: %s", channel, type(exc).__name__, exc
                 )
+        await self._publish_status(ok=True, reason=None)
         return items
 
     async def _active_channels(self) -> list[str]:
@@ -135,10 +156,32 @@ class TelegramProvider:
         write-offs cannot: dropping a handle is the operator saying "this one is
         settled", so re-adding it has to buy a fresh resolve attempt, otherwise a
         typo fixed in the terminal stays dead until the process restarts.
+
+        A Redis error propagates and costs the cycle — fail-*closed*, deliberately
+        unlike ``is_enabled``, which returns True on a read error so an outage
+        cannot mute a source. A toggle has a safe default ("keep running"); a
+        channel list has none. Nothing here holds a last-known list, and the only
+        other candidate — the env seed — is exactly what the operator's edits
+        replaced, so falling back would resurrect channels they had removed.
         """
         channels = (await get_runtime(self._cache))["telegram_channels"]
-        self._dead &= set(channels)
+        active = set(channels)
+        self._dead = {h: why for h, why in self._dead.items() if h in active}
         return list(channels)
+
+    async def _publish_status(self, *, ok: bool, reason: str | None) -> None:
+        """Publish source health for the terminal to read.
+
+        Durable (``ttl_seconds=0``), like ``collectors:runtime``: an expiring
+        fault would lapse back to "nothing reported" while still being broken,
+        and the provider only rewrites this key when a cycle runs — which is
+        exactly what a revoked session prevents.
+        """
+        await self._cache.set_json(
+            STATUS_KEY,
+            {"ok": ok, "reason": reason, "channels": dict(self._dead)},
+            ttl_seconds=0,
+        )
 
     async def _ensure_client(self) -> tuple[Any, Any]:
         if self._client is not None and self._errors is not None:
@@ -150,6 +193,13 @@ class TelegramProvider:
             # published to self._client, so close() would have nothing to hang up
             # and every backed-off retry would leak a connection.
             await _disconnect(client)
+            # Published before the raise: the loop turns this into a warning and
+            # a 120s backoff, so the exception itself never leaves the container.
+            await self._publish_status(
+                ok=False,
+                reason="TELEGRAM_SESSION is missing or no longer authorized — "
+                "mint a fresh one with `python scripts/telegram_session.py`",
+            )
             # Loud on every cycle rather than an empty fetch: a silent [] here
             # reads downstream as "Telegram had nothing to say", which is a
             # different claim from "Telegram was never asked".
@@ -204,6 +254,18 @@ class TelegramProvider:
             )
         self._cursor[channel] = highest
         return items
+
+
+def _reason(exc: Exception) -> str:
+    """Short, stable label for a write-off.
+
+    The class name alone would collapse telethon's bare ``ValueError`` — the one
+    raised for an unknown username — into something the operator cannot tell
+    apart from any other lookup failure, so the message rides along, trimmed.
+    """
+    name = type(exc).__name__
+    detail = str(exc).strip()
+    return f"{name}: {detail[:MAX_REASON]}" if detail else name
 
 
 async def _disconnect(client: Any) -> None:

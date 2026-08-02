@@ -90,11 +90,16 @@ class FakeClient:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.resolved: list[str] = []
         self.disconnected = False
+        # Counted, not just observed through their effects: "the session was
+        # never opened" is the assertion an empty channel list has to make.
+        self.connects = 0
+        self.auth_checks = 0
 
     async def connect(self) -> None:
-        return None
+        self.connects += 1
 
     async def is_user_authorized(self) -> bool:
+        self.auth_checks += 1
         return self._authorized
 
     async def disconnect(self) -> None:
@@ -133,6 +138,7 @@ class FakeCache:
 
     def __init__(self, channels: list[str]) -> None:
         self._store: dict[str, Any] = {}
+        self.ttls: dict[str, int] = {}
         self.set_channels(channels)
 
     def set_channels(self, channels: list[str]) -> None:
@@ -143,6 +149,10 @@ class FakeCache:
 
     async def set_json(self, key: str, value: Any, ttl_seconds: int = 60) -> None:
         self._store[key] = value
+        self.ttls[key] = ttl_seconds
+
+    def status(self) -> Any:
+        return self._store.get("collectors:status:telegram")
 
 
 def _provider(
@@ -333,12 +343,89 @@ async def test_removing_a_channel_clears_its_write_off_so_re_adding_retries() ->
     provider = _provider(client, cache=cache)
 
     await provider.fetch()
-    assert provider._dead == {"alpha"}
+    assert set(provider._dead) == {"alpha"}
 
     cache.set_channels([])  # operator drops it
     await provider.fetch()
-    assert provider._dead == set()
+    assert provider._dead == {}
 
     cache.set_channels(["alpha"])  # ...and puts it back
     await provider.fetch()
     assert client.resolved == ["alpha", "alpha"]
+
+
+# --- health key: the two failure modes that were log-only ------------------
+
+
+async def test_a_completed_cycle_publishes_a_healthy_status() -> None:
+    client = FakeClient(messages={"alpha": [_msg(1, "a")]})
+    cache = FakeCache(["alpha"])
+    provider = _provider(client, cache=cache)
+
+    await provider.fetch()
+
+    assert cache.status() == {"ok": True, "reason": None, "channels": {}}
+    # Durable: an expiring "unhealthy" would read as healthy once it lapsed.
+    assert cache.ttls[tg.STATUS_KEY] == 0
+
+
+async def test_an_unauthorized_session_is_published_before_the_raise() -> None:
+    # The whole point of the key: without it a revoked session is a log line
+    # every 120s and nothing at all in the terminal.
+    client = FakeClient(authorized=False)
+    cache = FakeCache(["alpha"])
+    provider = _provider(client, cache=cache)
+
+    with pytest.raises(RuntimeError):
+        await provider.fetch()
+
+    status = cache.status()
+    assert status["ok"] is False
+    assert status["reason"]
+    assert "TELEGRAM_SESSION" in status["reason"]
+
+
+async def test_a_written_off_channel_is_published_with_its_reason() -> None:
+    client = FakeClient(resolve_error=ChannelPrivateError())
+    cache = FakeCache(["alpha"])
+    provider = _provider(client, cache=cache)
+
+    await provider.fetch()
+
+    status = cache.status()
+    # The cycle itself completed — one unreadable channel is not a source fault.
+    assert status["ok"] is True
+    assert status["reason"] is None
+    assert "ChannelPrivateError" in status["channels"]["alpha"]
+
+
+async def test_a_channel_taken_off_the_list_disappears_from_the_status() -> None:
+    client = FakeClient(resolve_error=UsernameInvalidError("no user has alpha"))
+    cache = FakeCache(["alpha"])
+    provider = _provider(client, cache=cache)
+
+    await provider.fetch()
+    assert "alpha" in cache.status()["channels"]
+
+    cache.set_channels(["beta"])
+    provider._entities["beta"] = SimpleNamespace(id=-1002, username="beta")
+    await provider.fetch()
+
+    # Reporting a write-off for a handle the operator has removed would send
+    # them looking for a channel that is no longer configured anywhere.
+    assert cache.status()["channels"] == {}
+
+
+async def test_an_empty_list_reports_health_without_opening_a_session() -> None:
+    # A dead session plus an empty list used to raise every cycle while polling
+    # nobody: there is nothing to authorize for.
+    client = FakeClient(authorized=False)
+    cache = FakeCache([])
+    provider = _provider(client, cache=cache)
+
+    items = await provider.fetch()
+
+    assert items == []
+    assert cache.status() == {"ok": True, "reason": None, "channels": {}}
+    assert (client.connects, client.auth_checks) == (0, 0)
+    assert client.resolved == []

@@ -12,6 +12,36 @@
 
 ---
 
+## ⚠️ Ce plan a été dépassé en cours d'exécution — lire ceci d'abord
+
+Après la tâche 1, on a découvert une implémentation Telegram déjà écrite et jamais mergée,
+sur la branche `worktree-telegram-collector` (commit `33562e9`, 656 insertions), cachée dans
+un worktree verrouillé sous `.claude/worktrees/`. Elle a été mergée dans
+`feat/telegram-ingestion`, et la suite du travail est devenue un **delta** par-dessus, pas
+l'exécution des tâches 2 à 7 ci-dessous.
+
+Ce qui a réellement été fait, et où lire la vérité :
+
+| Tâche du plan | Devenu |
+|---|---|
+| **1** — canaux dans `collectors:runtime` | fait tel quel (`8b9854f`) |
+| **2** — mapper pur `telegram_map.py` | **abandonné.** Le provider existant teste déjà la règle absent/zéro (`test_absent_views_stay_none_rather_than_zero`) ; extraire un mapper aurait été du refactoring sans gain. |
+| **3** — `TelegramProvider` | existait déjà, et en mieux : cache d'entités, mise à l'écart des canaux irrésolubles, import Telethon paresseux. Remplacé par **D1** (liste relue à chaque cycle) et **D2** (clé de santé). |
+| **4** — câblage | existait déjà. `TELEGRAM_POLL_INTERVAL` abandonné (non demandé, non utilisé). |
+| **5** — control-api | fait en **D3**, avec deux écarts assumés : plafond à **50** et non 25 (la graine compte 24 canaux, 25 ne laissait de place que pour un ajout), et `normalize_channel` vit dans `cmi_common.sources.runtime`, pas dans `collectors.py` — control-api n'a pas le droit d'importer un collecteur, et deux normalisations divergentes laisseraient l'opérateur saisir un handle que le provider n'interroge jamais. |
+| **6** — terminal | inchangé, reste à faire |
+| **7** — déploiement | largement apporté par le merge. `deploy.yml` n'est **pas** modifié pour les secrets (il n'en transporte aucun) mais il lance une **liste explicite de fichiers de test** en CI, ce que ce plan avait manqué. |
+
+S'y ajoute **D2b**, absente du plan d'origine : une revue de qualité a trouvé que la clé de
+santé annonçait `ok: true` indéfiniment dès qu'un cycle échouait après connexion — soit
+précisément la panne qu'elle devait rendre visible — et que `set_runtime` détruisait le
+signal « jamais configuré » en matérialisant la graine.
+
+Les blocs de code ci-dessous restent utiles comme trace du raisonnement, mais **ne
+correspondent plus au code en place**. Le code fait foi.
+
+---
+
 ## Structure de fichiers
 
 **Créés :**

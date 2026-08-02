@@ -434,7 +434,7 @@ est positive et qui n'a rien produit en quatre semaines s'est réellement arrêt
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 #: Fenêtre récente, en semaines. La baseline est ramenée à cette même durée.
 WINDOW_WEEKS = 4
@@ -491,10 +491,32 @@ def pr_ratio(stats: RepoStats) -> float | None:
     return _ratio(stats.pr_merged_4w, weekly * WINDOW_WEEKS)
 
 
+#: Tolérance de gigue NTP entre notre horloge et celle de GitHub — pas une
+#: règle métier. En dessous, un horodatage « dans le futur » est notre horloge
+#: qui retarde ; au-delà, c'est une lecture qu'on ne croit pas.
+CLOCK_SKEW_TOLERANCE = timedelta(minutes=5)
+
+
 def days_since_push(stats: RepoStats, now: datetime) -> int | None:
+    """Jours depuis le dernier push, ``None`` si l'horodatage est incroyable.
+
+    Un ``max(0, ...)` seul serait un piège : ``timedelta.days`` arrondit vers
+    moins l'infini, donc un push en avance d'**une seconde** donne ``.days ==
+    -1``. Clamper à 0 traduirait une horloge décalée en « poussé aujourd'hui »,
+    c'est-à-dire la valeur de fraîcheur la plus favorable qui soit — un zéro
+    fabriqué, exactement ce que ce module existe pour empêcher.
+
+    Rendre ``None`` dès la première seconde d'avance serait le défaut inverse :
+    le sous-signal disparaîtrait sans bruit sur les dépôts qui viennent de
+    pousser, c'est-à-dire les plus actifs, ceux que le momentum cherche
+    précisément à détecter. D'où la tolérance bornée.
+    """
     if stats.pushed_at is None:
         return None
-    return max(0, (now - stats.pushed_at).days)
+    delta = now - stats.pushed_at
+    if delta < -CLOCK_SKEW_TOLERANCE:
+        return None
+    return max(0, delta.days)
 
 
 def star_growth_pct(stats: RepoStats) -> float | None:
@@ -2479,6 +2501,10 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
             break  # un coin par cycle : le mapping est quasi immuable
 
     async def cycle() -> None:
+        # Un seul `now` par cycle, échantillonné ici et passé jusqu'à
+        # days_since_push. Le relire par dépôt ferait glisser la fenêtre de
+        # CLOCK_SKEW_TOLERANCE au fil d'un cycle long, donc rétrécirait
+        # silencieusement la tolérance pour les derniers dépôts traités.
         await refresh_mapping()
         await collector.poll_once()
 

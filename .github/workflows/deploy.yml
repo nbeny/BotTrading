@@ -56,7 +56,8 @@ jobs:
             tests/test_scoring_new_axes.py \
             tests/test_scoring_renormalisation.py \
             tests/test_decision_engine_context_features.py \
-            tests/test_market_regime_signal.py -q
+            tests/test_market_regime_signal.py \
+            tests/test_telegram_provider.py -q
 
   # -------------------------------------------------------------- images
   images:

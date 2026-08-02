@@ -189,6 +189,12 @@ services:
       NEYNAR_API_KEY: ${NEYNAR_API_KEY:-}
       YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
       LENS_QUERY: ${LENS_QUERY:-crypto}
+      # Telegram: all three required, or the source stays off. TELEGRAM_SESSION
+      # is minted by scripts/telegram_session.py (see .env.example).
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
+      TELEGRAM_SESSION: ${TELEGRAM_SESSION:-}
+      TELEGRAM_CHANNELS: ${TELEGRAM_CHANNELS:-}
       SOURCE_BREAKER_COOLDOWN: ${SOURCE_BREAKER_COOLDOWN:-300}
     labels:
       - traefik.enable=true

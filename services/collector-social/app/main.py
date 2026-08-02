@@ -25,6 +25,7 @@ from .providers.lens import LensProvider
 from .providers.mastodon import MastodonProvider
 from .providers.neynar import NeynarProvider
 from .providers.reddit import RedditProvider
+from .providers.telegram import TelegramProvider, parse_channels
 from .providers.youtube import YouTubeProvider
 
 POLL_INTERVAL = float(os.getenv("SOCIAL_POLL_INTERVAL", "300"))
@@ -60,7 +61,30 @@ def _build_providers() -> list[Provider]:
     if os.getenv("YOUTUBE_API_KEY"):
         providers.append(YouTubeProvider(os.getenv("YOUTUBE_API_KEY")))
     providers.append(LensProvider(query=os.getenv("LENS_QUERY", "crypto")))
+    telegram = _telegram_provider()
+    if telegram is not None:
+        providers.append(telegram)
     return providers
+
+
+def _telegram_provider() -> TelegramProvider | None:
+    """Telegram runs on a user session, so all three credentials must be present.
+
+    The session is minted out-of-band by ``scripts/telegram_session.py``; there
+    is no way to log in from here, so a partial config disables the source
+    rather than starting a provider that can only ever fail.
+    """
+    api_id = os.getenv("TELEGRAM_API_ID", "").strip()
+    api_hash = os.getenv("TELEGRAM_API_HASH", "").strip()
+    session = os.getenv("TELEGRAM_SESSION", "").strip()
+    if not (api_id.isdigit() and api_hash and session):
+        return None
+    return TelegramProvider(
+        api_id=int(api_id),
+        api_hash=api_hash,
+        session=session,
+        channels=parse_channels(os.getenv("TELEGRAM_CHANNELS")),
+    )
 
 
 class _RepoFactory:

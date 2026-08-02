@@ -219,9 +219,13 @@ modèle de `scripts/verify_read_live.py`.
 `telethon>=1.36` dans `services/collector-social/pyproject.toml`.
 
 Trois secrets, tous requis ensemble pour activer le provider : `TELEGRAM_API_ID`,
-`TELEGRAM_API_HASH`, `TELEGRAM_SESSION` (une `StringSession`). Ajoutés aux secrets GitHub
-Actions et à l'environnement du service dans `docker-compose.vps.yml`. La session est un
-identifiant de compte complet : elle ne doit jamais être commitée ni journalisée.
+`TELEGRAM_API_HASH`, `TELEGRAM_SESSION` (une `StringSession`). Déclarés dans le bloc
+`environment` de `collector-social` dans `docker-compose.vps.yml`, et renseignés dans
+`/opt/bottrading/.env` sur le VPS. `.github/workflows/deploy.yml` n'est **pas** modifié :
+il ne transporte aucun secret applicatif — il `rsync` le compose puis lance
+`scripts/deploy-vps.sh` par ssh, et c'est pourquoi `NEYNAR_API_KEY` n'y figure pas non
+plus. La session est un identifiant de compte complet : elle ne doit jamais être commitée
+ni journalisée.
 
 Une variable optionnelle : `TELEGRAM_POLL_INTERVAL`, qui vaut `SOCIAL_POLL_INTERVAL` par
 défaut.

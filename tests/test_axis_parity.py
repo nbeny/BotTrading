@@ -102,3 +102,22 @@ def test_no_axis_is_listed_twice():
         ("SCORE_AXES", _score_axes()),
     ):
         assert len(keys) == len(set(keys)), name
+
+
+def _mock_axes_total() -> int:
+    mock = (ROOT / "frontend/src/lib/mock/dossier.ts").read_text(encoding="utf-8")
+    match = re.search(r"axes_total:\s*(\d+)", mock)
+    assert match, "axes_total introuvable dans le mock"
+    return int(match.group(1))
+
+
+def test_the_mock_declares_as_many_axes_as_the_list():
+    """Le mock est le mode par defaut du terminal (NEXT_PUBLIC_USE_MOCK=1).
+
+    Le drawer rend une ligne par entree de SCORE_AXES mais affiche la legende
+    "N axes sur {axes_total} mesures": un axes_total fige a 7 faisait rendre
+    huit lignes sous une legende qui en annonce sept. Un nombre faux et
+    plausible, exactement le motif que CLAUDE.md signale pour ce fichier --
+    et aucun tsc ne tourne en CI pour l'attraper.
+    """
+    assert _mock_axes_total() == len(_score_axes())

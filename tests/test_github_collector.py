@@ -265,3 +265,74 @@ async def test_an_unexpected_fetch_error_costs_one_repo_not_the_cycle():
     assert sorted(calls) == ["r0", "r1"]
     assert stats.failed == 1
     assert stats.refreshed == 1
+
+
+async def test_a_stopped_project_measured_at_zero_is_still_published():
+    """commit_ratio 0.0 et days_since_push 0 sont des mesures, et falsy.
+
+    Un garde fonde sur la veracite booleenne les jetterait -- et un projet
+    arrete serait alors *exclu* de la renormalisation, donc silencieusement
+    promu. C'est le defaut exact que has_measurement remplace.
+    """
+    producer = _Producer()
+    stopped = _stats(
+        "o",
+        "r0",
+        commits_4w=0,
+        commits_median_52w=10.0,
+        pr_merged_4w=None,
+        pr_merged_52w=None,
+        pushed_at=NOW,
+        stars_prev=None,
+    )
+    collector = _collector(
+        producer, _Store({("o", "r0"): stopped}), repo_map=lambda: _map(1)
+    )
+    await collector.poll_once()
+    assert len(producer.published) == 1
+    assert producer.published[0].commit_ratio_4w == 0.0
+    assert producer.published[0].days_since_push == 0
+
+
+async def test_a_failing_snapshot_read_costs_one_token_not_the_cycle():
+    """store.latest est un aller-retour Postgres appele ~500 fois par cycle:
+    l'appel le plus susceptible d'echouer, et il etait hors garde."""
+
+    class _FlakyStore(_Store):
+        async def latest(self, owner, repo):
+            if repo == "r0":
+                raise RuntimeError("connection reset")
+            return await super().latest(owner, repo)
+
+    producer = _Producer()
+    store = _FlakyStore({("o", f"r{i}"): _stats("o", f"r{i}") for i in range(3)})
+    collector = _collector(producer, store, repo_map=lambda: _map(3))
+    await collector.poll_once()
+    assert {e.symbol for e in producer.published} == {"S1", "S2"}
+
+
+async def test_a_failing_publish_costs_one_token_not_the_cycle():
+    """Aller-retour Kafka, une fois par symbole."""
+
+    class _FlakyProducer(_Producer):
+        async def publish(self, topic, event):
+            if event.symbol == "S1":
+                raise RuntimeError("broker rejected")
+            await super().publish(topic, event)
+
+    producer = _FlakyProducer()
+    store = _Store({("o", f"r{i}"): _stats("o", f"r{i}") for i in range(3)})
+    collector = _collector(producer, store, repo_map=lambda: _map(3))
+    await collector.poll_once()
+    assert {e.symbol for e in producer.published} == {"S0", "S2"}
+
+
+async def test_a_malformed_mapping_row_costs_one_token_not_the_cycle():
+    """Le depaquetage etait dans la cible de la boucle, donc hors de portee de
+    tout try par iteration."""
+    producer = _Producer()
+    store = _Store({("o", f"r{i}"): _stats("o", f"r{i}") for i in range(2)})
+    mapping = {"S0": ("c0", [("o", "r0")], "de trop"), "S1": ("c1", [("o", "r1")])}
+    collector = _collector(producer, store, repo_map=lambda: mapping)
+    await collector.poll_once()
+    assert {e.symbol for e in producer.published} == {"S1"}

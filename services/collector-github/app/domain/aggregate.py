@@ -66,7 +66,11 @@ def _is_live(stats: RepoStats) -> bool:
     diluerait l'activité réelle du projet proportionnellement au nombre de
     miroirs qu'il traîne.
     """
-    return not stats.archived and not stats.is_fork
+    # `is True` et non une simple veracite : `archived` peut valoir None quand
+    # la fiche du depot n'a pas ete lue, et un `not None` vaudrait True — donc
+    # « vivant », affirme depuis une absence de mesure. Un depot dont on ignore
+    # le statut est exclu, pas presume vivant.
+    return stats.archived is not True and stats.is_fork is not True
 
 
 def _paired_sums(

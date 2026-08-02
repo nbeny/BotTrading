@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 #: proportions exactly — this expresses no new opinion about the old model, it
 #: only makes room for the two new ones.
 WEIGHTS = {
-    # Rescalés ×0.92 lors de l'ajout de developer_activity, pour que la somme
+    # Rescalés x0.92 lors de l'ajout de developer_activity, pour que la somme
     # reste exactement 1.0 : _MIN_PRESENT_WEIGHT est un seuil sur cette somme,
     # et la laisser dériver à 1.08 aurait changé le sens de la porte sans que
     # rien ne le signale. Le rescale est uniforme, donc les sept axes gardent
@@ -174,12 +174,22 @@ def _norm_liquidity(liq: float | None) -> float | None:
 #: That is a property of the market, not a bias to calibrate away.
 #: Below this share of model weight, no score is emitted at all. Set just above
 #: the heaviest single axis (volume_growth, 0.1725) so one axis can never speak
-#: for eight, and just below the lightest legitimate pair (fundamentals +
-#: liquidity, 0.1955). Renormalisation exists so absent data stops dragging a
-#: score down; without this floor it also lets a sliver of data manufacture
-#: certainty.
+#: for eight.
 #:
-#: Rescalé ×0.92 avec les poids en même temps que developer_activity, et c'est
+#: La seconde contrainte historique - "juste en dessous de la paire legitime la
+#: plus legere" - n'est plus satisfiable, et il vaut mieux le dire que la
+#: recopier. Depuis l'ajout de developer_activity (0.08), la paire la plus
+#: legere est fundamentals + developer_activity a 0.1720, soit *moins* que l'axe
+#: le plus lourd a 0.1725 : aucun seuil ne peut etre a la fois au-dessus de l'un
+#: et en dessous de l'autre. On garde donc la premiere contrainte, et
+#: developer_activity ne peut pas former de paire scorable avec les deux axes
+#: les plus legers. C'est conservateur - score 0 et insufficient_evidence,
+#: jamais une valeur inventee - mais c'est une decision, pas un heritage.
+#:
+#: Renormalisation exists so absent data stops dragging a score down; without
+#: this floor it also lets a sliver of data manufacture certainty.
+#:
+#: Rescalé x0.92 avec les poids en même temps que developer_activity, et c'est
 #: le point délicat de cette rebalance : garder la somme à 1.0 ne suffit pas.
 #: Ce seuil est absolu, donc laisser 0.20 en place aurait resserré la porte en
 #: silence — la paire fundamentals + liquidity, explicitement calibrée comme la

@@ -7,7 +7,7 @@ const score: TokenScore = {
   value: 84,
   confidence: 0.62,
   axes: { volume_growth: 0.81, positioning: 0.93 },
-  axes_total: 7,
+  axes_total: 8,
   insufficient_evidence: false,
   computed_at: '2026-08-01T09:12:00Z',
 };
@@ -37,7 +37,7 @@ describe('ScoreBreakdown', () => {
           value: null,
           confidence: null,
           axes: {},
-          axes_total: 7,
+          axes_total: 8,
           insufficient_evidence: true,
           computed_at: '2026-08-01T09:12:00Z',
         }}
@@ -53,7 +53,7 @@ describe('ScoreBreakdown', () => {
           value: null,
           confidence: null,
           axes: {},
-          axes_total: 7,
+          axes_total: 8,
           insufficient_evidence: false,
           computed_at: null,
         }}

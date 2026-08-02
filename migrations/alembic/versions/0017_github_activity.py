@@ -40,10 +40,16 @@ def upgrade() -> None:
         sa.Column("source_list", sa.String(32), nullable=False),
         sa.Column("symbol", sa.String(32)),
         sa.Column(
-            "first_seen_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+            "first_seen_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
         ),
         sa.Column(
-            "last_seen_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+            "last_seen_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
         ),
     )
     op.create_index("ix_registry_symbol", "crypto_project_registry", ["symbol"])
@@ -56,7 +62,10 @@ def upgrade() -> None:
         sa.Column("symbol", sa.String(32), nullable=False),
         sa.Column("origin", sa.String(16), nullable=False),
         sa.Column(
-            "resolved_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+            "resolved_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
         ),
     )
     op.create_index("ix_repo_map_symbol", "coin_repo_map", ["symbol"])
@@ -67,7 +76,10 @@ def upgrade() -> None:
         sa.Column("owner", sa.String(128), nullable=False),
         sa.Column("repo", sa.String(128), nullable=False),
         sa.Column(
-            "observed_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+            "observed_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
         ),
         sa.Column("stars", sa.Integer),
         sa.Column("forks", sa.Integer),
@@ -76,8 +88,8 @@ def upgrade() -> None:
         sa.Column("pr_merged_4w", sa.Integer),
         sa.Column("pr_merged_52w", sa.Integer),
         sa.Column("pushed_at", sa.DateTime(timezone=True)),
-        sa.Column("archived", sa.Boolean, server_default=sa.false()),
-        sa.Column("is_fork", sa.Boolean, server_default=sa.false()),
+        sa.Column("archived", sa.Boolean, server_default=sa.false(), nullable=False),
+        sa.Column("is_fork", sa.Boolean, server_default=sa.false(), nullable=False),
     )
     op.create_index(
         "ix_github_snapshot_observed_at", "github_repo_snapshot", ["observed_at"]

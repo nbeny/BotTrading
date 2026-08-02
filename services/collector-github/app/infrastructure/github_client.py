@@ -50,11 +50,16 @@ class RepoGoneError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class RepoMeta:
+    #: `archived` et `is_fork` sont `bool | None`, pas `bool`. Un `bool` ne
+    #: peut pas exprimer "pas lu", et la valeur par defaut serait alors `False`
+    #: — c'est-a-dire "ce depot est vivant", affirme a partir d'une reponse
+    #: qu'on n'a pas parsee. C'est le champ qui decide de l'entree dans
+    #: l'agregat, donc le pire endroit du module pour une valeur inventee.
     stars: int | None
     forks: int | None
     pushed_at: datetime | None
-    archived: bool
-    is_fork: bool
+    archived: bool | None
+    is_fork: bool | None
 
 
 class _Limiter:
@@ -113,6 +118,12 @@ class GitHubClient:
             base_url=API_BASE,
             timeout=timeout,
             transport=transport,
+            # GitHub repond 301 sur un depot renomme ou transfere, ce qui est
+            # courant sur une liste rafraichie lentement. Sans suivi, le 301
+            # passe le filtre `>= 400`, le corps n'est jamais parse, et le
+            # depot fantome entre dans l'agregat sans jamais etre mis au
+            # tableau noir puisque ce n'est pas un 404.
+            follow_redirects=True,
             headers={
                 "Authorization": f"Bearer {token}",
                 "Accept": "application/vnd.github+json",
@@ -150,8 +161,8 @@ class GitHubClient:
                 if pushed
                 else None
             ),
-            archived=bool(data.get("archived")),
-            is_fork=bool(data.get("fork")),
+            archived=_as_bool(data.get("archived")),
+            is_fork=_as_bool(data.get("fork")),
         )
 
     async def commit_activity(self, owner: str, repo: str) -> list[int] | None:
@@ -171,7 +182,13 @@ class GitHubClient:
         weeks = response.json()
         if not isinstance(weeks, list) or not weeks:
             return None
-        return [int(week.get("total", 0)) for week in weeks]
+        # Pas de defaut a zero : une semaine sans `total` est une lecture
+        # incomplete, pas une semaine sans commit. Avec un defaut, une charge
+        # partiellement absente donnait une mediane reelle et un numerateur
+        # deprime — un ratio faux, dans le sens "moins actif".
+        if any(not isinstance(week, dict) or "total" not in week for week in weeks):
+            return None
+        return [int(week["total"]) for week in weeks]
 
     async def merged_pr_count(
         self, owner: str, repo: str, *, since_days: int
@@ -183,8 +200,26 @@ class GitHubClient:
             q=f"repo:{owner}/{repo} is:pr is:merged merged:>{since}",
             per_page="1",
         )
-        total = response.json().get("total_count")
+        payload = response.json()
+        if payload.get("incomplete_results"):
+            # GitHub leve ce drapeau quand la requete a expire et que le
+            # decompte est partiel. La requete a 364 jours sur un gros depot
+            # est precisement ou il se declenche. Rendre le nombre tel quel
+            # serait pire qu'une absence : le drapeau peut toucher le
+            # numerateur ou le denominateur du ratio independamment, donc il
+            # deplace le resultat dans les deux directions.
+            return None
+        total = payload.get("total_count")
         return int(total) if total is not None else None
+
+
+def _as_bool(value: object) -> bool | None:
+    """`None` quand le champ est absent, sinon le booleen.
+
+    `bool(None)` vaudrait `False`, ce qui affirmerait "pas archive" a partir
+    d'une absence de lecture.
+    """
+    return None if value is None else bool(value)
 
 
 def weekly_median(weeks: list[int] | None) -> float | None:

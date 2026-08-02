@@ -20,7 +20,7 @@ def _config_from_env() -> RiskConfig:
         stop_loss_pct=float(os.getenv("RISK_STOP_LOSS_PCT", "0.05")),
         take_profit_pct=float(os.getenv("RISK_TAKE_PROFIT_PCT", "0.10")),
         max_position_pct=float(os.getenv("RISK_MAX_POSITION_PCT", "0.05")),
-        min_confidence=float(os.getenv("RISK_MIN_CONFIDENCE", "0.55")),
+        min_confidence=float(os.getenv("RISK_MIN_CONFIDENCE", "0.506")),
         min_score=int(os.getenv("RISK_MIN_SCORE", "70")),
         min_risk_reward=float(os.getenv("RISK_MIN_RR", "1.5")),
     )

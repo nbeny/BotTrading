@@ -55,7 +55,7 @@ function buildDossier(overrides: Partial<TokenDossier> = {}): TokenDossier {
       confidence: 0.62,
       // `fundamentals` deliberately absent — must render `—`, never `0`.
       axes: { volume_growth: 0.81, positioning: 0.93 },
-      axes_total: 7,
+      axes_total: 8,
       insufficient_evidence: false,
       computed_at: '2026-08-01T09:12:00Z',
     },

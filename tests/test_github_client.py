@@ -188,3 +188,71 @@ def test_recent_commits_sums_the_last_four_weeks():
 def test_recent_commits_is_none_on_too_short_a_series():
     assert recent_commits([1, 2, 3]) is None
     assert recent_commits(None) is None
+
+
+async def test_archived_and_fork_flags_are_actually_read():
+    """M01/M02: ces deux champs survivaient a etre cloues a False.
+
+    Ils decident de l'entree d'un depot dans l'agregat, donc une constante y
+    serait la pire valeur inventee possible du module.
+    """
+    payload = {"archived": True, "fork": True}
+    meta = await _client(lambda r: httpx.Response(200, json=payload)).repo("a", "b")
+    assert meta.archived is True
+    assert meta.is_fork is True
+
+
+async def test_unread_flags_are_none_not_false():
+    """Une reponse sans ces champs ne doit pas affirmer "depot vivant"."""
+    meta = await _client(lambda r: httpx.Response(200, json={})).repo("a", "b")
+    assert meta.archived is None
+    assert meta.is_fork is None
+
+
+async def test_a_renamed_repo_is_followed_not_swallowed():
+    """GitHub repond 301 sur un depot renomme. Sans follow_redirects, le corps
+    n'est jamais parse et archived valait False *affirme*."""
+    seen: list[str] = []
+
+    def handler(request):
+        seen.append(request.url.path)
+        if request.url.path == "/repos/old/name":
+            return httpx.Response(301, headers={"location": "/repos/new/name"})
+        return httpx.Response(200, json={"stargazers_count": 7, "archived": False})
+
+    meta = await _client(handler).repo("old", "name")
+    assert seen == ["/repos/old/name", "/repos/new/name"]
+    assert meta.stars == 7
+
+
+async def test_a_403_raises_rather_than_becoming_an_empty_repo():
+    """M14: seul 500 etait teste. Un 403 de rate-limit secondaire produisait
+    sinon un RepoMeta vide avec archived=False affirme."""
+
+    def handler(request):
+        return httpx.Response(403, json={"message": "rate limited"})
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await _client(handler).repo("a", "b")
+
+
+async def test_a_week_without_a_total_is_not_a_zero_week():
+    """M12: `week.get("total", 0)` fabriquait une semaine vide. Une charge
+    partiellement absente donnait alors une mediane reelle et un numerateur
+    deprime — un ratio faux, dans le sens "moins actif"."""
+    weeks = [{"total": 5}] * 51 + [{"week": 0}]
+    result = await _client(lambda r: httpx.Response(200, json=weeks)).commit_activity(
+        "a", "b"
+    )
+    assert result is None
+
+
+async def test_a_timed_out_search_is_not_a_count():
+    """I6: incomplete_results=true signale un decompte partiel. Le rendre tel
+    quel donnerait un nombre confiant et faux, dans les deux directions selon
+    qu'il touche le numerateur ou le denominateur du ratio."""
+    payload = {"total_count": 37, "incomplete_results": True}
+    count = await _client(lambda r: httpx.Response(200, json=payload)).merged_pr_count(
+        "a", "b", since_days=28
+    )
+    assert count is None

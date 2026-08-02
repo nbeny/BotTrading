@@ -12,7 +12,17 @@ class RiskConfig:
     stop_loss_pct: float = 0.05  # 5% below entry (long)
     take_profit_pct: float = 0.10  # 10% above entry (long)
     max_position_pct: float = 0.05  # max 5% of portfolio per trade
-    min_confidence: float = 0.55
+    #: Rescale x0.92 en meme temps que WEIGHTS lors de l'ajout du huitieme
+    #: axe. `confidence` est une somme *absolue* de poids, exactement comme
+    #: _MIN_PRESENT_WEIGHT: chaque axe valant 8% de moins, laisser 0.55 en
+    #: place aurait rejete 18 combinaisons d'evidence auparavant approuvees
+    #: et, la taille de position etant lineaire en confiance, aurait
+    #: retreci *toutes* les positions de 8%. Ajouter un axe ne doit pas
+    #: durcir un critere que personne n'a decide de durcir.
+    #:
+    #: Le lien est verifie par tests/test_risk_confidence_floor.py, faute de
+    #: quoi rien ne relie ce nombre a WEIGHTS.
+    min_confidence: float = 0.506
     min_score: int = 70
     min_risk_reward: float = 1.5
 

@@ -7,6 +7,7 @@ schema, c'est-a-dire a l'endroit le plus difficile a rattraper ensuite.
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -35,6 +36,56 @@ _MEASURES = (
 )
 
 
+# --------------------------------------------------------------------------
+# Lecture de la migration
+# --------------------------------------------------------------------------
+def _is_call(node: ast.Call, name: str) -> bool:
+    return isinstance(node.func, ast.Attribute) and node.func.attr == name
+
+
+def _is_true(node: ast.expr | None) -> bool:
+    return isinstance(node, ast.Constant) and node.value is True
+
+
+def _migration_columns() -> dict[str, dict[str, dict[str, bool]]]:
+    """Colonnes de la migration 0017 avec leurs proprietes, lues par AST.
+
+    Analyse syntaxique et non textuelle. Une premiere version par expression
+    reguliere butait sur les parentheses imbriquees de ``sa.false()`` et
+    perdait silencieusement la derniere colonne de chaque table -- un outil de
+    verification qui rassure sans verifier, ce qui est pire que pas d'outil.
+    L'AST donne les arguments nommes exacts quel que soit le formatage.
+
+    Les *proprietes* sont capturees, pas seulement les noms. Comparer les seuls
+    noms laissait passer exactement le defaut que ce schema existe pour
+    empecher: un NOT NULL DEFAULT 0 sur une colonne de mesure ne faisait
+    echouer aucun test, alors qu'il transforme "pas encore lu" en "mesure a
+    zero" dans la base.
+    """
+    tree = ast.parse(_MIGRATION.read_text(encoding="utf-8"))
+    tables: dict[str, dict[str, dict[str, bool]]] = {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and _is_call(node, "create_table")):
+            continue
+        cols: dict[str, dict[str, bool]] = {}
+        for arg in node.args[1:]:
+            if not (isinstance(arg, ast.Call) and _is_call(arg, "Column")):
+                continue
+            kwargs = {kw.arg: kw.value for kw in arg.keywords}
+            explicit = kwargs.get("nullable")
+            cols[arg.args[0].value] = {
+                # primary_key implique NOT NULL sans que ce soit ecrit.
+                "nullable": not _is_true(kwargs.get("primary_key"))
+                and (explicit is None or _is_true(explicit)),
+                "has_server_default": "server_default" in kwargs,
+            }
+        tables[node.args[0].value] = cols
+    return tables
+
+
+# --------------------------------------------------------------------------
+# Les modeles
+# --------------------------------------------------------------------------
 def test_tables_are_registered():
     names = set(Base.metadata.tables)
     assert {
@@ -96,8 +147,7 @@ def test_repo_map_records_its_origin():
     """CoinGecko fait autorite, une promotion depuis une awesome-list non.
     Sans cette colonne, un doute futur sur la qualite de l'axe ne pourrait
     pas se trancher en filtrant."""
-    col = CoinRepoMap.__table__.c.origin
-    assert col.nullable is False
+    assert CoinRepoMap.__table__.c.origin.nullable is False
 
 
 def test_snapshot_is_indexed_for_the_two_latest_rows():
@@ -111,36 +161,42 @@ def test_snapshot_is_indexed_for_the_two_latest_rows():
     assert ("owner", "repo", "observed_at") in indexed
 
 
-def _migration_tables() -> dict[str, set[str]]:
-    """Colonnes creees par la migration 0017, lues dans son source.
-
-    Lecture textuelle plutot qu'execution: alembic exigerait une base, et ce
-    test doit tourner hors ligne comme le reste de la suite.
-    """
-    src = _MIGRATION.read_text(encoding="utf-8")
-    return {
-        m.group(1): set(re.findall(r'sa\.Column\(\s*"(\w+)"', m.group(2)))
-        for m in re.finditer(
-            r'op\.create_table\(\s*"(\w+)",(.*?)\n    \)\n', src, re.DOTALL
-        )
-    }
-
-
-def test_migration_columns_match_the_models():
-    """Modeles et migration derivent silencieusement sinon.
-
-    Une colonne ajoutee au modele mais pas a la migration ne casse rien en
-    test -- SQLAlchemy la connait, la base ne l'a pas -- et echoue seulement
-    au premier acces en production.
-    """
-    tables = _migration_tables()
-    assert set(tables) == {
+# --------------------------------------------------------------------------
+# Parite migration <-> modeles
+# --------------------------------------------------------------------------
+def test_migration_creates_exactly_the_three_tables():
+    assert set(_migration_columns()) == {
         "crypto_project_registry",
         "coin_repo_map",
         "github_repo_snapshot",
     }
-    for name, columns in tables.items():
-        assert columns == {c.name for c in Base.metadata.tables[name].columns}, name
+
+
+def test_every_model_column_reaches_the_migration():
+    """Une colonne ajoutee au modele mais pas a la migration ne casse rien en
+    test -- SQLAlchemy la connait, la base ne l'a pas -- et echoue seulement
+    au premier acces en production."""
+    for name, cols in _migration_columns().items():
+        assert set(cols) == {c.name for c in Base.metadata.tables[name].columns}, name
+
+
+def test_migration_nullability_matches_the_models():
+    """Comparer les noms ne suffit pas: alembic met nullable=True par defaut,
+    donc une colonne NOT NULL cote modele naissait nullable en base -- et
+    stats_from_rows lisait bool(row.archived), ce qui aurait transforme un
+    NULL en False, c'est-a-dire "ce depot est vivant"."""
+    for name, cols in _migration_columns().items():
+        model = Base.metadata.tables[name]
+        for column, props in cols.items():
+            assert props["nullable"] == model.c[column].nullable, f"{name}.{column}"
+
+
+def test_no_measure_column_carries_a_zero_default_in_the_migration():
+    """Le garde-fou que la parite par noms laissait passer."""
+    snapshot = _migration_columns()["github_repo_snapshot"]
+    for name in _MEASURES:
+        assert snapshot[name]["nullable"] is True, name
+        assert snapshot[name]["has_server_default"] is False, name
 
 
 def test_migration_chains_onto_the_previous_head():
@@ -154,4 +210,4 @@ def test_migration_downgrade_drops_every_table_it_creates():
     etat que la suivante ne peut plus supposer."""
     src = _MIGRATION.read_text(encoding="utf-8")
     dropped = set(re.findall(r'op\.drop_table\("(\w+)"\)', src))
-    assert dropped == set(_migration_tables())
+    assert dropped == set(_migration_columns())

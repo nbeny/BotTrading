@@ -114,10 +114,14 @@ class GitHubCollector:
         return stats
 
     async def _refresh_batch(self, mapping: RepoMap) -> tuple[int, int, int, int]:
+        # Depaquetage defensif, comme dans _publish_all : une ligne de carte
+        # malformee levait ici *avant* toute publication, donc coutait le cycle
+        # entier a tous les symboles, y compris ceux dont le cache etait bon.
         repos = [
             pair
-            for _, (_, pairs) in sorted(mapping.items())
-            for pair in pairs
+            for _, row in sorted(mapping.items())
+            if isinstance(row, tuple) and len(row) == 2
+            for pair in row[1]
             if pair not in self._dead
         ]
         if not repos or self._budget <= 0:
@@ -151,12 +155,27 @@ class GitHubCollector:
         now = self._clock()
         published = 0
         skipped = 0
-        for symbol, (coin_id, pairs) in mapping.items():
-            snapshots = [
-                snap
-                for snap in [await self._store.latest(o, r) for o, r in pairs]
-                if snap is not None
-            ]
+        for symbol, row in mapping.items():
+            # Le depaquetage est dans le corps, pas dans la cible de la boucle :
+            # une ligne de carte malformee y leverait hors de portee de tout
+            # `try` par iteration, et couterait le cycle a tous les symboles
+            # suivants.
+            try:
+                coin_id, pairs = row
+                snapshots = [
+                    snap
+                    for snap in [await self._store.latest(o, r) for o, r in pairs]
+                    if snap is not None
+                ]
+            except Exception as exc:
+                # `store.latest` est un aller-retour Postgres appele une fois
+                # par depot, soit ~500 fois par cycle : c'est l'appel le plus
+                # susceptible d'echouer de toute la boucle, et il etait hors
+                # garde. Un incident transitoire y reproduisait exactement
+                # l'incident fees_24h_usd que ce module cite en exemple.
+                UNMEASURED.labels(SERVICE, "snapshot_read", type(exc).__name__).inc()
+                logger.error("github: %s - lecture des snapshots: %s", symbol, exc)
+                continue
             try:
                 activity = aggregate(snapshots, now)
             except Exception as exc:
@@ -206,7 +225,14 @@ class GitHubCollector:
                 UNMEASURED.labels(SERVICE, "developer_event", "ValidationError").inc()
                 logger.error("github: %s — événement invalide: %s", symbol, exc)
                 continue
-            await self._producer.publish(Topic.DEVELOPER, event)
+            try:
+                await self._producer.publish(Topic.DEVELOPER, event)
+            except Exception as exc:
+                # Aller-retour Kafka, une fois par symbole. Un message rejete
+                # ne doit pas faire taire les ~249 autres.
+                UNMEASURED.labels(SERVICE, "publish", type(exc).__name__).inc()
+                logger.error("github: %s - publication impossible: %s", symbol, exc)
+                continue
             EVENTS_PRODUCED.labels(
                 SERVICE, Topic.DEVELOPER.value, event.event_type
             ).inc()

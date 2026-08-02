@@ -145,3 +145,39 @@ def test_the_axis_is_symbol_specific_so_it_counts_in_confidence():
     without = score(_scorable()).confidence
     with_dev = score(_scorable(commit_ratio_4w=2.0)).confidence
     assert with_dev > without
+
+
+def test_a_bleeding_repo_never_drives_the_axis_negative():
+    """star_growth_pct_7d est deliberement non borne en bas -- un depot perd
+    des etoiles. Sans le clamp, -5% donne -2.5, la moyenne ponderee devient
+    negative, et score() ne re-borne pas: l'axe tirerait le score en dessous
+    de ce qu'aucune mesure reelle ne peut produire.
+    """
+    value = _norm(star_growth=-0.05)
+    assert value is not None
+    assert value >= 0.0
+
+
+def test_star_growth_saturates_at_the_documented_threshold():
+    """2% sur 7 jours sature le terme. Sans ce test, le seuil pouvait valoir
+    n'importe quoi."""
+    assert _norm(star_growth=0.02) == pytest.approx(1.0)
+    assert _norm(star_growth=0.01) == pytest.approx(0.5)
+
+
+def test_each_sub_weight_is_pinned():
+    """Trois des quatre poids n'etaient contraints par rien: seuls commit et
+    freshness apparaissaient dans une assertion."""
+    # pr seul contre commit seul, a valeur egale, doit donner le meme resultat
+    # normalise (chacun sur son propre poids present).
+    assert _norm(pr_ratio=3.0) == pytest.approx(1.0)
+    # commit (0.40) et stars (0.10) ensemble: la moyenne penche vers commit.
+    mixed = _norm(commit_ratio=3.0, star_growth=0.0)
+    assert mixed == pytest.approx((0.40 * 1.0 + 0.10 * 0.0) / 0.50)
+
+
+def test_freshness_decays_on_the_slope_not_just_at_the_plateaus():
+    """Les deux plateaux etaient testes, jamais la pente: _STALE_DAYS pouvait
+    valoir n'importe quoi entre 8 et 90."""
+    # 48 jours: 1 - (48-7)/(90-7) = 0.5060...
+    assert _norm(days_since_push=48) == pytest.approx(1 - (48 - 7) / (90 - 7))

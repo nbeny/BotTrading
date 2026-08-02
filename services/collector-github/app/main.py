@@ -66,6 +66,9 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     gecko = CoinGeckoRepos()
     store = PostgresSnapshotStore(db)
     mapping: dict[str, tuple[str, list[tuple[str, str]]]] = {}
+    #: Symboles deja interroges, avec ou sans resultat. Distinct de `mapping`,
+    #: qui ne retient que les succes.
+    attempted: set[str] = set()
 
     async def fetch_repo(owner: str, repo: str) -> RepoStats:
         meta = await client.repo(owner, repo)
@@ -105,25 +108,40 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
         async with db.sessionmaker() as session:
             rows = (
                 await session.execute(
-                    select(Token.coin_id, Token.symbol).limit(UNIVERSE_SIZE)
+                    select(Token.coin_id, Token.symbol)
+                    .order_by(Token.id)
+                    .limit(UNIVERSE_SIZE)
                 )
             ).all()
         budget = COINS_PER_CYCLE
         for coin_id, symbol in rows:
             if budget <= 0:
                 return
-            if not coin_id or not symbol or symbol in mapping:
+            if not coin_id or not symbol or symbol in attempted:
                 continue
+            # `attempted`, pas `mapping` : la plupart des coins d'un univers de
+            # 250 ne declarent aucun depot, et ne les marquer qu'en cas de
+            # succes figeait le curseur sur le premier d'entre eux. Il etait
+            # alors re-interroge a chaque cycle, indefiniment, et la carte
+            # cessait de grandir apres une poignee de coins — l'axe restait
+            # inerte en production sans qu'aucun log ne le dise, une liste vide
+            # n'etant pas une exception.
+            attempted.add(symbol)
+            budget -= 1
             try:
                 pairs = await gecko.repos_for(coin_id)
             except Exception as exc:
                 UNMEASURED.labels(SERVICE, "coin_repos", type(exc).__name__).inc()
-                logger.warning("coingecko: %s — %s", coin_id, exc)
-                budget -= 1
+                logger.warning("coingecko: %s - %s", coin_id, exc)
+                # Retire de `attempted` : un echec transitoire ne doit pas
+                # ecarter le coin definitivement, contrairement a une reponse
+                # vide qui, elle, est une reponse.
+                attempted.discard(symbol)
                 continue
-            budget -= 1
             if pairs:
                 mapping[symbol] = (coin_id, pairs)
+            else:
+                logger.info("coingecko: %s ne declare aucun depot", coin_id)
 
     async def refresh_lists() -> None:
         """Relit les deux README et met le registre à jour."""

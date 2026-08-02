@@ -56,7 +56,8 @@ jobs:
             tests/test_scoring_new_axes.py \
             tests/test_scoring_renormalisation.py \
             tests/test_decision_engine_context_features.py \
-            tests/test_market_regime_signal.py \n            tests/test_developer_event.py \
+            tests/test_market_regime_signal.py  \
+            tests/test_developer_event.py \
             tests/test_github_activity.py \
             tests/test_github_aggregate.py \
             tests/test_github_lists.py \
@@ -68,7 +69,8 @@ jobs:
             tests/test_github_registry.py \
             tests/test_haiku_developer_features.py \
             tests/test_scoring_developer_axis.py \
-            tests/test_axis_parity.py \n            tests/test_deployment_wiring.py -q
+            tests/test_axis_parity.py  \
+            tests/test_deployment_wiring.py -q
 
   # -------------------------------------------------------------- images
   images:

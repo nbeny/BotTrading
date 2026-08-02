@@ -61,14 +61,23 @@ class RepoStats:
     #: être ramené à un taux : la cadence round-robin fait varier l'intervalle
     #: (un repo qui rate son tour sur un 202 ou une erreur saute une fenêtre).
     stars_prev_at: datetime | None = None
+    #: Horodatage de *ce* relevé de `stars` — pas l'horloge du cycle qui le
+    #: publie. La publication tourne toutes les 600s pour rafraîchir le TTL du
+    #: FeatureStore avec la *même* mesure, alors que le relevé lui-même ne
+    #: change qu'au tour round-robin (~12h) ; dater l'intervalle sur `now`
+    #: ferait dériver la même mesure vers le bas à chaque republication.
+    stars_at: datetime | None = None
 
 
-def _ratio(recent: int | None, expected: float) -> float | None:
-    # `expected` est un float non optionnel : les deux appelants calculent sa
-    # valeur seulement après avoir écarté l'absence de leur propre baseline,
-    # donc le None ne peut pas atteindre cette fonction — mypy le garantit
-    # désormais à la place d'un `if` mort à l'exécution.
-    if recent is None or expected <= 0:
+def _ratio(recent: int | None, expected: float | None) -> float | None:
+    # `expected is None` est mort dans les deux appels actuels : les deux
+    # appelants calculent sa valeur seulement après avoir écarté l'absence de
+    # leur propre baseline. La branche reste quand même : `mypy` ne tourne
+    # nulle part dans ce repo (`make lint` agrège `libs` et `services` et
+    # échoue sur "Duplicate module named app" avant d'analyser un seul
+    # fichier, et il n'y a aucun job de lint en CI), donc ce `if` est la
+    # seule vérification qui existe réellement contre une régression d'appel.
+    if recent is None or expected is None or expected <= 0:
         # expected <= 0 : le ratio est indéfini. Le rendre infini (ou 1.0 au
         # motif que « tout commit est une accélération ») inventerait une
         # lecture à partir d'une division impossible.
@@ -122,28 +131,35 @@ def days_since_push(stats: RepoStats, now: datetime) -> int | None:
     return max(0, delta.days)
 
 
-def star_growth_pct(stats: RepoStats, now: datetime) -> float | None:
-    """Croissance des étoiles depuis le snapshot précédent, normalisée sur 7 jours.
+def star_growth_pct(stats: RepoStats) -> float | None:
+    """Croissance des étoiles entre deux snapshots, normalisée sur 7 jours.
 
     ``None`` au premier passage : un delta demande deux observations, et un 0.0
     y affirmerait une stagnation qu'on n'a pas observée.
 
-    Le rafraîchissement est round-robin sur 12h et variable (un dépôt qui
-    répond 202 ou en erreur saute son tour), donc l'intervalle réel entre
-    ``stars_prev_at`` et ``now`` n'est jamais garanti être 7 jours. Le nom du
-    champ événement (``star_growth_pct_7d``) et le seuil de scoring
+    L'intervalle court entre les deux *relevés* (``stars_at`` et
+    ``stars_prev_at``), jamais jusqu'à l'horloge du cycle qui publie la
+    mesure : la publication tourne toutes les 600s pour rafraîchir le TTL du
+    FeatureStore avec la même mesure, tandis que le relevé lui-même ne change
+    qu'au tour round-robin (~12h, variable — un dépôt qui répond 202 ou en
+    erreur saute son tour). Dater sur l'horloge du cycle ferait dériver une
+    mesure inchangée vers le bas à chaque republication, jusqu'à diviser sa
+    valeur par 2 en un seul cycle de rafraîchissement : le même problème que
+    ce module évite ailleurs, mais qui se rejouerait dans le temps plutôt
+    qu'entre dépôts.
+
+    Le nom du champ événement (``star_growth_pct_7d``) et le seuil de scoring
     (``0.3 + 0.7·clamp(growth / 0.02, 0, 1)``, calibré pour 2 % sur 7 jours)
-    supposent pourtant tous deux cette durée. Sans normalisation, un delta
-    mesuré sur ~12h serait comparé à un seuil pensé pour 7 jours — environ 14
-    fois trop petit — et pousserait systématiquement ce sous-signal vers le
-    bas de sa bande plutôt que de l'exclure : pire qu'une absence, au sens où
-    ce module est construit pour l'éviter.
+    supposent tous deux cette durée. Sans normalisation, un delta mesuré sur
+    ~12h serait comparé à un seuil pensé pour 7 jours — environ 14 fois trop
+    petit — et pousserait systématiquement ce sous-signal vers le bas de sa
+    bande plutôt que de l'exclure : pire qu'une absence.
     """
     if stats.stars is None or stats.stars_prev is None or stats.stars_prev <= 0:
         return None
-    if stats.stars_prev_at is None:
+    if stats.stars_prev_at is None or stats.stars_at is None:
         return None
-    interval = now - stats.stars_prev_at
+    interval = stats.stars_at - stats.stars_prev_at
     if interval < MIN_STAR_GROWTH_INTERVAL:
         # Couvre aussi bien l'intervalle trop court (peu de recul, bruit
         # amplifié ~168x en extrapolant à 7 jours) que l'intervalle nul ou

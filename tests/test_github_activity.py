@@ -28,6 +28,7 @@ def _stats(**kw):
         "pr_merged_52w": 104,
         "stars_prev": 990,
         "stars_prev_at": datetime(2026, 7, 26, tzinfo=UTC),
+        "stars_at": NOW,
     }
     base.update(kw)
     return RepoStats(**base)
@@ -144,21 +145,21 @@ def test_days_since_push_at_exact_clock_skew_tolerance_boundary_is_zero():
 
 def test_star_growth_is_none_on_first_snapshot():
     """Un delta demande deux observations. 0.0 inventerait une stagnation."""
-    g = star_growth_pct(_stats(stars=1000, stars_prev=None), NOW)
+    g = star_growth_pct(_stats(stars=1000, stars_prev=None))
     assert g is None
     assert g != 0.0
 
 
 def test_star_growth_can_be_negative():
-    # stars_prev_at par defaut est a exactement 7 jours de NOW -> facteur de
-    # normalisation 1.0, la croissance brute et normalisee coincident.
-    assert star_growth_pct(_stats(stars=990, stars_prev=1000), NOW) == -0.01
+    # stars_prev_at/stars_at par defaut sont a exactement 7 jours d'ecart ->
+    # facteur de normalisation 1.0, la croissance brute et normalisee coincident.
+    assert star_growth_pct(_stats(stars=990, stars_prev=1000)) == -0.01
 
 
 def test_star_growth_is_none_when_stars_is_none():
     """stars absent (fetch partiel) alors que stars_prev existe deja: None,
     pas de TypeError sur la soustraction. Pin le mutant qui retire ce garde."""
-    r = star_growth_pct(_stats(stars=None, stars_prev=990), NOW)
+    r = star_growth_pct(_stats(stars=None, stars_prev=990))
     assert r is None
 
 
@@ -166,47 +167,74 @@ def test_star_growth_is_none_when_stars_prev_is_exactly_zero():
     """stars_prev=0 est courant pour un petit depot mappe recemment: doit
     etre exclu au meme titre qu'un negatif, sans quoi c'est une
     ZeroDivisionError. Pin le mutant qui changerait `<= 0` en `< 0`."""
-    r = star_growth_pct(_stats(stars=10, stars_prev=0), NOW)
+    r = star_growth_pct(_stats(stars=10, stars_prev=0))
     assert r is None
 
 
 def test_star_growth_is_none_without_prev_timestamp():
     """stars_prev existe mais sans horodatage: le delta ne peut pas etre
     ramene a un taux, cadence round-robin oblige."""
-    r = star_growth_pct(_stats(stars=990, stars_prev=1000, stars_prev_at=None), NOW)
+    r = star_growth_pct(_stats(stars=990, stars_prev=1000, stars_prev_at=None))
+    assert r is None
+    assert r != 0.0
+
+
+def test_star_growth_is_none_without_current_timestamp():
+    """stars existe mais l'horodatage de ce releve est absent: meme absence,
+    meme traitement que sans stars_prev_at."""
+    r = star_growth_pct(_stats(stars=990, stars_prev=1000, stars_at=None))
     assert r is None
     assert r != 0.0
 
 
 def test_star_growth_is_none_below_minimum_interval():
-    """Moins d'une heure entre deux snapshots: extrapoler a 7 jours
+    """Moins d'une heure entre les deux releves: extrapoler a 7 jours
     multiplierait le bruit par ~168. Pas assez de recul, donc None."""
-    stars_prev_at = NOW - timedelta(minutes=30)
+    prev_at = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
+    at = prev_at + timedelta(minutes=30)
     r = star_growth_pct(
-        _stats(stars=1010, stars_prev=1000, stars_prev_at=stars_prev_at), NOW
+        _stats(stars=1010, stars_prev=1000, stars_prev_at=prev_at, stars_at=at)
     )
     assert r is None
     assert r != 0.0
 
 
-def test_star_growth_is_none_when_prev_timestamp_is_in_the_future():
-    """stars_prev_at posterieur a now: intervalle negatif, horodatage
-    incoherent, taux indefini."""
-    stars_prev_at = NOW + timedelta(hours=1)
+def test_star_growth_at_exact_minimum_interval_is_measured():
+    """Intervalle de exactement 1h (MIN_STAR_GROWTH_INTERVAL): pas
+    strictement en dessous du seuil, donc une mesure et non None. Pin le
+    mutant qui changerait `interval < MIN_STAR_GROWTH_INTERVAL` en `<=`."""
+    prev_at = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
+    at = prev_at + timedelta(hours=1)
     r = star_growth_pct(
-        _stats(stars=1010, stars_prev=1000, stars_prev_at=stars_prev_at), NOW
+        _stats(stars=1010, stars_prev=1000, stars_prev_at=prev_at, stars_at=at)
+    )
+    # 1% brut sur 1h -> facteur 7j/1h = 168 -> 1.68
+    assert r == pytest.approx(1.68)
+    assert r is not None
+
+
+def test_star_growth_is_none_when_prev_timestamp_is_after_current_timestamp():
+    """stars_prev_at posterieur a stars_at: intervalle negatif, releves
+    incoherents (horloge corrompue ou releves inverses), taux indefini."""
+    at = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
+    prev_at = at + timedelta(hours=1)
+    r = star_growth_pct(
+        _stats(stars=1010, stars_prev=1000, stars_prev_at=prev_at, stars_at=at)
     )
     assert r is None
     assert r != 0.0
 
 
 def test_star_growth_normalises_to_seven_days():
-    """1% de croissance brute observee sur 12h -> 14% une fois ramenee a
-    l'echelle 7 jours (7 j / 12 h = 14), l'echelle que revendiquent le champ
-    evenement star_growth_pct_7d et le seuil de scoring a 2%/7j. Sans cette
-    normalisation le meme delta se lirait 14x trop bas."""
-    stars_prev_at = NOW - timedelta(hours=12)
+    """1% de croissance brute observee sur 12h entre les deux releves -> 14%
+    une fois ramenee a l'echelle 7 jours (7 j / 12 h = 14), l'echelle que
+    revendiquent le champ evenement star_growth_pct_7d et le seuil de
+    scoring a 2%/7j. Sans cette normalisation le meme delta se lirait 14x
+    trop bas — et, republie tel quel a l'horloge du cycle plutot qu'aux deux
+    releves, deriverait vers le bas a chaque republication."""
+    prev_at = datetime(2026, 8, 1, 0, 0, tzinfo=UTC)
+    at = prev_at + timedelta(hours=12)
     r = star_growth_pct(
-        _stats(stars=1010, stars_prev=1000, stars_prev_at=stars_prev_at), NOW
+        _stats(stars=1010, stars_prev=1000, stars_prev_at=prev_at, stars_at=at)
     )
     assert r == pytest.approx(0.14)

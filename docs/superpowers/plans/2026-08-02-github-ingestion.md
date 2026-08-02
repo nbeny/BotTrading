@@ -720,6 +720,17 @@ def aggregate(repos: Sequence[RepoStats], now: datetime) -> CoinActivity | None:
             all_repos_archived=True,
         )
 
+    # ATTENTION — décision à prendre ici, pas ailleurs. `star_growth_pct` divise
+    # par `stars_at - stars_prev_at`, et chaque dépôt a *ses* deux instants : le
+    # round-robin ne les rafraîchit pas ensemble. Sommer les étoiles puis
+    # diviser par un intervalle inventé pour l'ensemble redonnerait exactement
+    # le défaut que la tâche 2 a corrigé.
+    #
+    # Recommandation : calculer le taux **par dépôt**, puis en faire une moyenne
+    # pondérée par `stars_prev`. C'est identique à la somme quand les intervalles
+    # coïncident, et correct quand ils divergent. Ne pas prendre `min`/`max` des
+    # instants : la fenêtre la plus étroite surestime le taux, donc biaise à la
+    # hausse — le mauvais sens.
     merged = RepoStats(
         owner=live[0].owner,
         repo=f"<{len(live)} repos>",
@@ -737,7 +748,9 @@ def aggregate(repos: Sequence[RepoStats], now: datetime) -> CoinActivity | None:
         commit_ratio_4w=commit_ratio(merged),
         pr_ratio_4w=pr_ratio(merged),
         days_since_push=freshness,
-        star_growth_pct_7d=star_growth_pct(merged, now),
+        # Plus de `now` : l'intervalle court d'un snapshot à l'autre, pas
+        # jusqu'à l'horloge du cycle. Voir la note ci-dessus sur l'agrégation.
+        star_growth_pct_7d=_weighted_star_growth(live),
         all_repos_archived=False,
         # Rapporté, pas compté : ce module reste pur, et c'est l'appelant qui
         # incrémente la métrique. L'horodatage existait mais n'a pas été cru —
@@ -747,6 +760,30 @@ def aggregate(repos: Sequence[RepoStats], now: datetime) -> CoinActivity | None:
         # poussés d'un coup, l'axe se renormalisant en silence sur 0.75.
         push_timestamp_rejected=merged.pushed_at is not None and freshness is None,
     )
+
+
+def _weighted_star_growth(live: Sequence[RepoStats]) -> float | None:
+    """Taux de croissance d'étoiles du coin, pondéré par la base de chaque dépôt.
+
+    Par dépôt puis moyenné, jamais sommé : chaque dépôt porte ses propres
+    ``stars_at``/``stars_prev_at``, et le round-robin ne les rafraîchit pas
+    ensemble. Diviser une somme d'étoiles par un intervalle commun inventé
+    rejouerait le défaut corrigé en tâche 2, où l'intervalle réel et
+    l'intervalle supposé divergeaient.
+
+    Pondéré par ``stars_prev`` parce qu'un dépôt de documentation à 30 étoiles
+    ne doit pas peser autant que le client principal à 40 000.
+    """
+    rates = [
+        (star_growth_pct(r), r.stars_prev)
+        for r in live
+        if r.stars_prev is not None and r.stars_prev > 0
+    ]
+    usable = [(rate, base) for rate, base in rates if rate is not None]
+    if not usable:
+        return None
+    total = sum(base for _, base in usable)
+    return sum(rate * base for rate, base in usable) / total
 
 
 def _sum_median(values: Sequence[float | None]) -> float | None:
@@ -2219,15 +2256,43 @@ git commit -m "feat(collector-github): cycle deux horloges, publication depuis l
 - Modify: `.github/workflows/deploy.yml` — **ne pas oublier**
 - Test: `tests/test_github_store.py`
 
-> **L'entrée CI n'est pas optionnelle.** Chaque service du dépôt figure dans
-> `strategy.matrix.include` de `deploy.yml`. Sans la sienne, `docker-compose.vps.yml`
-> référencerait `ghcr.io/nbeny/bottrading-collector-github:latest`, une image que la CI ne
-> construit jamais, et le déploiement VPS échouerait au `pull` — après un build vert.
-> Ajouter, en respectant l'alignement des colonnes existantes :
+> **Deux éditions distinctes dans `deploy.yml`, et oublier l'une ou l'autre est
+> silencieux.**
+>
+> **a) La matrice d'images.** Chaque service du dépôt figure dans `strategy.matrix.include`.
+> Sans la sienne, `docker-compose.vps.yml` référencerait
+> `ghcr.io/nbeny/bottrading-collector-github:latest`, une image que la CI ne construit
+> jamais, et le déploiement VPS échouerait au `pull` — après un build vert. Ajouter, en
+> respectant l'alignement des colonnes :
 >
 > ```yaml
 >           - { name: collector-github,      dockerfile: docker/Dockerfile,     path: services/collector-github }
 > ```
+>
+> **b) La liste blanche de tests.** Le job `test` ne lance pas `pytest tests/` : il énumère
+> ~25 chemins de fichiers à la main. **Tout fichier absent de cette liste ne s'exécute
+> jamais en CI**, quel que soit son état local. Les treize fichiers de ce chantier doivent
+> y être ajoutés, y compris `test_developer_event.py` livré en tâche 1 :
+>
+> ```
+>             tests/test_developer_event.py \
+>             tests/test_github_activity.py \
+>             tests/test_github_aggregate.py \
+>             tests/test_github_lists.py \
+>             tests/test_github_client.py \
+>             tests/test_github_models.py \
+>             tests/test_github_repo_map.py \
+>             tests/test_github_collector.py \
+>             tests/test_github_store.py \
+>             tests/test_github_registry.py \
+>             tests/test_haiku_developer_features.py \
+>             tests/test_scoring_developer_axis.py \
+>             tests/test_axis_parity.py \
+> ```
+>
+> Le job installe `cmi_common` et `api-gateway` seulement ; c'est suffisant, puisque les
+> tests chargent le code de service par chemin via `load_service_module` et non par import
+> de paquet. `pytest-asyncio` y est déjà, ce dont les tests des tâches 5, 7 et 8 ont besoin.
 
 - [ ] **Step 1 : écrire le test qui échoue**
 
@@ -3316,6 +3381,15 @@ if __name__ == "__main__":
 
 Run: `GITHUB_TOKEN=<le token régénéré> python scripts/verify_github_activity.py`
 Expected: une ligne par token, puis couverture, médiane, écart-type et déciles. La couverture doit atteindre au moins 60 % (critère n°1 du spec) et les déciles ne doivent pas être concentrés.
+
+> **Sortir aussi la distribution du seul sous-signal `star_growth`, séparément de l'axe.**
+> Son seuil de saturation est à 2 % sur 7 jours : exigeant pour un dépôt à 10 000 étoiles
+> (il faut en gagner 100), trivial pour un dépôt à 50 (une seule étoile en 12 h se
+> normalise à 14 % et sature). Si le sous-signal sature pour la majorité des petits
+> dépôts, il n'ordonne plus rien et vaut du bruit à 0.10 du poids de l'axe. Deux issues :
+> relever le seuil, ou exiger une base absolue minimale d'étoiles en dessous de laquelle
+> la croissance relative rend `None`. Trancher sur les données réelles, pas a priori —
+> c'est exactement pour ce genre d'arbitrage que ce script existe.
 
 - [ ] **Step 3 : consigner le résultat**
 

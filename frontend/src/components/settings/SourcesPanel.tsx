@@ -16,6 +16,7 @@ import {
 import PodcastsIcon from '@mui/icons-material/Podcasts';
 import { collectorsApi, type AiQuotaStatus, type CollectorRuntime } from '@/lib/api/endpoints';
 import { apiErrorMessage } from '@/lib/api/client';
+import { TelegramChannelsEditor } from './TelegramChannelsEditor';
 
 const LABELS: Record<string, string> = {
   bluesky: 'Bluesky',
@@ -66,14 +67,18 @@ export function SourcesPanel() {
     return () => clearInterval(id);
   }, [refresh]);
 
+  /** Resolves false when the server refused the patch — the channel editor
+   *  keeps the operator's text in the box so a rejected handle can be retyped. */
   const patch = useCallback(
-    async (body: Parameters<typeof collectorsApi.setRuntime>[0]) => {
+    async (body: Parameters<typeof collectorsApi.setRuntime>[0]): Promise<boolean> => {
       setBusy(true);
       try {
         setRt(await collectorsApi.setRuntime(body));
         setError(null);
+        return true;
       } catch (e) {
         setError(apiErrorMessage(e, 'Échec de la mise à jour'));
+        return false;
       } finally {
         setBusy(false);
       }
@@ -85,6 +90,10 @@ export function SourcesPanel() {
     if (!rt) return null;
     const enabled = kind === 'social' ? rt.social_enabled : rt.news_enabled;
     const platforms = rt.known_platforms[kind] ?? [];
+    // The channel list only governs anything while Telegram is actually being
+    // polled, so it follows both switches rather than sitting there inert.
+    const showTelegram =
+      kind === 'social' && enabled && platforms.includes('telegram') && (rt.platforms.telegram ?? true);
     return (
       <Box>
         <FormControlLabel
@@ -120,6 +129,14 @@ export function SourcesPanel() {
             />
           ))}
         </Stack>
+        {showTelegram && (
+          <TelegramChannelsEditor
+            channels={rt.telegram_channels ?? []}
+            status={rt.source_status?.telegram}
+            busy={busy}
+            onSave={(channels) => patch({ telegram_channels: channels })}
+          />
+        )}
       </Box>
     );
   };

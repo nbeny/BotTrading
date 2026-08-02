@@ -34,7 +34,6 @@ def _assigned(path: Path, name: str) -> ast.expr:
         for target in targets:
             if isinstance(target, ast.Name) and target.id == name:
                 return node.value
-        raise_if_last = None  # noqa: F841 — lisibilite
     raise AssertionError(f"{name} introuvable dans {path}")
 
 

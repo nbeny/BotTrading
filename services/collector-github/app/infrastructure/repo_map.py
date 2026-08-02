@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Mapping
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -82,22 +83,58 @@ class CoinGeckoRepos:
         )
 
 
+#: Chemins reserves de github.com : ce ne sont pas des depots, et les laisser
+#: entrer produirait des 404 permanents dans la boucle de sondage plutot que
+#: des absences comptees.
+_RESERVED = frozenset(
+    {"sponsors", "orgs", "topics", "collections", "features", "settings", "apps"}
+)
+#: Hotes acceptes. `gist.github.com` en est exclu : un gist a bien la forme
+#: `user/hash` mais n'est pas un depot, et la paire produite pourrait entrer en
+#: collision avec un vrai depot de cet utilisateur.
+_HOSTS = frozenset({"github.com", "www.github.com"})
+
+
 def _split(url: str) -> tuple[str, str] | None:
-    marker = "github.com/"
-    if not isinstance(url, str) or marker not in url:
+    """``(owner, repo)`` d'une URL GitHub, ou ``None`` si ce n'en est pas une.
+
+    Analyse par ``urlsplit`` plutot que par decoupage de chaine. Le decoupage
+    laissait passer plusieurs formes reelles de ``links.repos_url.github`` :
+    ``https://GitHub.com/...`` etait rejete alors qu'il est valide (le marqueur
+    etait sensible a la casse), ``...?tab=readme`` et ``...#readme`` entraient
+    dans le nom du depot, et ``github.com/topics/solana`` produisait la paire
+    ``("topics", "solana")`` — un depot fantome interroge indefiniment.
+    """
+    if not isinstance(url, str):
         return None
-    parts = url.split(marker, 1)[1].strip("/").split("/")
-    if len(parts) < 2 or not parts[0] or not parts[1]:
+    parts = urlsplit(url.strip())
+    if parts.netloc.lower() not in _HOSTS:
         return None
-    return parts[0], parts[1].removesuffix(".git")
+    segments = [s for s in parts.path.split("/") if s]
+    if len(segments) < 2:
+        return None
+    owner, repo = segments[0], segments[1].removesuffix(".git")
+    if owner.casefold() in _RESERVED or not repo:
+        return None
+    return owner, repo
 
 
 def _dedupe(pairs: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Deduplique sans tenir compte de la casse, en gardant la graphie d'origine.
+
+    GitHub resout ``owner/repo`` sans distinguer la casse, donc
+    ``Uniswap/v3-core`` et ``uniswap/v3-core`` sont un seul depot. Les compter
+    deux fois couterait deux creneaux du round-robin, gonflerait ``repo_count``
+    dans l'agregat, et compterait deux fois la base d'etoiles de ce depot dans
+    la ponderation. ``ListEntry.dedup_key`` prend deja cette position pour la
+    meme raison ; ce module s'y aligne.
+    """
     seen: set[tuple[str, str]] = set()
     out: list[tuple[str, str]] = []
     for pair in pairs:
-        if pair not in seen:
-            seen.add(pair)
+        key = (pair[0].casefold(), pair[1].casefold())
+        if key not in seen:
+            seen.add(key)
             out.append(pair)
     return out
 
@@ -125,8 +162,8 @@ def promote_list_entries(
         symbol = symbols_by_name.get(entry.name.strip().lower())
         if symbol is None or symbol in homographs:
             continue
-        if (entry.owner, entry.repo) in seen:
+        if entry.dedup_key in seen:
             continue
-        seen.add((entry.owner, entry.repo))
+        seen.add(entry.dedup_key)
         promoted.append((symbol, entry.owner, entry.repo))
     return promoted

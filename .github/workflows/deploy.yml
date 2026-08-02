@@ -70,7 +70,8 @@ jobs:
             tests/test_haiku_developer_features.py \
             tests/test_scoring_developer_axis.py \
             tests/test_axis_parity.py  \
-            tests/test_deployment_wiring.py -q
+            tests/test_deployment_wiring.py \
+            tests/test_risk_confidence_floor.py -q
 
   # -------------------------------------------------------------- images
   images:

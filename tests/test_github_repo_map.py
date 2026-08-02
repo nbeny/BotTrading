@@ -141,3 +141,67 @@ def test_promotion_deduplicates_the_same_repo_from_both_lists():
         homographs=frozenset(),
     )
     assert promoted == [("BTC", "bitcoin", "bitcoin")]
+
+
+async def test_real_coingecko_url_shapes_are_parsed_not_split():
+    """I7: le decoupage de chaine laissait passer plusieurs formes reelles.
+
+    L'hote en capitales etait rejete alors qu'il est valide, les suffixes de
+    requete et d'ancre entraient dans le nom du depot, et les chemins reserves
+    produisaient des depots fantomes interroges indefiniment.
+    """
+    cases = {
+        "https://GitHub.com/aave/aave-v3-core": ("aave", "aave-v3-core"),
+        "https://github.com/aave/aave-v3-core?tab=readme": ("aave", "aave-v3-core"),
+        "https://github.com/aave/aave-v3-core#readme": ("aave", "aave-v3-core"),
+        "https://github.com/aave/aave-v3-core/tree/main": ("aave", "aave-v3-core"),
+        "  https://github.com/aave/aave-v3-core  ": ("aave", "aave-v3-core"),
+    }
+    for url, expected in cases.items():
+        got = await _client({"links": {"repos_url": {"github": [url]}}}).repos_for(
+            "aave"
+        )
+        assert got == [expected], url
+
+
+async def test_reserved_paths_and_gists_are_not_repos():
+    """Un 404 permanent dans la boucle de sondage, pas une absence comptee."""
+    for url in (
+        "https://github.com/topics/solana",
+        "https://github.com/orgs/aave/repositories",
+        "https://github.com/sponsors/aave",
+        "https://gist.github.com/vbuterin/deadbeef",
+        "https://github.com/bitcoin",
+    ):
+        got = await _client({"links": {"repos_url": {"github": [url]}}}).repos_for("x")
+        assert got == [], url
+
+
+async def test_dedup_ignores_case_like_github_does():
+    """I8: deux graphies du meme depot coutaient deux creneaux du round-robin
+    et gonflaient repo_count."""
+    got = await _client(
+        {
+            "links": {
+                "repos_url": {
+                    "github": [
+                        "https://github.com/Uniswap/v3-core",
+                        "https://github.com/uniswap/v3-core",
+                    ]
+                }
+            }
+        }
+    ).repos_for("uniswap")
+    assert got == [("Uniswap", "v3-core")]
+
+
+def test_promotion_dedup_ignores_case_too():
+    promoted = promote_list_entries(
+        [
+            _entry("bitcoin", "Bitcoin", "Bitcoin"),
+            _entry("bitcoin", "bitcoin", "bitcoin"),
+        ],
+        symbols_by_name={"bitcoin": "BTC"},
+        homographs=frozenset(),
+    )
+    assert len(promoted) == 1

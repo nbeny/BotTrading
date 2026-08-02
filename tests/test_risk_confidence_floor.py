@@ -63,3 +63,27 @@ def test_a_full_house_still_saturates_the_size_cap():
     """Tous les axes presents doit continuer a donner la taille maximale,
     sinon le rescale aurait aussi rabote le haut de l'echelle."""
     assert min(1.0, sum(WEIGHTS.values())) == pytest.approx(1.0)
+
+
+def test_the_operative_floor_in_compose_tracks_the_weights_too():
+    """Le defaut de rules.py est surcharge par le compose: c'est la valeur du
+    compose qui gouverne la production.
+
+    Rescaler le seul defaut du code aurait ete cosmetique. Le dépôt applique
+    deja cette regle -- 0.55 x 0.75 = 0.41 au passage a sept axes -- et il faut
+    la refaire a chaque axe ajoute.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    for name in ("docker-compose.yml", "docker-compose.vps.yml"):
+        text = (root / name).read_text(encoding="utf-8")
+        match = re.search(
+            r"RISK_MIN_CONFIDENCE:\s*\$\{RISK_MIN_CONFIDENCE:-([\d.]+)\}", text
+        )
+        assert match, name
+        # 0.55 (v1, cinq axes) x 0.75 (sept axes) x 0.92 (huit axes).
+        assert float(match.group(1)) == pytest.approx(
+            0.55 * 0.75 * 0.92, abs=1e-4
+        ), name

@@ -24,6 +24,7 @@ KNOWN_PLATFORMS: dict[str, list[str]] = {
         "neynar",
         "youtube",
         "lens",
+        "telegram",
     ],
     "news": ["cryptocompare", "gdelt", "newsdata", "rss"],
 }

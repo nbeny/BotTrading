@@ -25,6 +25,7 @@ const LABELS: Record<string, string> = {
   neynar: 'Farcaster',
   youtube: 'YouTube',
   lens: 'Lens',
+  telegram: 'Telegram',
   cryptocompare: 'CryptoCompare',
   gdelt: 'GDELT',
   newsdata: 'NewsData',

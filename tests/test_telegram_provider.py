@@ -1,0 +1,265 @@
+"""TelegramProvider: channel messages -> RawItem, with a fake MTProto client.
+
+Telethon is never imported here: the provider takes its client *and* its error
+classes from an injected factory, precisely so the library stays out of the test
+environment (and out of CI, which installs no service dependencies).
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+_spec = importlib.util.spec_from_file_location(
+    "telegram_provider",
+    Path(__file__).resolve().parents[1]
+    / "services"
+    / "collector-social"
+    / "app"
+    / "providers"
+    / "telegram.py",
+)
+tg = importlib.util.module_from_spec(_spec)
+assert _spec.loader
+sys.modules[_spec.name] = tg
+_spec.loader.exec_module(tg)
+
+from cmi_common.sources import RateLimitedError  # noqa: E402
+
+# --- fake telethon -------------------------------------------------------
+
+
+class FloodWaitError(Exception):
+    def __init__(self, seconds: int) -> None:
+        super().__init__(f"flood wait {seconds}")
+        self.seconds = seconds
+
+
+class ChannelPrivateError(Exception):
+    pass
+
+
+class UsernameInvalidError(Exception):
+    pass
+
+
+class UsernameNotOccupiedError(Exception):
+    pass
+
+
+ERRORS = SimpleNamespace(
+    FloodWaitError=FloodWaitError,
+    ChannelPrivateError=ChannelPrivateError,
+    UsernameInvalidError=UsernameInvalidError,
+    UsernameNotOccupiedError=UsernameNotOccupiedError,
+)
+
+
+def _msg(
+    msg_id: int, text: str, *, views: int | None = 10, date: datetime | None = None
+) -> Any:
+    return SimpleNamespace(
+        id=msg_id,
+        message=text,
+        views=views,
+        date=date or datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
+    )
+
+
+class FakeClient:
+    """Minimal stand-in for telethon.TelegramClient."""
+
+    def __init__(
+        self,
+        *,
+        messages: dict[str, list[Any]] | None = None,
+        entities: dict[str, Any] | None = None,
+        resolve_error: Exception | None = None,
+        authorized: bool = True,
+    ) -> None:
+        self._messages = messages or {}
+        self._entities = entities or {}
+        self._resolve_error = resolve_error
+        self._authorized = authorized
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.resolved: list[str] = []
+        self.disconnected = False
+
+    async def connect(self) -> None:
+        return None
+
+    async def is_user_authorized(self) -> bool:
+        return self._authorized
+
+    async def disconnect(self) -> None:
+        self.disconnected = True
+
+    async def get_entity(self, handle: str) -> Any:
+        self.resolved.append(handle)
+        if self._resolve_error is not None:
+            raise self._resolve_error
+        return self._entities.get(
+            handle, SimpleNamespace(id=-100 - len(handle), username=handle)
+        )
+
+    def iter_messages(self, entity: Any, **kwargs: Any) -> Any:
+        handle = entity.username
+        self.calls.append((handle, kwargs))
+        msgs = sorted(self._messages.get(handle, []), key=lambda m: m.id, reverse=True)
+        min_id = kwargs.get("min_id")
+        if min_id:
+            msgs = [m for m in msgs if m.id > min_id]
+        msgs = msgs[: kwargs.get("limit") or len(msgs)]
+
+        async def _gen() -> Any:
+            for m in msgs:
+                yield m
+
+        return _gen()
+
+
+def _provider(client: FakeClient, **kw: Any) -> Any:
+    return tg.TelegramProvider(
+        api_id=1,
+        api_hash="hash",
+        session="session",
+        channels=kw.pop("channels", ["alpha"]),
+        client_factory=lambda: (client, ERRORS),
+        **kw,
+    )
+
+
+# --- tests ---------------------------------------------------------------
+
+
+async def test_maps_messages_and_leaves_symbols_to_the_normalizer() -> None:
+    client = FakeClient(messages={"alpha": [_msg(7, "BTC long entry 65000")]})
+    provider = _provider(client)
+
+    items = await provider.fetch()
+    await provider.close()
+
+    assert len(items) == 1
+    it = items[0]
+    assert it.source == "telegram"
+    assert it.kind == "social"
+    assert it.external_id.endswith(":7")
+    assert it.text == "BTC long entry 65000"
+    assert it.url == "https://t.me/alpha/7"
+    assert it.author == "alpha"
+    assert it.engagement == 10.0
+    assert it.published_at == datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
+    assert it.symbols == []  # the collector's normalizer owns symbol resolution
+
+
+async def test_absent_views_stay_none_rather_than_zero() -> None:
+    # A post with no view count is unmeasured, not unread. Scoring excludes an
+    # absent axis but prices a 0.0 as worst-case evidence.
+    client = FakeClient(messages={"alpha": [_msg(1, "call", views=None)]})
+    provider = _provider(client)
+
+    items = await provider.fetch()
+
+    assert items[0].engagement is None
+
+
+async def test_media_only_posts_are_skipped() -> None:
+    client = FakeClient(messages={"alpha": [_msg(1, ""), _msg(2, "  "), _msg(3, "hi")]})
+    provider = _provider(client)
+
+    items = await provider.fetch()
+
+    assert [i.external_id.split(":")[1] for i in items] == ["3"]
+
+
+async def test_cursor_advances_so_the_next_cycle_only_pulls_new_posts() -> None:
+    client = FakeClient(messages={"alpha": [_msg(4, "a"), _msg(5, "b")]})
+    provider = _provider(client)
+
+    first = await provider.fetch()
+    client._messages["alpha"].append(_msg(6, "c"))
+    second = await provider.fetch()
+
+    assert len(first) == 2
+    assert [i.external_id.split(":")[1] for i in second] == ["6"]
+    # First cycle backfills; later cycles are bounded by min_id.
+    assert "min_id" not in client.calls[0][1]
+    assert client.calls[1][1]["min_id"] == 5
+
+
+async def test_cursor_advances_past_media_only_posts() -> None:
+    # The cursor tracks the highest id *seen*, not the highest id kept — an
+    # image-only post must not be re-fetched forever.
+    client = FakeClient(messages={"alpha": [_msg(9, "")]})
+    provider = _provider(client)
+
+    await provider.fetch()
+    await provider.fetch()
+
+    assert client.calls[1][1]["min_id"] == 9
+
+
+async def test_flood_wait_becomes_rate_limited_with_telegrams_own_delay() -> None:
+    client = FakeClient(resolve_error=FloodWaitError(42))
+    provider = _provider(client)
+
+    with pytest.raises(RateLimitedError) as exc:
+        await provider.fetch()
+
+    assert exc.value.retry_after == 42.0
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ChannelPrivateError(),
+        UsernameInvalidError(),
+        UsernameNotOccupiedError(),
+        ValueError("nope"),
+    ],
+)
+async def test_unresolvable_channel_is_dropped_without_killing_the_cycle(
+    error: Exception,
+) -> None:
+    client = FakeClient(
+        messages={"beta": [_msg(1, "still ingesting")]}, resolve_error=error
+    )
+    # Only `alpha` fails: the fake raises on every resolve, so give beta a
+    # pre-resolved entity to prove the loop carries on past the bad one.
+    provider = _provider(client, channels=["alpha", "beta"])
+    provider._entities["beta"] = SimpleNamespace(id=-1002, username="beta")
+
+    items = await provider.fetch()
+
+    assert [i.author for i in items] == ["beta"]
+    assert "alpha" in provider._dead
+    # Second cycle must not spend another ResolveUsername call on the dead one.
+    await provider.fetch()
+    assert client.resolved == ["alpha"]
+
+
+async def test_unauthorized_session_raises_instead_of_reporting_silence() -> None:
+    client = FakeClient(authorized=False)
+    provider = _provider(client)
+
+    with pytest.raises(RuntimeError, match="TELEGRAM_SESSION"):
+        await provider.fetch()
+    assert client.disconnected
+
+
+def test_parse_channels_normalizes_handles_and_drops_duplicates() -> None:
+    parsed = tg.parse_channels(
+        " @CoinBureau , https://t.me/CoinBureau, t.me/wublockchainenglish/ ,coinbureau"
+    )
+    assert parsed == ["coinbureau", "wublockchainenglish"]
+
+
+def test_parse_channels_falls_back_to_the_built_in_desk_list() -> None:
+    assert tg.parse_channels(None) == list(tg.DEFAULT_CHANNELS)
+    assert tg.parse_channels("   ") == list(tg.DEFAULT_CHANNELS)

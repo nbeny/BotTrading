@@ -874,21 +874,37 @@ def assemble_trace(
 TRACE_LINK_WINDOW = timedelta(seconds=120)
 
 
+#: A correlation id maps to at most one analysis: each input event mints its own
+#: uuid and ai-worker-haiku stamps a single AnalysisEvent with it (verified in
+#: production — the lookup returns exactly one row). The cap is what keeps
+#: "newest wins" true should that ever stop holding.
+_SIGNAL_CID_FANOUT = 10
+
+
 async def _signal_by_cid(session: AsyncSession, cid: str) -> Any | None:
-    # Indexed by migration 0017 on (payload ->> 'correlation_id'). Without it
-    # this is a full scan of the signals hypertable on every miss.
-    return (
+    """The analysis published under this correlation id.
+
+    Deliberately *not* `ORDER BY time DESC LIMIT 1`, and the newest row is
+    picked here instead. Sorting on time makes the planner abandon
+    ix_signals_correlation (migration 0017) for a descending walk of
+    signals_time_idx: it estimates a few thousand matches, so aborting early
+    looks cheap — and on a miss, which is the common case, it reads the whole
+    1.48M-row hypertable instead. Measured in production on 2026-08-02 with the
+    index in place: 142 s ordered against 0.35 ms unordered. The index existing
+    is not the same as the index being used.
+    """
+    rows = (
         (
             await session.execute(
                 select(Signal)
                 .where(Signal.payload["correlation_id"].astext == cid)
-                .order_by(Signal.time.desc())
-                .limit(1)
+                .limit(_SIGNAL_CID_FANOUT)
             )
         )
         .scalars()
-        .first()
+        .all()
     )
+    return max(rows, key=lambda r: r.time) if rows else None
 
 
 async def _decision_by_cid(session: AsyncSession, cid: str) -> Any | None:

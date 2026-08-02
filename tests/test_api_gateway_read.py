@@ -451,6 +451,32 @@ def test_endpoint_trace_wiring() -> None:
     assert len(body["stages"]) == 6
 
 
+def test_endpoint_trace_picks_the_newest_signal_without_ordering_in_sql() -> None:
+    """`ORDER BY time DESC LIMIT 1` is what made the planner ignore
+    ix_signals_correlation and walk the whole hypertable (142 s vs 0.35 ms in
+    production), so the newest row is chosen in Python. It still has to be the
+    newest."""
+    older = SimpleNamespace(
+        symbol="BTC",
+        time=NOW - timedelta(minutes=5),
+        opportunity_score=10,
+        confidence=0.1,
+        escalated=False,
+        payload={},
+    )
+    newer = SimpleNamespace(
+        symbol="BTC",
+        time=NOW,
+        opportunity_score=90,
+        confidence=0.9,
+        escalated=True,
+        payload={},
+    )
+    client = _client([_Result(rows=[older, newer]), _Result(rows=[]), _Result(rows=[])])
+    kinds = {s["kind"]: s for s in client.get("/trace/corr-1").json()["stages"]}
+    assert kinds["analysis"]["detail"]["opportunity_score"] == 90
+
+
 def _archived(event_type, payload, symbol="BTC"):
     return SimpleNamespace(
         event_type=event_type, symbol=symbol, time=NOW, payload=payload

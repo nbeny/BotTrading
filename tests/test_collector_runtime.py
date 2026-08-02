@@ -69,13 +69,11 @@ async def test_telegram_channels_default_to_the_seed() -> None:
     assert rt["telegram_channels"] == list(runtime.TELEGRAM_SEED_CHANNELS)
 
 
-async def test_an_explicitly_empty_channel_list_is_not_refilled_by_the_seed(
-    monkeypatch,
-) -> None:
-    """La graine livrée est vide, donc tester contre elle ne prouverait rien :
-    `[] or SEED` et le test `is None` se comportent identiquement quand SEED est
-    vide. On pose une graine non vide pour que la distinction soit falsifiable."""
-    monkeypatch.setattr(runtime, "TELEGRAM_SEED_CHANNELS", ["seeded"])
+async def test_an_explicitly_empty_channel_list_is_not_refilled_by_the_seed() -> None:
+    """La graine livrée n'est plus vide (elle porte les 24 canaux du desk), donc
+    la distinction `[]` / graine est falsifiable sans monkeypatch : `[] or SEED`
+    rendrait ici les 24 canaux au lieu de la liste vidée par l'opérateur."""
+    assert runtime.TELEGRAM_SEED_CHANNELS  # sinon l'assertion ci-dessous est vide
     cache = _FakeCache({"telegram_channels": []})
     rt = await runtime.get_runtime(cache)
     assert rt["telegram_channels"] == []

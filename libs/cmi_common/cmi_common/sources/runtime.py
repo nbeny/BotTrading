@@ -29,10 +29,37 @@ KNOWN_PLATFORMS: dict[str, list[str]] = {
     "news": ["cryptocompare", "gdelt", "newsdata", "rss"],
 }
 
-#: Canaux Telegram livrés par défaut. Vide à dessein : aucune liste vérifiée n'a
-#: été fournie, et des usernames inventés produiraient des canaux introuvables
-#: signalés en erreur à chaque cycle. L'opérateur la peuple depuis le terminal.
-TELEGRAM_SEED_CHANNELS: list[str] = []
+#: Canaux Telegram livrés par défaut : desks de signaux, groupes alpha et les
+#: feeds d'annonces qui déplacent les listings. La liste vit ici et non dans
+#: collector-social parce que control-api doit pouvoir l'afficher dans le
+#: terminal et n'a pas le droit d'importer un collecteur — une seule source de
+#: vérité, dans la couche partagée.
+TELEGRAM_SEED_CHANNELS: list[str] = [
+    "binancekillers",
+    "wallstreetqueenofficialx1",
+    "wallstreetqueenofficialtg",
+    "fatpigsignals_fps",
+    "binancekillers_vips",
+    "porter_news",
+    "airdrops_io",
+    "incomesharkst",
+    "cryptocapotg",
+    "bitcoin_bulletssignals",
+    "cryptoinnercircle",
+    "coinmarketcapannouncementsairdop",
+    "binance_moonbix_announcements",
+    "binance_announcements",
+    "learn2tradeoriginal1",
+    "crypto_signals_org_official",
+    "wallstreet_queenofficials",
+    "fat_pigs_signals",
+    "fat_pig_signals1",
+    "binance_killers_signals",
+    "coinbureau",
+    "wallstreetqueenofficial",
+    "icospeakschannels",
+    "wublockchainenglish",
+]
 
 
 def default_runtime() -> dict[str, Any]:

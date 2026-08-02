@@ -90,9 +90,10 @@ Les sources key-gated ne s'activent que si leur variable d'environnement est ren
 Telegram passe par **MTProto avec une session utilisateur** (un bot ne voit que les chaînes
 qu'il administre) : la session se génère une fois en local avec
 `python scripts/telegram_session.py`, puis se colle dans `.env` — le conteneur ne peut pas
-répondre à un code de connexion. La liste de chaînes par défaut vit dans
-`services/collector-social/app/providers/telegram.py::DEFAULT_CHANNELS` et se surcharge via
-`TELEGRAM_CHANNELS`.
+répondre à un code de connexion. La liste de chaînes est relue à chaque cycle depuis la clé
+Redis `collectors:runtime`, donc éditable depuis le terminal sans redéploiement ;
+`TELEGRAM_CHANNELS` ne fait que l'amorcer au premier démarrage, à défaut de quoi c'est la
+graine `cmi_common.sources.runtime::TELEGRAM_SEED_CHANNELS` qui sert.
 Le framework partagé est dans [`libs/cmi_common/cmi_common/sources/`](libs/cmi_common/cmi_common/sources)
 (`provider.py`, `raw.py`, `loop.py`, `repository.py`).
 

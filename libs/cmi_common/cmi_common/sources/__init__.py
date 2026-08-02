@@ -36,6 +36,7 @@ from .repository import (
 )
 from .runtime import (
     KNOWN_PLATFORMS,
+    RUNTIME_KEY,
     TELEGRAM_SEED_CHANNELS,
     default_runtime,
     get_runtime,
@@ -48,6 +49,7 @@ __all__ = [
     "KNOWN_PLATFORMS",
     "LEXICON_KEY",
     "MARKET_SYMBOL",
+    "RUNTIME_KEY",
     "SEED_LEXICON",
     "TELEGRAM_SEED_CHANNELS",
     "WINDOWS",

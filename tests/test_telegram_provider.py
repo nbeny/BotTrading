@@ -30,7 +30,7 @@ assert _spec.loader
 sys.modules[_spec.name] = tg
 _spec.loader.exec_module(tg)
 
-from cmi_common.sources import RateLimitedError  # noqa: E402
+from cmi_common.sources import TELEGRAM_SEED_CHANNELS, RateLimitedError  # noqa: E402
 
 # --- fake telethon -------------------------------------------------------
 
@@ -124,12 +124,39 @@ class FakeClient:
         return _gen()
 
 
-def _provider(client: FakeClient, **kw: Any) -> Any:
+class FakeCache:
+    """Stand-in for cmi_common.cache.Cache holding `collectors:runtime`.
+
+    Only the two methods `get_runtime` uses are implemented; `set_channels` is
+    the operator editing the list from the terminal, mid-flight.
+    """
+
+    def __init__(self, channels: list[str]) -> None:
+        self._store: dict[str, Any] = {}
+        self.set_channels(channels)
+
+    def set_channels(self, channels: list[str]) -> None:
+        self._store["collectors:runtime"] = {"telegram_channels": list(channels)}
+
+    async def get_json(self, key: str) -> Any:
+        return self._store.get(key)
+
+    async def set_json(self, key: str, value: Any, ttl_seconds: int = 60) -> None:
+        self._store[key] = value
+
+
+def _provider(
+    client: FakeClient,
+    *,
+    cache: Any | None = None,
+    channels: list[str] | None = None,
+    **kw: Any,
+) -> Any:
     return tg.TelegramProvider(
         api_id=1,
         api_hash="hash",
         session="session",
-        channels=kw.pop("channels", ["alpha"]),
+        cache=cache or FakeCache(channels or ["alpha"]),
         client_factory=lambda: (client, ERRORS),
         **kw,
     )
@@ -260,6 +287,58 @@ def test_parse_channels_normalizes_handles_and_drops_duplicates() -> None:
     assert parsed == ["coinbureau", "wublockchainenglish"]
 
 
-def test_parse_channels_falls_back_to_the_built_in_desk_list() -> None:
-    assert tg.parse_channels(None) == list(tg.DEFAULT_CHANNELS)
-    assert tg.parse_channels("   ") == list(tg.DEFAULT_CHANNELS)
+def test_parse_channels_falls_back_to_the_shared_seed_list() -> None:
+    # An empty seed would make the two assertions below pass vacuously.
+    assert TELEGRAM_SEED_CHANNELS
+    assert tg.parse_channels(None) == list(TELEGRAM_SEED_CHANNELS)
+    assert tg.parse_channels("   ") == list(TELEGRAM_SEED_CHANNELS)
+
+
+# --- the list is operator-editable, read fresh every cycle ----------------
+
+
+async def test_editing_the_list_changes_which_channels_the_next_cycle_polls() -> None:
+    # The whole point: no redeploy, no restart — the next cycle reads the key.
+    client = FakeClient(messages={"alpha": [_msg(1, "a")], "beta": [_msg(2, "b")]})
+    cache = FakeCache(["alpha"])
+    provider = _provider(client, cache=cache)
+
+    first = await provider.fetch()
+    cache.set_channels(["beta"])
+    second = await provider.fetch()
+
+    assert [i.author for i in first] == ["alpha"]
+    assert [i.author for i in second] == ["beta"]
+
+
+async def test_an_empty_list_polls_nothing_at_all() -> None:
+    client = FakeClient(messages={"alpha": [_msg(1, "a")]})
+    provider = _provider(client, cache=FakeCache([]))
+
+    items = await provider.fetch()
+
+    assert items == []
+    # No ResolveUsername, no history read: an empty list is "poll nobody", not
+    # "fall back to whatever the process started with".
+    assert client.resolved == []
+    assert client.calls == []
+
+
+async def test_removing_a_channel_clears_its_write_off_so_re_adding_retries() -> None:
+    # Write-offs are permanent by design (see the unresolvable-channel test), but
+    # only for a channel still on the list. Editing the list is the operator
+    # saying "try this again" — otherwise a typo, once fixed, stays dead.
+    client = FakeClient(resolve_error=UsernameInvalidError())
+    cache = FakeCache(["alpha"])
+    provider = _provider(client, cache=cache)
+
+    await provider.fetch()
+    assert provider._dead == {"alpha"}
+
+    cache.set_channels([])  # operator drops it
+    await provider.fetch()
+    assert provider._dead == set()
+
+    cache.set_channels(["alpha"])  # ...and puts it back
+    await provider.fetch()
+    assert client.resolved == ["alpha", "alpha"]

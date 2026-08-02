@@ -16,41 +16,18 @@ from __future__ import annotations
 
 import inspect
 import logging
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable
 from typing import Any
 
-from cmi_common.sources import RateLimitedError, RawItem
+from cmi_common.cache import Cache
+from cmi_common.sources import (
+    TELEGRAM_SEED_CHANNELS,
+    RateLimitedError,
+    RawItem,
+    get_runtime,
+)
 
 logger = logging.getLogger(__name__)
-
-#: Channels polled when ``TELEGRAM_CHANNELS`` is unset — signal desks, alpha
-#: groups and the announcement feeds that move listings.
-DEFAULT_CHANNELS: tuple[str, ...] = (
-    "binancekillers",
-    "wallstreetqueenofficialx1",
-    "wallstreetqueenofficialtg",
-    "fatpigsignals_fps",
-    "binancekillers_vips",
-    "porter_news",
-    "airdrops_io",
-    "incomesharkst",
-    "cryptocapotg",
-    "bitcoin_bulletssignals",
-    "cryptoinnercircle",
-    "coinmarketcapannouncementsairdop",
-    "binance_moonbix_announcements",
-    "binance_announcements",
-    "learn2tradeoriginal1",
-    "crypto_signals_org_official",
-    "wallstreet_queenofficials",
-    "fat_pigs_signals",
-    "fat_pig_signals1",
-    "binance_killers_signals",
-    "coinbureau",
-    "wallstreetqueenofficial",
-    "icospeakschannels",
-    "wublockchainenglish",
-)
 
 #: Messages pulled per channel on the first cycle (no cursor yet). Small on
 #: purpose: this is a live signal, not an archive import.
@@ -91,12 +68,15 @@ class TelegramProvider:
         api_id: int,
         api_hash: str,
         session: str,
-        channels: Sequence[str] = DEFAULT_CHANNELS,
+        cache: Cache,
         backfill: int = BACKFILL,
         max_per_cycle: int = MAX_PER_CYCLE,
         client_factory: Callable[[], tuple[Any, Any]] | None = None,
     ) -> None:
-        self._channels = list(channels)
+        # The channel list is operator-owned and read per cycle from Redis, not
+        # frozen at construction: editing it in the terminal must take effect on
+        # the next poll, without a redeploy.
+        self._cache = cache
         self._backfill = backfill
         self._max_per_cycle = max_per_cycle
         self._factory = client_factory or (
@@ -118,9 +98,10 @@ class TelegramProvider:
         self._client = None
 
     async def fetch(self) -> list[RawItem]:
+        channels = await self._active_channels()
         client, errors = await self._ensure_client()
         items: list[RawItem] = []
-        for channel in self._channels:
+        for channel in channels:
             if channel in self._dead:
                 continue
             try:
@@ -137,12 +118,27 @@ class TelegramProvider:
             ) as exc:
                 # Unresolvable for *this* account: renamed, banned, or invite-only
                 # and we are not a member. Retrying every cycle would spend
-                # ResolveUsername calls forever, so write it off until restart.
+                # ResolveUsername calls forever, so write it off until a restart
+                # or until the operator takes it off the list (see
+                # ``_active_channels``).
                 self._dead.add(channel)
                 logger.warning(
                     "telegram: dropping %s — %s: %s", channel, type(exc).__name__, exc
                 )
         return items
+
+    async def _active_channels(self) -> list[str]:
+        """The list as the operator last saved it, re-read on every cycle.
+
+        Entities and cursors are keyed by handle and survive an edit untouched —
+        a channel taken off the list and put back resumes where it stopped. The
+        write-offs cannot: dropping a handle is the operator saying "this one is
+        settled", so re-adding it has to buy a fresh resolve attempt, otherwise a
+        typo fixed in the terminal stays dead until the process restarts.
+        """
+        channels = (await get_runtime(self._cache))["telegram_channels"]
+        self._dead &= set(channels)
+        return list(channels)
 
     async def _ensure_client(self) -> tuple[Any, Any]:
         if self._client is not None and self._errors is not None:
@@ -223,9 +219,12 @@ def parse_channels(raw: str | None) -> list[str]:
 
     Accepts ``@handle``, ``t.me/handle`` links and bare names, in any case, and
     drops duplicates — the same desk is often listed under two mirrors.
+
+    This only seeds ``collectors:runtime`` on first boot; past that the operator
+    owns the list and the env var is ignored.
     """
     if raw is None or not raw.strip():
-        return list(DEFAULT_CHANNELS)
+        return list(TELEGRAM_SEED_CHANNELS)
     return _dedupe(_normalize(part) for part in raw.split(",") if part.strip())
 
 

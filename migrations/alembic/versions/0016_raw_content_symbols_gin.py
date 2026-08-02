@@ -25,6 +25,12 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # 0006 already created this index name, with the default jsonb_ops. Changing
+    # the opclass means *replacing* the index, not adding one -- without this
+    # drop the migration raises DuplicateTable on every database that followed
+    # the chain, which is every deployed one. IF EXISTS rather than op.drop_index
+    # so a database that somehow lacks it still upgrades.
+    op.execute("DROP INDEX IF EXISTS ix_raw_content_symbols_gin")
     op.create_index(
         "ix_raw_content_symbols_gin",
         "raw_content",
@@ -35,4 +41,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_raw_content_symbols_gin", table_name="raw_content")
+    # Restore 0006's index rather than leaving none: revision 0015 expects the
+    # name to exist, and dropping it outright would make the downgrade land on a
+    # schema no upgrade path ever produces.
+    op.execute("DROP INDEX IF EXISTS ix_raw_content_symbols_gin")
+    op.create_index(
+        "ix_raw_content_symbols_gin",
+        "raw_content",
+        ["symbols"],
+        postgresql_using="gin",
+    )

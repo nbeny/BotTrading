@@ -257,6 +257,24 @@ services:
       DEFILLAMA_POLL_INTERVAL: ${DEFILLAMA_POLL_INTERVAL:-600}
       DEFILLAMA_MAX_UNLOCK_FETCHES: ${DEFILLAMA_MAX_UNLOCK_FETCHES:-3}
 
+  collector-github:
+    <<: *service-defaults
+    build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/collector-github } }
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_POLL_INTERVAL: ${GITHUB_POLL_INTERVAL:-600}
+      GITHUB_MAX_REFRESH_PER_CYCLE: ${GITHUB_MAX_REFRESH_PER_CYCLE:-7}
+      GITHUB_UNIVERSE_SIZE: ${GITHUB_UNIVERSE_SIZE:-250}
+      GITHUB_LISTS_REFRESH_HOURS: ${GITHUB_LISTS_REFRESH_HOURS:-168}
+
   collector-binance-futures:
     <<: *service-defaults
     build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/collector-binance-futures } }

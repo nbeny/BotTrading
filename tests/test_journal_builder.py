@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from cmi_common.events import AnalysisEvent
-
 from service_modules import load_service_module
+
+from cmi_common.events import AnalysisEvent
 
 jb = load_service_module("ai-worker-sonnet", "journal")
 

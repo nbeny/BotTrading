@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -28,7 +28,7 @@ def test_full_news_item() -> None:
         text="body",
         url="https://x/a",
         symbols=["BTC"],
-        published_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        published_at=datetime(2024, 1, 1, tzinfo=UTC),
     )
     assert item.kind == "news"
     assert item.symbols == ["BTC"]

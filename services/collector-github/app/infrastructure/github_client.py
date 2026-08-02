@@ -194,12 +194,24 @@ class GitHubClient:
         self, owner: str, repo: str, *, since_days: int
     ) -> int | None:
         since = (datetime.now(tz=UTC) - timedelta(days=since_days)).date().isoformat()
-        response = await self._get(
-            "/search/issues",
-            self.search_limiter,
-            q=f"repo:{owner}/{repo} is:pr is:merged merged:>{since}",
-            per_page="1",
-        )
+        try:
+            response = await self._get(
+                "/search/issues",
+                self.search_limiter,
+                q=f"repo:{owner}/{repo} is:pr is:merged merged:>{since}",
+                per_page="1",
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 422:
+                raise
+            # 422, pas 404 : /search rend cela pour un depot qu'il ne peut pas
+            # indexer — renomme, trop gros, ou recherche desactivee. Observe en
+            # conditions reelles sur input-output-hk/plutus. C'est une mesure
+            # absente, pas une erreur du cycle : la laisser remonter faisait
+            # perdre tous les tokens suivants.
+            UPSTREAM_REQUESTS.labels(SERVICE, "github", "unsearchable").inc()
+            logger.warning("github: %s/%s non indexable par /search", owner, repo)
+            return None
         payload = response.json()
         if payload.get("incomplete_results"):
             # GitHub leve ce drapeau quand la requete a expire et que le

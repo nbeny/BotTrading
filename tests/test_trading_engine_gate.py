@@ -1,8 +1,9 @@
 import asyncio
 
-from cmi_common.events.execution import ExecutionKind
+from tests.test_trading_engine import FakeCache, FakeKraken, FakeProducer, _signal
 from tests.trading_helpers import load_module
-from tests.test_trading_engine import FakeCache, FakeProducer, FakeKraken, _signal
+
+from cmi_common.events.execution import ExecutionKind
 
 
 def _engine(cache, producer, kraken):

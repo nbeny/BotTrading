@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -16,6 +16,7 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture()
 async def session():
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
     from cmi_common.db.models import Base
 
     engine = create_async_engine(os.environ["CMI_TEST_DB_URL"])
@@ -50,7 +51,7 @@ async def _seed(session, symbol, bucket_start, *, score_sum, conf_sum, wsum, n):
 async def test_window_derivation_24h_vs_7d(session) -> None:
     from cmi_common.sources import SqlSentimentAggReader
 
-    now = datetime(2024, 1, 10, tzinfo=timezone.utc)
+    now = datetime(2024, 1, 10, tzinfo=UTC)
     await _seed(
         session,
         "BTC",
@@ -81,9 +82,9 @@ async def test_window_derivation_24h_vs_7d(session) -> None:
 async def test_compaction_and_union_read(session) -> None:
     from cmi_common.sources import SqlContentRepository, SqlSentimentAggReader
 
-    now = datetime(2024, 6, 1, tzinfo=timezone.utc)
+    now = datetime(2024, 6, 1, tzinfo=UTC)
     # two old hourly buckets same UTC day (must roll into one daily bucket)
-    old_day = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    old_day = datetime(2024, 1, 1, tzinfo=UTC)
     await _seed(
         session,
         "BTC",
@@ -113,12 +114,13 @@ async def test_compaction_and_union_read(session) -> None:
         n=1,
     )
 
-    cutoff = datetime(2024, 5, 1, tzinfo=timezone.utc)
+    cutoff = datetime(2024, 5, 1, tzinfo=UTC)
     n = await SqlContentRepository(session).compact_hourly_to_daily(older_than=cutoff)
     assert n == 2  # two old hourly rows compacted
 
     # daily table now holds the summed old-day bucket at UTC midnight
     from sqlalchemy import select
+
     from cmi_common.db.models import ContentSentimentAgg, ContentSentimentAggDaily
 
     daily = (await session.execute(select(ContentSentimentAggDaily))).scalars().all()

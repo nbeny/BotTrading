@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from datetime import UTC
 from pathlib import Path
 
 import pytest
@@ -96,10 +97,10 @@ async def test_symbolless_item_is_not_rescued_as_market() -> None:
 
 
 async def test_worker_accumulates_additive_bucket() -> None:
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     repo = FakeContentRepository()
-    ts = datetime(2024, 1, 1, 10, 30, tzinfo=timezone.utc)
+    ts = datetime(2024, 1, 1, 10, 30, tzinfo=UTC)
     for ext in ("a", "b"):
         await repo.insert_items(
             [

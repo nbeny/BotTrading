@@ -1,5 +1,4 @@
 import pytest
-
 from tests.trading_helpers import load_module
 
 

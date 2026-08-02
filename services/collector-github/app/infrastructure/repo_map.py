@@ -14,6 +14,7 @@ partir d'une coïncidence de nommage.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Iterable, Mapping
 from urllib.parse import urlsplit
@@ -28,6 +29,13 @@ logger = logging.getLogger(__name__)
 
 SERVICE = "collector-github"
 COINGECKO_BASE = "https://api.coingecko.com/api/v3"
+#: L'offre gratuite plafonne autour de 10-30 appels/minute et repond 429
+#: au-dela. En production le collector n'appelle qu'un coin par cycle de
+#: 600 s, donc la limite ne mord jamais — mais le harnais de verification,
+#: lui, balaie l'univers d'un trait et s'est fait couper au 8e coin. Un
+#: client qui ne connait pas son propre quota reporte le probleme sur
+#: chacun de ses appelants.
+MIN_INTERVAL_SECONDS = 6.5
 
 
 class CoinGeckoRepos:
@@ -43,13 +51,27 @@ class CoinGeckoRepos:
         *,
         timeout: float = 20.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        min_interval: float = MIN_INTERVAL_SECONDS,
     ) -> None:
         self._http = httpx.AsyncClient(
             base_url=COINGECKO_BASE, timeout=timeout, transport=transport
         )
+        self._min_interval = min_interval
+        self._next = 0.0
+        self._lock = asyncio.Lock()
 
     async def close(self) -> None:
         await self._http.aclose()
+
+    async def _throttle(self) -> None:
+        """Espace les appels, sous verrou pour que deux coroutines ne
+        puissent pas passer ensemble."""
+        async with self._lock:
+            loop = asyncio.get_running_loop()
+            wait = self._next - loop.time()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._next = loop.time() + self._min_interval
 
     async def repos_for(self, coin_id: str) -> list[tuple[str, str]]:
         """``[(owner, repo), …]``, liste vide si le coin n'en déclare aucun.
@@ -63,6 +85,7 @@ class CoinGeckoRepos:
         graphies (``.git`` final, sous-chemin ``/tree/main``), et deux lignes
         de carte feraient interroger deux fois le même dépôt.
         """
+        await self._throttle()
         response = await self._http.get(
             f"/coins/{coin_id}",
             params={

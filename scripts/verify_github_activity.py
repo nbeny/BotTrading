@@ -108,6 +108,11 @@ async def _read_repo(client, owner: str, repo: str, now: datetime) -> RepoStats 
         )
     except RepoGoneError:
         return None
+    except Exception as exc:
+        # Un depot qui echoue ne doit pas couter la mesure a tous les suivants:
+        # ce script existe precisement pour observer la distribution complete.
+        print(f"    {owner}/{repo}: illisible - {exc}", file=sys.stderr)
+        return None
 
 
 def _deciles(values: list[float]) -> list[int]:

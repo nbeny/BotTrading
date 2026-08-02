@@ -7,7 +7,7 @@ verified with a fake session via FastAPI's dependency override.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -47,7 +47,7 @@ parse_prometheus = _health_collector.parse_prometheus
 
 get_session_dep = _routers.get_session_dep
 
-NOW = datetime(2026, 7, 25, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 25, 12, 0, tzinfo=UTC)
 
 
 # ── pure mappers ──────────────────────────────────────────────────────────────
@@ -122,7 +122,7 @@ def test_map_news_reads_raw_content_columns():
         source="rss",
         symbols=["BTC"],
         sentiment_score=0.42,
-        published_at=datetime(2026, 7, 29, 10, 0, tzinfo=timezone.utc),
+        published_at=datetime(2026, 7, 29, 10, 0, tzinfo=UTC),
     )
     out = map_news(row)
     assert out["id"] == "42"
@@ -848,7 +848,7 @@ def _price_row(symbol="BTC", change=1.0):
         market_cap_usd=1000.0,
         volume_24h_usd=500.0,
         price_change_pct_24h=change,
-        time=datetime(2026, 7, 29, 10, 0, tzinfo=timezone.utc),
+        time=datetime(2026, 7, 29, 10, 0, tzinfo=UTC),
     )
 
 

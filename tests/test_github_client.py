@@ -256,3 +256,29 @@ async def test_a_timed_out_search_is_not_a_count():
         "a", "b", since_days=28
     )
     assert count is None
+
+
+async def test_an_unsearchable_repo_is_an_absent_measure_not_a_failure():
+    """I11, observe en conditions reelles sur input-output-hk/plutus.
+
+    /search rend 422 - pas 404 - pour un depot qu'il ne peut pas indexer. Le
+    laisser remonter faisait perdre la mesure a tous les tokens suivants du
+    cycle; le confondre avec un zero fabriquerait une absence d'activite.
+    """
+
+    def handler(request):
+        return httpx.Response(422, json={"message": "Validation Failed"})
+
+    count = await _client(handler).merged_pr_count("a", "b", since_days=28)
+    assert count is None
+    assert count != 0
+
+
+async def test_other_search_errors_still_raise():
+    """422 est le seul cas absorbe: un 500 reste une panne."""
+
+    def handler(request):
+        return httpx.Response(500, json={})
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await _client(handler).merged_pr_count("a", "b", since_days=28)

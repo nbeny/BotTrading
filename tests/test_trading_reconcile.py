@@ -1,8 +1,9 @@
 # tests/test_trading_reconcile.py
 import asyncio
 
-from cmi_common.events.execution import ExecutionKind
 from tests.trading_helpers import load_module
+
+from cmi_common.events.execution import ExecutionKind
 
 
 class FakeCacheClient:

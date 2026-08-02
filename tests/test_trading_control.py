@@ -1,8 +1,9 @@
 # tests/test_trading_control.py
 import asyncio
 
-from cmi_common.events.control import ControlCommand, ControlCommandEvent
 from tests.trading_helpers import load_module
+
+from cmi_common.events.control import ControlCommand, ControlCommandEvent
 
 
 class FakeCache:

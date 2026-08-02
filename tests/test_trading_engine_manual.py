@@ -1,8 +1,8 @@
 # tests/test_trading_engine_manual.py
 import asyncio
 
+from tests.test_trading_engine import FakeCache, FakeKraken, FakeProducer
 from tests.trading_helpers import load_module
-from tests.test_trading_engine import FakeCache, FakeProducer, FakeKraken
 
 
 def _engine(cache, producer, kraken):

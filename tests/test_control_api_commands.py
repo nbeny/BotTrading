@@ -1,8 +1,9 @@
 import asyncio
 
+from tests.control_api_helpers import load_module
+
 from cmi_common.events.control import ControlCommand
 from cmi_common.kafka import Topic
-from tests.control_api_helpers import load_module
 
 
 class FakeProducer:

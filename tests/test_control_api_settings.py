@@ -1,7 +1,8 @@
 import asyncio
 
-from cmi_common.events.control import ControlCommand
 from tests.control_api_helpers import load_module
+
+from cmi_common.events.control import ControlCommand
 
 
 class FakePublisher:

@@ -6,8 +6,6 @@ from __future__ import annotations
 import asyncio
 import json
 
-import pytest
-
 
 def test_ai_cli_calls_metric_exists() -> None:
     from cmi_common.observability.metrics import AI_CLI_CALLS

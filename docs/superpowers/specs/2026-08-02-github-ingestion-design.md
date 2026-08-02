@@ -369,6 +369,54 @@ compromis et doit être régénéré avant tout déploiement.**
 4. Les trois copies de la liste d'axes contiennent `developer_activity`, et le test de
    parité échoue si l'une est modifiée seule.
 
+## Distribution observée — 2026-08-02
+
+Premier passage du harnais `scripts/verify_github_activity.py` contre les API
+réelles, 20 coins.
+
+| | |
+|---|---|
+| Couverture mapping | 10/20 — mais les 10 coins auxquels CoinGecko a répondu déclarent **tous** au moins un dépôt ; les 10 autres sont des `429`, pas des absences |
+| Médiane de l'axe | 0.568 |
+| Écart-type | 0.201 |
+| Déciles | `[1, 0, 0, 0, 1, 4, 2, 2, 0, 0]` |
+| Corrélation au rang de capitalisation | **τ = −0.42** |
+
+**Verdict : la distribution n'est pas dégénérée, le poids de 0.08 est conservé.**
+Les valeurs se répartissent sur cinq dixièmes et le plus chargé n'en contient que
+4 sur 10, loin du seuil de 70 %. Le τ négatif est le résultat qui compte : l'axe
+n'ordonne pas comme la capitalisation — c'était le reproche fondateur au cadrage
+en niveau absolu, et le cadrage relatif l'évite. Le signe mérite d'être noté : le
+momentum relatif favorise structurellement les projets plus petits, qui accélèrent
+plus facilement. C'est le comportement voulu, mais c'est un biais de taille, pas
+une absence de biais.
+
+### Trois faits que seule l'exécution réelle a révélés
+
+**Le mapping CoinGecko est périmé pour une partie des coins, et cela produit un
+zéro *mesuré* là où le projet est en réalité très actif.** Solana déclare
+`solana-labs/solana`, archivé depuis la migration vers `anza-xyz/agave` ; Aave
+déclare un dépôt de la même génération. Les deux sortent à 0.000. Le mécanisme
+est correct — tous les dépôts connus sont archivés, donc l'axe rapporte un zéro
+observé plutôt que d'inventer de l'activité — mais la conclusion est fausse, et
+du mauvais côté : ces projets seront pénalisés.
+
+C'est exactement le trou que `promote_list_entries` devait combler. Les
+awesome-lists connaissent `anza-xyz/agave`, CoinGecko non. La fonction est
+écrite et testée mais branchée sur rien, report assumé en attendant cette
+mesure. **La mesure tranche : il faut la brancher.**
+
+**`/search/issues` répond `422` — et non `404` — pour un dépôt qu'il ne peut pas
+indexer.** Observé sur 4 dépôts distincts sur ~25, tous appartenant à des
+organisations renommées (`nearprotocol/*`, `input-output-hk/plutus`). Non
+traité, ce cas faisait perdre la mesure à tous les tokens suivants du cycle. Il
+est désormais lu comme une mesure absente.
+
+**Le quota gratuit de CoinGecko est plus étroit qu'annoncé.** Un intervalle de
+6,5 s entre appels ne suffit pas : la moitié des requêtes ont reçu `429`. Sans
+conséquence en production, où le collector n'interroge qu'un coin par cycle de
+600 s, mais tout balayage groupé doit prévoir un repli ou une clé démo.
+
 ## Risque connu, assumé
 
 Sur ~500 dépôts, ceux des chaînes majeures bougent quotidiennement tandis que ceux des

@@ -6,7 +6,6 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-
 from service_modules import load_service_module
 
 from cmi_common.kafka import Topic

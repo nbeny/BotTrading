@@ -10,7 +10,6 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-
 from service_modules import load_service_module
 
 unlocks = load_service_module("collector-defillama", "domain.unlocks")

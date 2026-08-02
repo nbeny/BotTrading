@@ -21,7 +21,7 @@ def _client(payload, *, status=200):
     def handler(request):
         return httpx.Response(status, json=payload)
 
-    return CoinGeckoRepos(transport=httpx.MockTransport(handler))
+    return CoinGeckoRepos(transport=httpx.MockTransport(handler), min_interval=0.0)
 
 
 async def test_reads_github_repos_from_links():

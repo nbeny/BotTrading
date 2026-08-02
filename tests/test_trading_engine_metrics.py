@@ -8,10 +8,10 @@ one.
 from __future__ import annotations
 
 from prometheus_client import REGISTRY
+from service_modules import load_service_module
 
 from cmi_common.events import RiskApprovedEvent
 from cmi_common.kafka import Topic
-from service_modules import load_service_module
 
 engine_mod = load_service_module("trading-engine", "engine")
 

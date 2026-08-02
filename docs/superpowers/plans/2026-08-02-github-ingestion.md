@@ -215,6 +215,28 @@ class DeveloperEvent(BaseEvent):
     #: négative : un dépôt perd des étoiles.
     star_growth_pct_7d: float | None = None
     all_repos_archived: bool = False
+
+    @model_validator(mode="after")
+    def _validate_repo_count(self) -> "DeveloperEvent":
+        """``repo_count=0`` n'a de sens qu'accompagné de ``all_repos_archived``.
+
+        Rejeté à la construction **et au décodage** — pydantic exécute les
+        validateurs ``mode="after"`` dans ``validate_python``, donc un message
+        forgé sur le topic échoue au lieu de se décoder en zéro fabriqué.
+        Même position que ``DerivativesEvent.long_short_account_ratio`` :
+        rejeté à la construction, pas dans le scorer.
+
+        **Contourné par ``model_copy(update=...)``**, qui ne revalide pas. Le
+        collector republie des événements en cache toutes les 600 s, ce qui est
+        une invitation permanente à y recourir — `collector-binance-futures`
+        s'est déjà fait piéger exactement là.
+        """
+        if self.repo_count == 0 and not self.all_repos_archived:
+            raise ValueError(
+                "repo_count=0 exige all_repos_archived=True — sans dépôt lu du "
+                "tout, ne publiez pas d'événement"
+            )
+        return self
 ```
 
 Exporter `DeveloperEvent` dans `libs/cmi_common/cmi_common/events/__init__.py` à côté de `FundamentalsEvent`.
@@ -250,8 +272,23 @@ partitions et l'ordre par symbole est perdu.
 
 - [ ] **Step 4 : lancer le test, vérifier qu'il passe**
 
+Ajouter enfin quatre tests que les revues ont exigés, tous de la même famille : ils
+vérifient une affirmation sur la mesure plutôt que de redire le modèle.
+
+- `test_zero_repos_requires_all_archived` — le validateur rejette bien la combinaison ;
+- `test_wire_payload_rejects_zero_repos_without_all_archived` — même rejet sur un payload
+  JSON forgé à la main passé à `parse_event`, ce qui est une affirmation différente de
+  « notre constructeur est prudent » : elle porte sur un message tiers ;
+- `test_ratios_reject_negatives` **paramétré** sur `commit_ratio_4w`, `pr_ratio_4w` et
+  `days_since_push` — chaque borne testée individuellement, sinon deux d'entre elles
+  survivent à leur suppression ;
+- `test_star_growth_accepts_negatives` — l'absence de borne sur `star_growth_pct_7d` est
+  **délibérée** et doit être protégée : ajouter un `ge=0` ici rejouerait l'incident
+  `fees_24h_usd`, où un `ge=0` sur des frais légitimement négatifs levait dans une boucle
+  d'émission sans garde et faisait publier zéro événement pour tous les tokens du cycle.
+
 Run: `python -m pytest tests/test_developer_event.py -v`
-Expected: PASS, 6 tests
+Expected: PASS, 11 tests
 
 - [ ] **Step 5 : commit**
 
@@ -486,6 +523,13 @@ git commit -m "feat(collector-github): ratios d'activite par depot"
 ---
 
 ## Task 3 : Agrégat multi-dépôts
+
+> **Invariant imposé par la tâche 1.** `DeveloperEvent` porte un `model_validator` qui
+> **rejette** `repo_count == 0` sans `all_repos_archived=True` — à la construction *et* au
+> décodage. La branche « tous les dépôts archivés » de `aggregate()` doit donc impérativement
+> poser `all_repos_archived=True` en même temps que `repo_count=0`, sinon l'événement ne se
+> construira pas en tâche 8. Les trois sorties de `aggregate()` ci-dessous respectent
+> l'invariant par construction ; toute quatrième branche ajoutée devra le vérifier.
 
 **Files:**
 - Create: `services/collector-github/app/domain/aggregate.py`
@@ -1861,6 +1905,37 @@ async def test_refresh_cursor_rotates():
 
 
 @pytest.mark.asyncio
+async def test_one_invalid_token_does_not_silence_the_others():
+    """Une ValidationError sur un token ne doit pas couter le cycle aux autres.
+
+    Lecon de l'incident fees_24h_usd: une exception dans une boucle d'emission
+    sans garde fait publier zero evenement pour *tous* les tokens du cycle.
+    """
+    async def fetch(owner, repo):
+        return _stats(owner, repo)
+
+    producer = _Producer()
+    store = _Store({("o", f"r{i}"): _stats("o", f"r{i}") for i in range(3)})
+    collector = GitHubCollector(
+        producer=producer,
+        store=store,
+        fetch_repo=fetch,
+        # coin_id None sur le premier: DeveloperEvent.coin_id est un str requis,
+        # donc sa construction leve. Une ligne de mapping incomplete est le cas
+        # reel le plus proche.
+        repo_map=lambda: {
+            "S0": (None, [("o", "r0")]),
+            "S1": ("c1", [("o", "r1")]),
+            "S2": ("c2", [("o", "r2")]),
+        },
+        clock=lambda: NOW,
+        max_refresh_per_cycle=0,
+    )
+    await collector.poll_once()
+    assert {e.symbol for e in producer.published} == {"S1", "S2"}
+
+
+@pytest.mark.asyncio
 async def test_dead_repo_is_written_off_after_one_failure():
     RepoGone = load_service_module(
         "collector-github", "infrastructure.github_client"
@@ -1920,6 +1995,8 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
+
+from pydantic import ValidationError
 
 from cmi_common.events import DeveloperEvent, Source
 from cmi_common.kafka import Topic
@@ -2041,17 +2118,32 @@ class GitHubCollector:
                 # transformerait « pas encore mesuré » en « aucune activité »,
                 # et l'axe pèserait alors contre le token.
                 continue
-            event = DeveloperEvent(
-                source=Source.GITHUB,
-                symbol=symbol,
-                coin_id=coin_id,
-                repo_count=activity.repo_count,
-                commit_ratio_4w=activity.commit_ratio_4w,
-                pr_ratio_4w=activity.pr_ratio_4w,
-                days_since_push=activity.days_since_push,
-                star_growth_pct_7d=activity.star_growth_pct_7d,
-                all_repos_archived=activity.all_repos_archived,
-            )
+            try:
+                event = DeveloperEvent(
+                    source=Source.GITHUB,
+                    symbol=symbol,
+                    coin_id=coin_id,
+                    repo_count=activity.repo_count,
+                    commit_ratio_4w=activity.commit_ratio_4w,
+                    pr_ratio_4w=activity.pr_ratio_4w,
+                    days_since_push=activity.days_since_push,
+                    star_growth_pct_7d=activity.star_growth_pct_7d,
+                    all_repos_archived=activity.all_repos_archived,
+                )
+            except ValidationError as exc:
+                # Un token invalide ne doit pas coûter le cycle aux 249 autres.
+                # C'est la leçon de l'incident fees_24h_usd : là-bas, un ge=0
+                # sur des frais légitimement négatifs levait dans une boucle
+                # d'émission sans garde, et un seul protocole entrant dans
+                # l'univers faisait publier *zéro* événement pour tous les
+                # tokens du cycle. Le schéma de DeveloperEvent rejette
+                # repo_count=0 sans all_repos_archived, ce que aggregate() ne
+                # peut pas produire — donc lever ici signale un bug de
+                # l'agrégateur, et un bug d'agrégateur sur un token n'est pas
+                # une raison de faire taire les autres.
+                UNMEASURED.labels(SERVICE, "developer_event", "ValidationError").inc()
+                logger.error("github: %s — événement invalide: %s", symbol, exc)
+                continue
             await self._producer.publish(Topic.DEVELOPER, event)
             EVENTS_PRODUCED.labels(SERVICE, Topic.DEVELOPER.value, event.event_type).inc()
             published += 1

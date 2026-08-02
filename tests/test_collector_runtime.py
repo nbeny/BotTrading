@@ -95,6 +95,33 @@ async def test_set_runtime_leaves_channels_alone_when_not_patched() -> None:
     assert out["telegram_channels"] == ["alpha"]
 
 
+async def test_set_runtime_does_not_consume_the_never_configured_signal() -> None:
+    """An absent `telegram_channels` is the only "never configured" signal, and
+    collector-social's boot seed is its only consumer. Materialising the seed into
+    the *persisted* dict here would spend it on an unrelated toggle, freezing the
+    24 shipped channels in place of the operator's `TELEGRAM_CHANNELS`."""
+    assert runtime.TELEGRAM_SEED_CHANNELS  # otherwise the first assert is vacuous
+    cache = _FakeCache({"platforms": {"telegram": True}})
+
+    out = await runtime.set_runtime(cache, {"platforms": {"reddit": False}})
+
+    # The response still carries the seed — the terminal has to render a default
+    # list — while Redis keeps the entry absent.
+    assert out["telegram_channels"] == list(runtime.TELEGRAM_SEED_CHANNELS)
+    stored = await cache.get_json("collectors:runtime")
+    assert "telegram_channels" not in stored
+    assert stored["platforms"]["reddit"] is False  # the patch itself did persist
+
+
+async def test_set_runtime_persists_a_channel_list_it_was_given() -> None:
+    """The other side of the same rule: an explicit patch — including the empty
+    "poll nobody" — must land in Redis, or the seed would undo it on the next
+    restart."""
+    cache = _FakeCache()
+    await runtime.set_runtime(cache, {"telegram_channels": []})
+    assert (await cache.get_json("collectors:runtime"))["telegram_channels"] == []
+
+
 # --- handle normalization, shared by the provider and control-api ---------
 
 

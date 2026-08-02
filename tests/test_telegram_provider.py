@@ -53,11 +53,26 @@ class UsernameNotOccupiedError(Exception):
     pass
 
 
+class UnauthorizedError(Exception):
+    """Telethon's 401 base class.
+
+    Modelled with a subclass because that is the shape the provider relies on:
+    ``AuthKeyUnregisteredError``, ``SessionRevokedError`` and
+    ``UserDeactivatedError`` all inherit from it, and catching the base is what
+    makes "the session died mid-life" detectable without naming each of them.
+    """
+
+
+class AuthKeyUnregisteredError(UnauthorizedError):
+    pass
+
+
 ERRORS = SimpleNamespace(
     FloodWaitError=FloodWaitError,
     ChannelPrivateError=ChannelPrivateError,
     UsernameInvalidError=UsernameInvalidError,
     UsernameNotOccupiedError=UsernameNotOccupiedError,
+    UnauthorizedError=UnauthorizedError,
 )
 
 
@@ -87,6 +102,10 @@ class FakeClient:
         self._entities = entities or {}
         self._resolve_error = resolve_error
         self._authorized = authorized
+        # Set *after* construction to break a client that already connected —
+        # the only way to reproduce a fault that appears mid-life, which is the
+        # case `_ensure_client`'s short-circuit makes invisible.
+        self.fail_with: Exception | None = None
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.resolved: list[str] = []
         self.disconnected = False
@@ -123,6 +142,8 @@ class FakeClient:
         msgs = msgs[: kwargs.get("limit") or len(msgs)]
 
         async def _gen() -> Any:
+            if self.fail_with is not None:
+                raise self.fail_with
             for m in msgs:
                 yield m
 
@@ -155,21 +176,24 @@ class FakeCache:
         return self._store.get("collectors:status:telegram")
 
 
-def _provider(
-    client: FakeClient,
-    *,
-    cache: Any | None = None,
-    channels: list[str] | None = None,
-    **kw: Any,
-) -> Any:
+def _provider(client: FakeClient, *, cache: Any | None = None, **kw: Any) -> Any:
     return tg.TelegramProvider(
         api_id=1,
         api_hash="hash",
         session="session",
-        cache=cache or FakeCache(channels or ["alpha"]),
+        cache=cache or FakeCache(["alpha"]),
         client_factory=lambda: (client, ERRORS),
         **kw,
     )
+
+
+def _health(cache: Any) -> Any:
+    """The status blob minus `updated_at`, which every publish moves.
+
+    Pinning the rest by equality is what catches a field quietly appearing or
+    disappearing from a payload control-api forwards verbatim.
+    """
+    return {k: v for k, v in cache.status().items() if k != "updated_at"}
 
 
 # --- tests ---------------------------------------------------------------
@@ -269,13 +293,14 @@ async def test_unresolvable_channel_is_dropped_without_killing_the_cycle(
     )
     # Only `alpha` fails: the fake raises on every resolve, so give beta a
     # pre-resolved entity to prove the loop carries on past the bad one.
-    provider = _provider(client, channels=["alpha", "beta"])
+    cache = FakeCache(["alpha", "beta"])
+    provider = _provider(client, cache=cache)
     provider._entities["beta"] = SimpleNamespace(id=-1002, username="beta")
 
     items = await provider.fetch()
 
     assert [i.author for i in items] == ["beta"]
-    assert "alpha" in provider._dead
+    assert "alpha" in cache.status()["channels"]
     # Second cycle must not spend another ResolveUsername call on the dead one.
     await provider.fetch()
     assert client.resolved == ["alpha"]
@@ -335,30 +360,156 @@ async def test_removing_a_channel_clears_its_write_off_so_re_adding_retries() ->
     provider = _provider(client, cache=cache)
 
     await provider.fetch()
-    assert set(provider._dead) == {"alpha"}
+    assert set(cache.status()["channels"]) == {"alpha"}
 
     cache.set_channels([])  # operator drops it
     await provider.fetch()
-    assert provider._dead == {}
+    assert cache.status()["channels"] == {}
 
     cache.set_channels(["alpha"])  # ...and puts it back
     await provider.fetch()
     assert client.resolved == ["alpha", "alpha"]
 
 
-# --- health key: the two failure modes that were log-only ------------------
+# --- health key: every fault that was otherwise log-only -------------------
 
 
-async def test_a_completed_cycle_publishes_a_healthy_status() -> None:
+async def test_a_cycle_that_read_every_channel_publishes_a_healthy_status() -> None:
     client = FakeClient(messages={"alpha": [_msg(1, "a")]})
     cache = FakeCache(["alpha"])
     provider = _provider(client, cache=cache)
 
     await provider.fetch()
 
-    assert cache.status() == {"ok": True, "reason": None, "channels": {}}
+    assert _health(cache) == {"ok": True, "reason": None, "channels": {}}
     # Durable: an expiring "unhealthy" would read as healthy once it lapsed.
     assert cache.ttls[tg.STATUS_KEY] == 0
+
+
+async def test_every_publish_stamps_when_the_source_was_last_measured() -> None:
+    # The operator can disable the platform from the terminal, at which point the
+    # poll loop skips `fetch` entirely and this key serves whatever it last said,
+    # forever. A frozen key has to be visibly frozen: without `updated_at` a
+    # consumer cannot tell "healthy 30s ago" from "last healthy in March".
+    client = FakeClient(messages={"alpha": [_msg(1, "a")]})
+    cache = FakeCache(["alpha"])
+    provider = _provider(client, cache=cache)
+
+    await provider.fetch()
+
+    stamp = datetime.fromisoformat(cache.status()["updated_at"])
+    assert stamp.tzinfo is not None  # naive would be unreadable across timezones
+    assert abs((datetime.now(UTC) - stamp).total_seconds()) < 60
+
+
+async def test_a_session_revoked_mid_life_flips_the_key_and_rebuilds_the_client() -> (
+    None
+):
+    # The paradigm case: the session is killed from the phone's active-sessions
+    # screen *after* the process connected. `_ensure_client` short-circuits on the
+    # cached client, so nothing re-checks `is_user_authorized` and the auth error
+    # surfaces from the history read instead — where it used to escape unpublished
+    # and leave the last success standing for as long as the fault lasted.
+    client = FakeClient(messages={"alpha": [_msg(1, "a")]})
+    cache = FakeCache(["alpha"])
+    provider = _provider(client, cache=cache)
+
+    await provider.fetch()
+    assert cache.status()["ok"] is True
+
+    client.fail_with = AuthKeyUnregisteredError("the key is not registered")
+    with pytest.raises(RuntimeError, match="TELEGRAM_SESSION"):
+        await provider.fetch()
+
+    status = cache.status()
+    assert status["ok"] is False
+    assert "TELEGRAM_SESSION" in status["reason"]
+
+    # The dead client is dropped, so the next cycle rebuilds and re-runs
+    # `is_user_authorized` — the only check that can name what actually happened.
+    client.fail_with = None
+    await provider.fetch()
+    assert (client.connects, client.auth_checks) == (2, 2)
+
+
+async def test_any_failed_cycle_replaces_the_success_it_would_otherwise_leave() -> None:
+    # Not just the errors we can name: AdaptivePollLoop turns *every* exception
+    # into a log warning and a 120s backoff, which is exactly the invisibility
+    # this key exists to end.
+    client = FakeClient(messages={"alpha": [_msg(1, "a")]})
+    cache = FakeCache(["alpha"])
+    provider = _provider(client, cache=cache)
+
+    await provider.fetch()
+    client.fail_with = ConnectionResetError("connection reset by peer")
+    with pytest.raises(ConnectionResetError):
+        await provider.fetch()
+
+    status = cache.status()
+    assert status["ok"] is False
+    assert "ConnectionResetError" in status["reason"]
+
+
+async def test_an_unreadable_channel_list_is_reported_rather_than_swallowed() -> None:
+    # `_configured_channels` fails closed on a Redis error, which costs the cycle.
+    # The failure must still reach the terminal: the publish goes through the same
+    # cache, so it is best-effort and must not replace the original exception.
+    class _ReadBroken(FakeCache):
+        async def get_json(self, key: str) -> Any:
+            raise ConnectionRefusedError("redis is down")
+
+    cache = _ReadBroken(["alpha"])
+    provider = _provider(FakeClient(), cache=cache)
+
+    with pytest.raises(ConnectionRefusedError):
+        await provider.fetch()
+
+    assert cache.status()["ok"] is False
+
+
+async def test_a_flood_wait_refreshes_the_key_without_reporting_a_fault() -> None:
+    # Telegram working as designed: the loop pauses and resumes this same
+    # provider. Red here would be a lie — but so would a success nothing restamps.
+    client = FakeClient(resolve_error=FloodWaitError(42))
+    cache = FakeCache(["alpha"])
+    provider = _provider(client, cache=cache)
+
+    with pytest.raises(RateLimitedError):
+        await provider.fetch()
+
+    status = cache.status()
+    assert status["ok"] is True
+    assert "42" in status["reason"]
+    assert status["updated_at"]
+
+
+async def test_a_source_with_every_channel_written_off_is_not_healthy() -> None:
+    # One dead channel among many is a channel fault; all of them dead means the
+    # source contributes nothing, and the terminal drives a light off `ok`.
+    client = FakeClient(resolve_error=ChannelPrivateError())
+    cache = FakeCache(["alpha", "beta"])
+    provider = _provider(client, cache=cache)
+
+    await provider.fetch()
+
+    status = cache.status()
+    assert status["ok"] is False
+    assert "unreadable" in status["reason"]
+    assert set(status["channels"]) == {"alpha", "beta"}
+
+
+async def test_a_malformed_message_does_not_write_off_a_healthy_channel() -> None:
+    # `except ValueError` used to span the whole channel, so one message with a
+    # junk id wrote a working channel off for the life of the process. Only a
+    # resolution failure may; a malformed message is a bug to surface.
+    junk = SimpleNamespace(id="not-an-int", message="hi", views=1, date=None)
+    cache = FakeCache(["alpha"])
+    provider = _provider(FakeClient(messages={"alpha": [junk]}), cache=cache)
+
+    with pytest.raises(ValueError):
+        await provider.fetch()
+
+    assert cache.status()["channels"] == {}
 
 
 async def test_an_unauthorized_session_is_published_before_the_raise() -> None:
@@ -378,14 +529,19 @@ async def test_an_unauthorized_session_is_published_before_the_raise() -> None:
 
 
 async def test_a_written_off_channel_is_published_with_its_reason() -> None:
-    client = FakeClient(resolve_error=ChannelPrivateError())
-    cache = FakeCache(["alpha"])
+    client = FakeClient(
+        messages={"beta": [_msg(1, "still ingesting")]},
+        resolve_error=ChannelPrivateError(),
+    )
+    cache = FakeCache(["alpha", "beta"])
     provider = _provider(client, cache=cache)
+    provider._entities["beta"] = SimpleNamespace(id=-1002, username="beta")
 
     await provider.fetch()
 
     status = cache.status()
-    # The cycle itself completed — one unreadable channel is not a source fault.
+    # One unreadable channel out of two is a channel fault, not a source fault:
+    # the rest of the desk is still ingesting.
     assert status["ok"] is True
     assert status["reason"] is None
     assert "ChannelPrivateError" in status["channels"]["alpha"]
@@ -418,6 +574,12 @@ async def test_an_empty_list_reports_health_without_opening_a_session() -> None:
     items = await provider.fetch()
 
     assert items == []
-    assert cache.status() == {"ok": True, "reason": None, "channels": {}}
+    # Green, but the reason says *which* green it is: polling nobody is a valid
+    # operator choice, not evidence that ingestion works.
+    assert _health(cache) == {
+        "ok": True,
+        "reason": "no channels configured",
+        "channels": {},
+    }
     assert (client.connects, client.auth_checks) == (0, 0)
     assert client.resolved == []

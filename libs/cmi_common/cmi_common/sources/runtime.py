@@ -156,9 +156,8 @@ def default_runtime() -> dict[str, Any]:
     }
 
 
-async def get_runtime(cache: Cache) -> dict[str, Any]:
-    """Current toggles, merged over defaults (new platforms default ON)."""
-    cfg = await cache.get_json(RUNTIME_KEY) or {}
+def _merge_over_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Stored toggles read over the defaults (new platforms default ON)."""
     merged = default_runtime()
     merged["social_enabled"] = bool(cfg.get("social_enabled", True))
     merged["news_enabled"] = bool(cfg.get("news_enabled", True))
@@ -169,6 +168,11 @@ async def get_runtime(cache: Cache) -> dict[str, Any]:
     if channels is not None:
         merged["telegram_channels"] = [str(c) for c in channels]
     return merged
+
+
+async def get_runtime(cache: Cache) -> dict[str, Any]:
+    """Current toggles, merged over defaults (new platforms default ON)."""
+    return _merge_over_defaults(await cache.get_json(RUNTIME_KEY) or {})
 
 
 async def is_enabled(cache: Cache, kind: str, platform: str) -> bool:
@@ -186,8 +190,23 @@ async def is_enabled(cache: Cache, kind: str, platform: str) -> bool:
 
 
 async def set_runtime(cache: Cache, patch: dict[str, Any]) -> dict[str, Any]:
-    """Apply a partial update (category flags and/or per-platform flags)."""
-    cur = await get_runtime(cache)
+    """Apply a partial update (category flags and/or per-platform flags).
+
+    What is returned and what is persisted deliberately differ on
+    ``telegram_channels``: the caller gets the merged view, seed included, so the
+    terminal can render the default list — while Redis keeps the entry *absent*
+    unless it was already stored or this patch sets it.
+
+    That asymmetry is the whole point. An absent entry is the only "never
+    configured" signal, and collector-social's boot seed is its only reader:
+    materialising the seed here would spend it on an unrelated toggle, replacing
+    the operator's ``TELEGRAM_CHANNELS`` with the shipped list and skipping the
+    seed forever after. It is reachable in practice — the boot seed is best
+    effort, so a Redis blip at collector-social startup plus any later toggle from
+    the terminal is enough.
+    """
+    raw = await cache.get_json(RUNTIME_KEY) or {}
+    cur = _merge_over_defaults(raw)
     if "social_enabled" in patch:
         cur["social_enabled"] = bool(patch["social_enabled"])
     if "news_enabled" in patch:
@@ -197,6 +216,12 @@ async def set_runtime(cache: Cache, patch: dict[str, Any]) -> dict[str, Any]:
     # Remplacement intégral, contrairement aux `platforms` qui se mergent.
     if patch.get("telegram_channels") is not None:
         cur["telegram_channels"] = [str(c) for c in patch["telegram_channels"]]
+    stored = dict(cur)
+    if patch.get("telegram_channels") is None and raw.get("telegram_channels") is None:
+        # Neither stored nor patched: leave the entry out (see the docstring).
+        # `is None` rather than a key check, to match every other reader of this
+        # field — a stored null has never meant "configured" anywhere else.
+        stored.pop("telegram_channels", None)
     # Durable key (no expiry) — persist, like trading:runtime.
-    await cache.set_json(RUNTIME_KEY, cur, ttl_seconds=0)
+    await cache.set_json(RUNTIME_KEY, stored, ttl_seconds=0)
     return cur

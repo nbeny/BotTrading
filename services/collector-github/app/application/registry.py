@@ -108,4 +108,4 @@ async def resolved_symbols(db: Database) -> dict[str, str]:
                 ).where(CryptoProjectRegistry.symbol.is_not(None))
             )
         ).all()
-    return {url: symbol for url, symbol in rows}
+    return dict(rows)

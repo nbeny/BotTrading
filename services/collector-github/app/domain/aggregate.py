@@ -26,12 +26,13 @@ class CoinActivity:
     repo_count: int
     commit_ratio_4w: float | None
     pr_ratio_4w: float | None
-    #: `max(...)` sur les dépôts vivants : un seul horodatage dérivé dans le
-    #: futur (dépôt mal daté, horloge tierce décalée) fait donc gagner ce
-    #: dépôt et écrase la fraîcheur de tout le coin, y compris celle de dépôts
-    #: réellement actifs. C'est le sens conservateur — on préfère sous-estimer
-    #: la fraîcheur d'un coin actif plutôt que la sur-estimer pour un coin mort
-    #: — et il est délibéré, pas un oubli.
+    #: La plus petite valeur (le push le plus récent) parmi les dépôts dont
+    #: l'horodatage a été cru — jamais calculée sur un horodatage agrégé.
+    #: Un dépôt à l'horloge décalée est écarté individuellement, pas laissé
+    #: contaminer les autres : sans ça, un seul dépôt mal daté écraserait la
+    #: fraîcheur mesurée de tous les dépôts sains du même coin, jetant une
+    #: donnée correcte pour éviter d'en publier une fausse alors qu'écarter
+    #: le seul dépôt fautif suffit.
     days_since_push: int | None
     star_growth_pct_7d: float | None
     all_repos_archived: bool
@@ -52,12 +53,18 @@ def _is_live(stats: RepoStats) -> bool:
     return not stats.archived and not stats.is_fork
 
 
-def _sum_or_none(values: Sequence[int | None]) -> int | None:
+def _sum_or_none(values: Sequence[int | float | None]) -> int | float | None:
     """Somme, ou None si *aucune* valeur n'a été mesurée.
 
     Les None individuels (dépôt en 202) sont ignorés plutôt que de contaminer
     tout l'agrégat : deux dépôts mesurés sur trois valent mieux qu'aucune
     lecture. Mais zéro dépôt mesuré ne vaut pas 0.
+
+    Sert aussi bien des comptages entiers (``commits_4w``) que des médianes
+    hebdomadaires (``commits_median_52w``) : dans les deux cas la somme des
+    valeurs par dépôt est la meilleure estimation de l'ensemble, et la seule
+    différence entre les deux usages était une annotation de type que rien
+    ne fait respecter — `mypy` ne tourne nulle part dans ce dépôt.
     """
     present = [v for v in values if v is not None]
     return sum(present) if present else None
@@ -85,45 +92,52 @@ def aggregate(repos: Sequence[RepoStats], now: datetime) -> CoinActivity | None:
             all_repos_archived=True,
         )
 
-    # ATTENTION — décision à prendre ici, pas ailleurs. `star_growth_pct` divise
-    # par `stars_at - stars_prev_at`, et chaque dépôt a *ses* deux instants : le
-    # round-robin ne les rafraîchit pas ensemble. Sommer les étoiles puis
-    # diviser par un intervalle inventé pour l'ensemble redonnerait exactement
-    # le défaut que la tâche 2 a corrigé.
-    #
-    # Calcul du taux **par dépôt**, puis moyenne pondérée par `stars_prev`.
-    # C'est identique à la somme quand les intervalles coïncident, et correct
-    # quand ils divergent. On ne prend pas `min`/`max` des instants : la
-    # fenêtre la plus étroite surestime le taux, donc biaise à la hausse — le
-    # mauvais sens.
+    # `merged` ne porte ni `stars`/`stars_prev` ni `pushed_at` : les deux se
+    # calculent par dépôt plus bas, jamais sur une somme ou un agrégat
+    # d'horodatages. Les y remettre serait trompeur — un lecteur qui voit des
+    # champs étoiles ou date sur `merged` en conclurait raisonnablement que la
+    # croissance d'étoiles ou la fraîcheur en découlent, ce qui est
+    # exactement l'erreur que les deux blocs ci-dessous existent pour éviter.
     merged = RepoStats(
         owner=live[0].owner,
         repo=f"<{len(live)} repos>",
-        stars=_sum_or_none([r.stars for r in live]),
-        pushed_at=max((r.pushed_at for r in live if r.pushed_at), default=None),
         commits_4w=_sum_or_none([r.commits_4w for r in live]),
-        commits_median_52w=_sum_median([r.commits_median_52w for r in live]),
+        commits_median_52w=_sum_or_none([r.commits_median_52w for r in live]),
         pr_merged_4w=_sum_or_none([r.pr_merged_4w for r in live]),
         pr_merged_52w=_sum_or_none([r.pr_merged_52w for r in live]),
-        stars_prev=_sum_or_none([r.stars_prev for r in live]),
     )
-    freshness = days_since_push(merged, now)
+
+    # Fraîcheur : par dépôt, pas sur un `max(pushed_at)` agrégé. Le `max`
+    # ferait gagner le dépôt le plus mal daté avant même de savoir si son
+    # horodatage est crédible — un seul dépôt à l'horloge décalée écraserait
+    # alors la fraîcheur mesurée de tous les dépôts sains du même coin.
+    # `days_since_push` filtre déjà la gigue d'horloge au niveau d'un dépôt ;
+    # on ne fait ici que garder le plus petit nombre de jours parmi les
+    # dépôts dont l'horodatage a été cru, et ignorer les autres plutôt que de
+    # laisser l'un d'eux invalider le lot.
+    per_repo_freshness = [days_since_push(r, now) for r in live]
+    believed = [f for f in per_repo_freshness if f is not None]
+    freshness = min(believed) if believed else None
+    # Un rejet individuel reste rapporté même quand un autre dépôt sauve la
+    # fraîcheur du coin : c'est un signal d'observabilité pour l'appelant
+    # (qui seul a le droit d'incrémenter un compteur), pas une condition sur
+    # le résultat final.
+    push_timestamp_rejected = any(
+        r.pushed_at is not None and f is None
+        for r, f in zip(live, per_repo_freshness, strict=True)
+    )
+
     return CoinActivity(
         repo_count=len(live),
         commit_ratio_4w=commit_ratio(merged),
         pr_ratio_4w=pr_ratio(merged),
         days_since_push=freshness,
         # Plus de `now` : l'intervalle court d'un snapshot à l'autre, pas
-        # jusqu'à l'horloge du cycle. Voir la note ci-dessus sur l'agrégation.
+        # jusqu'à l'horloge du cycle. Voir la note dans `_weighted_star_growth`
+        # sur l'agrégation par dépôt plutôt que sur une somme d'étoiles.
         star_growth_pct_7d=_weighted_star_growth(live),
         all_repos_archived=False,
-        # Rapporté, pas compté : ce module reste pur, et c'est l'appelant qui
-        # incrémente la métrique. L'horodatage existait mais n'a pas été cru —
-        # horloge décalée au-delà de CLOCK_SKEW_TOLERANCE. Sans cette
-        # remontée la perte serait invisible : freshness pèse 0.25 de l'axe,
-        # et une dérive d'horloge l'annule pour *tous* les dépôts récemment
-        # poussés d'un coup, l'axe se renormalisant en silence sur 0.75.
-        push_timestamp_rejected=merged.pushed_at is not None and freshness is None,
+        push_timestamp_rejected=push_timestamp_rejected,
     )
 
 
@@ -154,14 +168,3 @@ def _weighted_star_growth(live: Sequence[RepoStats]) -> float | None:
         return None
     total = sum(base for _, base in usable)
     return sum(rate * base for rate, base in usable) / total
-
-
-def _sum_median(values: Sequence[float | None]) -> float | None:
-    """Somme des médianes hebdomadaires.
-
-    Ce n'est pas la médiane de la somme, et c'est volontaire : on ne dispose
-    que des médianes par dépôt, et leur somme est la meilleure estimation du
-    rythme de croisière de l'ensemble sans redemander les 52 séries.
-    """
-    present = [v for v in values if v is not None]
-    return sum(present) if present else None

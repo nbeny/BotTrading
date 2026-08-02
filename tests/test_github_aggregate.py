@@ -130,6 +130,37 @@ def test_push_timestamp_not_rejected_when_no_push_at_all():
     assert a.push_timestamp_rejected is False
 
 
+def test_one_bad_clock_does_not_discard_a_healthy_repos_freshness():
+    """Un depot mal date ne doit pas ecraser la fraicheur mesuree des autres
+    depots du meme coin: seul le depot fautif est ecarte, pas le coin entier.
+
+    Avant correction, `days_since_push` etait calcule sur `max(pushed_at)`
+    agrege: le depot le plus mal date gagnait ce `max` et faisait retomber
+    la fraicheur du coin entier a `None`, jetant la mesure correcte du depot
+    sain avec elle.
+    """
+    skewed = _repo("skewed", pushed_at=NOW + timedelta(days=1))
+    healthy = _repo("healthy", pushed_at=NOW - timedelta(days=2))
+    a = aggregate([skewed, healthy], NOW)
+    assert a.days_since_push == 2
+    assert a.push_timestamp_rejected is True
+
+
+def test_all_timestamps_rejected_reports_none():
+    """Quand *tous* les depots vivants ont un horodatage rejete, il ne reste
+    aucune mesure credible: la fraicheur du coin doit rester `None`, pas
+    retomber sur une valeur fabriquee a partir de donnees non crues."""
+    a = aggregate(
+        [
+            _repo("a", pushed_at=NOW + timedelta(days=1)),
+            _repo("b", pushed_at=NOW + timedelta(days=2)),
+        ],
+        NOW,
+    )
+    assert a.days_since_push is None
+    assert a.push_timestamp_rejected is True
+
+
 def test_weighted_star_growth_partial_repos_stay_partial_not_fabricated_whole():
     """Un depot sans second releve d'etoiles exploitable ne doit ni bloquer
     la lecture des depots qui en ont, ni etre traite comme une croissance

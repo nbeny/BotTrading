@@ -76,7 +76,10 @@ RepoStats = _activity.RepoStats
 
 ```python
 # tests/test_developer_event.py
-from cmi_common.events import DeveloperEvent, EventType, Source
+import pytest
+from pydantic import ValidationError
+
+from cmi_common.events import DeveloperEvent, EventType, Source, parse_event
 from cmi_common.kafka import TOPIC_EVENT, Topic
 
 
@@ -91,15 +94,52 @@ def test_measures_default_to_none_not_zero():
     assert e.event_type == EventType.DEVELOPER
 
 
-def test_round_trip_preserves_none():
+def test_round_trip_through_the_discriminated_union():
+    """Le round-trip doit passer par parse_event, pas par model_validate_json.
+
+    Un evenement absent de AnyEvent publie parfaitement et echoue a la
+    consommation, parse_event levant sur le discriminant — c'est ainsi que
+    JournalEntryEvent est parti casse. model_validate_json contourne l'union
+    et passerait encore si DeveloperEvent en etait retire, donc il ne teste
+    pas ce qui casse.
+    """
     e = DeveloperEvent(
         source=Source.GITHUB, symbol="AAVE", coin_id="aave",
         repo_count=2, commit_ratio_4w=1.5, days_since_push=3,
     )
-    back = DeveloperEvent.model_validate_json(e.model_dump_json())
+    back = parse_event(e.as_kafka_value())
+    assert isinstance(back, DeveloperEvent)
     assert back.commit_ratio_4w == 1.5
     assert back.pr_ratio_4w is None
     assert back.days_since_push == 3
+
+
+def test_events_partition_by_symbol():
+    """BaseEvent.partition_key() rend un UUID neuf: sans surcharge, les
+    evenements d'un meme token s'eparpillent sur les 3 partitions et l'ordre
+    par symbole est perdu."""
+    e = DeveloperEvent(source=Source.GITHUB, symbol="AAVE", coin_id="aave", repo_count=1)
+    assert e.partition_key() == "AAVE"
+
+
+def test_a_measured_zero_and_an_absent_measure_stay_distinct():
+    """all_repos_archived=True + repo_count=0 veut dire « on a regarde, tout
+    est mort ». Toutes les mesures a None veut dire « on n'a pas regarde ».
+    Les confondre est la classe de defaut la plus couteuse de ce depot."""
+    dead = parse_event(
+        DeveloperEvent(
+            source=Source.GITHUB, symbol="AAVE", coin_id="aave",
+            repo_count=0, all_repos_archived=True,
+        ).as_kafka_value()
+    )
+    unknown = parse_event(
+        DeveloperEvent(
+            source=Source.GITHUB, symbol="AAVE", coin_id="aave", repo_count=2
+        ).as_kafka_value()
+    )
+    assert dead.all_repos_archived is True and dead.repo_count == 0
+    assert unknown.all_repos_archived is False
+    assert unknown.commit_ratio_4w is None
 
 
 def test_topic_is_registered():
@@ -109,9 +149,6 @@ def test_topic_is_registered():
 
 def test_ratios_reject_negatives():
     """Un ratio est un rapport de comptages: negatif = bug amont, pas une mesure."""
-    import pytest
-    from pydantic import ValidationError
-
     with pytest.raises(ValidationError):
         DeveloperEvent(
             source=Source.GITHUB, symbol="AAVE", coin_id="aave",
@@ -188,16 +225,33 @@ Dans `libs/cmi_common/cmi_common/kafka/topics.py`, ajouter l'import de `Develope
     DEVELOPER = "market.developer.events"
 ```
 
-et dans `TOPIC_EVENT` :
+dans `TOPIC_EVENT` :
 
 ```python
     Topic.DEVELOPER: DeveloperEvent,
 ```
 
+et dans `TOPIC_PARTITIONS` — **obligatoire, pas optionnel** :
+
+```python
+    Topic.DEVELOPER: 3,
+```
+
+`tests/test_journal_topic.py::test_every_topic_appears_in_both_tables` impose
+`set(TOPIC_EVENT) == set(Topic)` **et** `set(TOPIC_PARTITIONS) == set(Topic)` : l'oubli
+fait échouer toute la suite. La raison est écrite dans le dépôt — un topic absent de l'une
+des deux tables publie sans erreur et casse à la consommation, ce qui est la manière dont
+`JournalEntryEvent` est parti cassé en production.
+
+Surcharger enfin `partition_key()` sur `DeveloperEvent` pour rendre `self.symbol`, comme
+tous les événements portant un symbole. `BaseEvent.partition_key()` rend un UUID neuf par
+défaut : sans la surcharge, les événements d'un même token s'éparpillent sur les trois
+partitions et l'ordre par symbole est perdu.
+
 - [ ] **Step 4 : lancer le test, vérifier qu'il passe**
 
 Run: `python -m pytest tests/test_developer_event.py -v`
-Expected: PASS, 4 tests
+Expected: PASS, 6 tests
 
 - [ ] **Step 5 : commit**
 

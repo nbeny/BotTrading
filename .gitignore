@@ -26,3 +26,7 @@ next-env.d.ts
 
 # Playwright MCP session snapshots (local debugging artefacts)
 .playwright-mcp/
+
+# Telethon login session (contains an authenticated Telegram session)
+*.session
+*.session-journal

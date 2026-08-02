@@ -37,7 +37,7 @@ export function getDossier(symbol: string): TokenDossier | null {
         positioning: 0.93,
         // fundamentals : non mesuré — clé absente exprès, voir la docstring
       },
-      axes_total: 7,
+      axes_total: 8,
       insufficient_evidence: false,
       computed_at: new Date(Date.now() - 12 * 60_000).toISOString(),
     },

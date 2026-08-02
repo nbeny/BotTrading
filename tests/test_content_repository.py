@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from cmi_common.sources import FakeContentRepository, RawItem
 from cmi_common.sources.repository import raw_item_to_row
@@ -43,7 +43,7 @@ async def test_fake_fetch_unscored_and_mark() -> None:
 
 async def test_fake_upsert_aggregate_creates_bucket() -> None:
     repo = FakeContentRepository()
-    ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    ts = datetime(2024, 1, 1, tzinfo=UTC)
     await repo.upsert_aggregate(
         symbol="BTC",
         kind="social",
@@ -62,7 +62,7 @@ async def test_fake_upsert_aggregate_creates_bucket() -> None:
 
 async def test_fake_upsert_aggregate_is_additive() -> None:
     repo = FakeContentRepository()
-    ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    ts = datetime(2024, 1, 1, tzinfo=UTC)
     kw = dict(symbol="BTC", kind="social", bucket_start=ts)
     await repo.upsert_aggregate(
         **kw,
@@ -92,7 +92,7 @@ async def test_fake_compaction_rolls_hourly_into_daily() -> None:
     from datetime import timedelta
 
     repo = FakeContentRepository()
-    day = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    day = datetime(2024, 1, 1, tzinfo=UTC)
     for h in (3, 9):  # two hourly buckets, same day + (symbol, kind)
         await repo.upsert_aggregate(
             symbol="BTC",
@@ -104,7 +104,7 @@ async def test_fake_compaction_rolls_hourly_into_daily() -> None:
             weighted_score_sum=0.4,
             engagement_sum=2.0,
         )
-    recent = datetime(2024, 6, 1, tzinfo=timezone.utc)  # must NOT be compacted
+    recent = datetime(2024, 6, 1, tzinfo=UTC)  # must NOT be compacted
     await repo.upsert_aggregate(
         symbol="BTC",
         kind="social",
@@ -115,7 +115,7 @@ async def test_fake_compaction_rolls_hourly_into_daily() -> None:
         weighted_score_sum=0.02,
         engagement_sum=1.0,
     )
-    cutoff = datetime(2024, 5, 1, tzinfo=timezone.utc)
+    cutoff = datetime(2024, 5, 1, tzinfo=UTC)
 
     n = await repo.compact_hourly_to_daily(older_than=cutoff)
 

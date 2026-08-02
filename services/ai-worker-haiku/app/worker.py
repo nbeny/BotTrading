@@ -18,6 +18,7 @@ from cmi_common.events import (
     AnalysisEvent,
     BaseEvent,
     DerivativesEvent,
+    DeveloperEvent,
     DexEvent,
     FundamentalsEvent,
     PriceEvent,
@@ -242,6 +243,30 @@ class HaikuWorker:
                     "has_unlock_schedule": event.has_unlock_schedule,
                 },
                 Topic.FUNDAMENTALS.value,
+            )
+        if isinstance(event, DeveloperEvent):
+            # Contexte, pas déclencheur — même statut que DerivativesEvent :
+            # _ready() n'est délibérément pas relâché pour ces événements.
+            # Scorer un symbole dont on n'a pas le prix inventerait une
+            # opportunité à partir d'une statistique de dépôt.
+            #
+            # all_repos_archived est un bool dont False est significatif, comme
+            # has_unlock_schedule : le store ne laisse tomber que les None à la
+            # fusion, donc False survit — ce qui garde « on a regardé, ce n'est
+            # pas mort » distinct de « on n'a pas regardé ». Pour la même
+            # raison, le 0.0 de commit_ratio_4w d'un projet entièrement archivé
+            # traverse comme la mesure qu'il est.
+            return (
+                event.symbol,
+                {
+                    "commit_ratio_4w": event.commit_ratio_4w,
+                    "pr_ratio_4w": event.pr_ratio_4w,
+                    "days_since_push": event.days_since_push,
+                    "star_growth_pct_7d": event.star_growth_pct_7d,
+                    "all_repos_archived": event.all_repos_archived,
+                    "dev_repo_count": event.repo_count,
+                },
+                Topic.DEVELOPER.value,
             )
         return None, {}, ""
 

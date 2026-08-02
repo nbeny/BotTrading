@@ -62,10 +62,12 @@ def test_strong_signals_score_high() -> None:
     )
     result = scoring.score(f)
     assert result.opportunity_score > 60
-    # Five of seven axes. The derivatives and fundamentals axes are absent for a
-    # symbol with no perp and no protocol, which is most of them — and under
-    # renormalisation that costs confidence without costing score.
-    assert result.confidence == 0.75
+    # Five of eight axes. Derivatives, fundamentals and developer activity are
+    # absent for a symbol with no perp, no protocol and no mapped repo, which is
+    # most of them — and under renormalisation that costs confidence without
+    # costing score. The figure fell from 0.75 to 0.69 when developer_activity
+    # landed: the same five axes now back a smaller share of a larger model.
+    assert result.confidence == 0.69
 
 
 def test_confidence_reflects_missing_signals() -> None:

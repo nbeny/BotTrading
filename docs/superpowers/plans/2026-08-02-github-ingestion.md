@@ -76,7 +76,10 @@ RepoStats = _activity.RepoStats
 
 ```python
 # tests/test_developer_event.py
-from cmi_common.events import DeveloperEvent, EventType, Source
+import pytest
+from pydantic import ValidationError
+
+from cmi_common.events import DeveloperEvent, EventType, Source, parse_event
 from cmi_common.kafka import TOPIC_EVENT, Topic
 
 
@@ -91,15 +94,52 @@ def test_measures_default_to_none_not_zero():
     assert e.event_type == EventType.DEVELOPER
 
 
-def test_round_trip_preserves_none():
+def test_round_trip_through_the_discriminated_union():
+    """Le round-trip doit passer par parse_event, pas par model_validate_json.
+
+    Un evenement absent de AnyEvent publie parfaitement et echoue a la
+    consommation, parse_event levant sur le discriminant — c'est ainsi que
+    JournalEntryEvent est parti casse. model_validate_json contourne l'union
+    et passerait encore si DeveloperEvent en etait retire, donc il ne teste
+    pas ce qui casse.
+    """
     e = DeveloperEvent(
         source=Source.GITHUB, symbol="AAVE", coin_id="aave",
         repo_count=2, commit_ratio_4w=1.5, days_since_push=3,
     )
-    back = DeveloperEvent.model_validate_json(e.model_dump_json())
+    back = parse_event(e.as_kafka_value())
+    assert isinstance(back, DeveloperEvent)
     assert back.commit_ratio_4w == 1.5
     assert back.pr_ratio_4w is None
     assert back.days_since_push == 3
+
+
+def test_events_partition_by_symbol():
+    """BaseEvent.partition_key() rend un UUID neuf: sans surcharge, les
+    evenements d'un meme token s'eparpillent sur les 3 partitions et l'ordre
+    par symbole est perdu."""
+    e = DeveloperEvent(source=Source.GITHUB, symbol="AAVE", coin_id="aave", repo_count=1)
+    assert e.partition_key() == "AAVE"
+
+
+def test_a_measured_zero_and_an_absent_measure_stay_distinct():
+    """all_repos_archived=True + repo_count=0 veut dire « on a regarde, tout
+    est mort ». Toutes les mesures a None veut dire « on n'a pas regarde ».
+    Les confondre est la classe de defaut la plus couteuse de ce depot."""
+    dead = parse_event(
+        DeveloperEvent(
+            source=Source.GITHUB, symbol="AAVE", coin_id="aave",
+            repo_count=0, all_repos_archived=True,
+        ).as_kafka_value()
+    )
+    unknown = parse_event(
+        DeveloperEvent(
+            source=Source.GITHUB, symbol="AAVE", coin_id="aave", repo_count=2
+        ).as_kafka_value()
+    )
+    assert dead.all_repos_archived is True and dead.repo_count == 0
+    assert unknown.all_repos_archived is False
+    assert unknown.commit_ratio_4w is None
 
 
 def test_topic_is_registered():
@@ -109,9 +149,6 @@ def test_topic_is_registered():
 
 def test_ratios_reject_negatives():
     """Un ratio est un rapport de comptages: negatif = bug amont, pas une mesure."""
-    import pytest
-    from pydantic import ValidationError
-
     with pytest.raises(ValidationError):
         DeveloperEvent(
             source=Source.GITHUB, symbol="AAVE", coin_id="aave",
@@ -178,6 +215,28 @@ class DeveloperEvent(BaseEvent):
     #: négative : un dépôt perd des étoiles.
     star_growth_pct_7d: float | None = None
     all_repos_archived: bool = False
+
+    @model_validator(mode="after")
+    def _validate_repo_count(self) -> "DeveloperEvent":
+        """``repo_count=0`` n'a de sens qu'accompagné de ``all_repos_archived``.
+
+        Rejeté à la construction **et au décodage** — pydantic exécute les
+        validateurs ``mode="after"`` dans ``validate_python``, donc un message
+        forgé sur le topic échoue au lieu de se décoder en zéro fabriqué.
+        Même position que ``DerivativesEvent.long_short_account_ratio`` :
+        rejeté à la construction, pas dans le scorer.
+
+        **Contourné par ``model_copy(update=...)``**, qui ne revalide pas. Le
+        collector republie des événements en cache toutes les 600 s, ce qui est
+        une invitation permanente à y recourir — `collector-binance-futures`
+        s'est déjà fait piéger exactement là.
+        """
+        if self.repo_count == 0 and not self.all_repos_archived:
+            raise ValueError(
+                "repo_count=0 exige all_repos_archived=True — sans dépôt lu du "
+                "tout, ne publiez pas d'événement"
+            )
+        return self
 ```
 
 Exporter `DeveloperEvent` dans `libs/cmi_common/cmi_common/events/__init__.py` à côté de `FundamentalsEvent`.
@@ -188,16 +247,48 @@ Dans `libs/cmi_common/cmi_common/kafka/topics.py`, ajouter l'import de `Develope
     DEVELOPER = "market.developer.events"
 ```
 
-et dans `TOPIC_EVENT` :
+dans `TOPIC_EVENT` :
 
 ```python
     Topic.DEVELOPER: DeveloperEvent,
 ```
 
+et dans `TOPIC_PARTITIONS` — **obligatoire, pas optionnel** :
+
+```python
+    Topic.DEVELOPER: 3,
+```
+
+`tests/test_journal_topic.py::test_every_topic_appears_in_both_tables` impose
+`set(TOPIC_EVENT) == set(Topic)` **et** `set(TOPIC_PARTITIONS) == set(Topic)` : l'oubli
+fait échouer toute la suite. La raison est écrite dans le dépôt — un topic absent de l'une
+des deux tables publie sans erreur et casse à la consommation, ce qui est la manière dont
+`JournalEntryEvent` est parti cassé en production.
+
+Surcharger enfin `partition_key()` sur `DeveloperEvent` pour rendre `self.symbol`, comme
+tous les événements portant un symbole. `BaseEvent.partition_key()` rend un UUID neuf par
+défaut : sans la surcharge, les événements d'un même token s'éparpillent sur les trois
+partitions et l'ordre par symbole est perdu.
+
 - [ ] **Step 4 : lancer le test, vérifier qu'il passe**
 
+Ajouter enfin quatre tests que les revues ont exigés, tous de la même famille : ils
+vérifient une affirmation sur la mesure plutôt que de redire le modèle.
+
+- `test_zero_repos_requires_all_archived` — le validateur rejette bien la combinaison ;
+- `test_wire_payload_rejects_zero_repos_without_all_archived` — même rejet sur un payload
+  JSON forgé à la main passé à `parse_event`, ce qui est une affirmation différente de
+  « notre constructeur est prudent » : elle porte sur un message tiers ;
+- `test_ratios_reject_negatives` **paramétré** sur `commit_ratio_4w`, `pr_ratio_4w` et
+  `days_since_push` — chaque borne testée individuellement, sinon deux d'entre elles
+  survivent à leur suppression ;
+- `test_star_growth_accepts_negatives` — l'absence de borne sur `star_growth_pct_7d` est
+  **délibérée** et doit être protégée : ajouter un `ge=0` ici rejouerait l'incident
+  `fees_24h_usd`, où un `ge=0` sur des frais légitimement négatifs levait dans une boucle
+  d'émission sans garde et faisait publier zéro événement pour tous les tokens du cycle.
+
 Run: `python -m pytest tests/test_developer_event.py -v`
-Expected: PASS, 4 tests
+Expected: PASS, 11 tests
 
 - [ ] **Step 5 : commit**
 
@@ -343,7 +434,7 @@ est positive et qui n'a rien produit en quatre semaines s'est réellement arrêt
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 #: Fenêtre récente, en semaines. La baseline est ramenée à cette même durée.
 WINDOW_WEEKS = 4
@@ -368,6 +459,11 @@ class RepoStats:
     pr_merged_52w: int | None = None
     #: Étoiles au snapshot précédent. None au premier passage.
     stars_prev: int | None = None
+    #: Instants des deux relevés. Indispensables : sans eux, un delta d'étoiles
+    #: ne peut pas être ramené à un taux, et la cadence round-robin fait varier
+    #: l'intervalle d'un dépôt à l'autre et d'un cycle à l'autre.
+    stars_at: datetime | None = None
+    stars_prev_at: datetime | None = None
 
 
 def _ratio(recent: int | None, expected: float | None) -> float | None:
@@ -400,21 +496,67 @@ def pr_ratio(stats: RepoStats) -> float | None:
     return _ratio(stats.pr_merged_4w, weekly * WINDOW_WEEKS)
 
 
+#: Tolérance de gigue NTP entre notre horloge et celle de GitHub — pas une
+#: règle métier. En dessous, un horodatage « dans le futur » est notre horloge
+#: qui retarde ; au-delà, c'est une lecture qu'on ne croit pas.
+CLOCK_SKEW_TOLERANCE = timedelta(minutes=5)
+
+
 def days_since_push(stats: RepoStats, now: datetime) -> int | None:
+    """Jours depuis le dernier push, ``None`` si l'horodatage est incroyable.
+
+    Un ``max(0, ...)` seul serait un piège : ``timedelta.days`` arrondit vers
+    moins l'infini, donc un push en avance d'**une seconde** donne ``.days ==
+    -1``. Clamper à 0 traduirait une horloge décalée en « poussé aujourd'hui »,
+    c'est-à-dire la valeur de fraîcheur la plus favorable qui soit — un zéro
+    fabriqué, exactement ce que ce module existe pour empêcher.
+
+    Rendre ``None`` dès la première seconde d'avance serait le défaut inverse :
+    le sous-signal disparaîtrait sans bruit sur les dépôts qui viennent de
+    pousser, c'est-à-dire les plus actifs, ceux que le momentum cherche
+    précisément à détecter. D'où la tolérance bornée.
+    """
     if stats.pushed_at is None:
         return None
-    return max(0, (now - stats.pushed_at).days)
+    delta = now - stats.pushed_at
+    if delta < -CLOCK_SKEW_TOLERANCE:
+        return None
+    return max(0, delta.days)
+
+
+#: Fenêtre à laquelle la croissance d'étoiles est ramenée, parce que c'est celle
+#: que ``DeveloperEvent.star_growth_pct_7d`` et le seuil du scoring annoncent
+#: tous deux. Sans normalisation, un delta de 12 h était comparé à un seuil de
+#: 7 jours : une sous-estimation d'un facteur ~14, présente et plausible donc
+#: pire qu'une absence.
+STAR_GROWTH_NORMALISATION_WINDOW = timedelta(days=7)
+#: En dessous, extrapoler à 7 jours multiplie le bruit par ~168. On préfère ne
+#: rien dire.
+MIN_STAR_GROWTH_INTERVAL = timedelta(hours=1)
 
 
 def star_growth_pct(stats: RepoStats) -> float | None:
-    """Croissance relative des étoiles depuis le snapshot précédent.
+    """Croissance d'étoiles ramenée à 7 jours, entre les deux relevés.
+
+    Ne prend **pas** de ``now`` : l'intervalle court d'un snapshot à l'autre.
+    Le prendre jusqu'à l'horloge du cycle ferait décroître la même mesure à
+    chaque republication — mesuré sur la version précédente, une croissance de
+    0.14 tombait à 0.07 en douze heures et était republiée ~72 fois à des
+    valeurs décroissantes, sans qu'aucune donnée nouvelle ne soit lue.
 
     ``None`` au premier passage : un delta demande deux observations, et un 0.0
     y affirmerait une stagnation qu'on n'a pas observée.
     """
     if stats.stars is None or stats.stars_prev is None or stats.stars_prev <= 0:
         return None
-    return (stats.stars - stats.stars_prev) / stats.stars_prev
+    if stats.stars_prev_at is None or stats.stars_at is None:
+        return None
+    interval = stats.stars_at - stats.stars_prev_at
+    if interval < MIN_STAR_GROWTH_INTERVAL:
+        # Couvre aussi l'intervalle nul ou négatif : les deux sont < 1 h.
+        return None
+    growth = (stats.stars - stats.stars_prev) / stats.stars_prev
+    return growth * (STAR_GROWTH_NORMALISATION_WINDOW / interval)
 ```
 
 - [ ] **Step 4 : lancer le test, vérifier qu'il passe**
@@ -432,6 +574,13 @@ git commit -m "feat(collector-github): ratios d'activite par depot"
 ---
 
 ## Task 3 : Agrégat multi-dépôts
+
+> **Invariant imposé par la tâche 1.** `DeveloperEvent` porte un `model_validator` qui
+> **rejette** `repo_count == 0` sans `all_repos_archived=True` — à la construction *et* au
+> décodage. La branche « tous les dépôts archivés » de `aggregate()` doit donc impérativement
+> poser `all_repos_archived=True` en même temps que `repo_count=0`, sinon l'événement ne se
+> construira pas en tâche 8. Les trois sorties de `aggregate()` ci-dessous respectent
+> l'invariant par construction ; toute quatrième branche ajoutée devra le vérifier.
 
 **Files:**
 - Create: `services/collector-github/app/domain/aggregate.py`
@@ -550,6 +699,10 @@ class CoinActivity:
     days_since_push: int | None
     star_growth_pct_7d: float | None
     all_repos_archived: bool
+    #: Un `pushed_at` existait mais a été rejeté (horloge décalée). N'entre pas
+    #: dans l'événement : c'est un signal d'observabilité pour l'appelant, qui
+    #: seul a le droit d'incrémenter un compteur.
+    push_timestamp_rejected: bool = False
 
 
 def _is_live(stats: RepoStats) -> bool:
@@ -596,36 +749,82 @@ def aggregate(repos: Sequence[RepoStats], now: datetime) -> CoinActivity | None:
             all_repos_archived=True,
         )
 
+    # `merged` ne porte ni `stars`/`stars_prev` ni `pushed_at` : les deux se
+    # calculent par dépôt plus bas, jamais sur une somme ou un agrégat
+    # d'horodatages. Les y remettre serait trompeur — un lecteur qui voit des
+    # champs étoiles ou date sur `merged` en conclurait raisonnablement que la
+    # croissance d'étoiles ou la fraîcheur en découlent, ce qui est
+    # exactement l'erreur que les deux blocs ci-dessous existent pour éviter.
     merged = RepoStats(
         owner=live[0].owner,
         repo=f"<{len(live)} repos>",
-        stars=_sum_or_none([r.stars for r in live]),
-        pushed_at=max((r.pushed_at for r in live if r.pushed_at), default=None),
         commits_4w=_sum_or_none([r.commits_4w for r in live]),
-        commits_median_52w=_sum_median([r.commits_median_52w for r in live]),
+        commits_median_52w=_sum_or_none([r.commits_median_52w for r in live]),
         pr_merged_4w=_sum_or_none([r.pr_merged_4w for r in live]),
         pr_merged_52w=_sum_or_none([r.pr_merged_52w for r in live]),
-        stars_prev=_sum_or_none([r.stars_prev for r in live]),
     )
+
+    # Fraîcheur : par dépôt, pas sur un `max(pushed_at)` agrégé. Le `max`
+    # ferait gagner le dépôt le plus mal daté avant même de savoir si son
+    # horodatage est crédible — un seul dépôt à l'horloge décalée écraserait
+    # alors la fraîcheur mesurée de tous les dépôts sains du même coin.
+    # `days_since_push` filtre déjà la gigue d'horloge au niveau d'un dépôt ;
+    # on ne fait ici que garder le plus petit nombre de jours parmi les
+    # dépôts dont l'horodatage a été cru, et ignorer les autres plutôt que de
+    # laisser l'un d'eux invalider le lot.
+    per_repo_freshness = [days_since_push(r, now) for r in live]
+    believed = [f for f in per_repo_freshness if f is not None]
+    freshness = min(believed) if believed else None
+    # Un rejet individuel reste rapporté même quand un autre dépôt sauve la
+    # fraîcheur du coin : c'est un signal d'observabilité pour l'appelant
+    # (qui seul a le droit d'incrémenter un compteur), pas une condition sur
+    # le résultat final.
+    push_timestamp_rejected = any(
+        r.pushed_at is not None and f is None
+        for r, f in zip(live, per_repo_freshness, strict=True)
+    )
+
     return CoinActivity(
         repo_count=len(live),
         commit_ratio_4w=commit_ratio(merged),
         pr_ratio_4w=pr_ratio(merged),
-        days_since_push=days_since_push(merged, now),
-        star_growth_pct_7d=star_growth_pct(merged),
+        days_since_push=freshness,
+        # Plus de `now` : l'intervalle court d'un snapshot à l'autre, pas
+        # jusqu'à l'horloge du cycle. Voir la note dans `_weighted_star_growth`
+        # sur l'agrégation par dépôt plutôt que sur une somme d'étoiles.
+        star_growth_pct_7d=_weighted_star_growth(live),
         all_repos_archived=False,
+        push_timestamp_rejected=push_timestamp_rejected,
     )
 
 
-def _sum_median(values: Sequence[float | None]) -> float | None:
-    """Somme des médianes hebdomadaires.
+def _weighted_star_growth(live: Sequence[RepoStats]) -> float | None:
+    """Taux de croissance d'étoiles du coin, pondéré par la base de chaque dépôt.
 
-    Ce n'est pas la médiane de la somme, et c'est volontaire : on ne dispose
-    que des médianes par dépôt, et leur somme est la meilleure estimation du
-    rythme de croisière de l'ensemble sans redemander les 52 séries.
+    Par dépôt puis moyenné, jamais sommé : chaque dépôt porte ses propres
+    ``stars_at``/``stars_prev_at``, et le round-robin ne les rafraîchit pas
+    ensemble. Diviser une somme d'étoiles par un intervalle commun inventé
+    rejouerait le défaut corrigé en tâche 2, où l'intervalle réel et
+    l'intervalle supposé divergeaient.
+
+    Pondéré par ``stars_prev`` parce qu'un dépôt de documentation à 30 étoiles
+    ne doit pas peser autant que le client principal à 40 000.
+
+    Une lecture partielle (certains dépôts sans taux utilisable) ne se
+    transforme jamais en lecture complète : seuls les dépôts dont le taux est
+    effectivement calculable entrent dans la moyenne, et si aucun ne l'est le
+    résultat reste ``None`` plutôt qu'un 0.0 fabriqué.
     """
-    present = [v for v in values if v is not None]
-    return sum(present) if present else None
+    rates = [
+        (star_growth_pct(r), r.stars_prev)
+        for r in live
+        if r.stars_prev is not None and r.stars_prev > 0
+    ]
+    usable = [(rate, base) for rate, base in rates if rate is not None]
+    if not usable:
+        return None
+    total = sum(base for _, base in usable)
+    return sum(rate * base for rate, base in usable) / total
 ```
 
 - [ ] **Step 4 : lancer le test, vérifier qu'il passe**
@@ -1364,7 +1563,9 @@ class GithubRepoSnapshot(Base):
     __table_args__ = (Index("ix_github_snapshot_repo", "owner", "repo", "observed_at"),)
 ```
 
-Vérifier que `Float`, `Integer`, `Text` et `Index` sont bien importés en tête du fichier ; les ajouter à l'import `from sqlalchemy import ...` sinon.
+Aucun import à ajouter : `Boolean`, `DateTime`, `Float`, `Index`, `Integer`, `String` et
+`Text` figurent déjà dans le `from sqlalchemy import (...)` en tête de `models.py`
+(vérifié sur la branche).
 
 `migrations/alembic/versions/0017_github_activity.py` :
 
@@ -1807,6 +2008,37 @@ async def test_refresh_cursor_rotates():
 
 
 @pytest.mark.asyncio
+async def test_one_invalid_token_does_not_silence_the_others():
+    """Une ValidationError sur un token ne doit pas couter le cycle aux autres.
+
+    Lecon de l'incident fees_24h_usd: une exception dans une boucle d'emission
+    sans garde fait publier zero evenement pour *tous* les tokens du cycle.
+    """
+    async def fetch(owner, repo):
+        return _stats(owner, repo)
+
+    producer = _Producer()
+    store = _Store({("o", f"r{i}"): _stats("o", f"r{i}") for i in range(3)})
+    collector = GitHubCollector(
+        producer=producer,
+        store=store,
+        fetch_repo=fetch,
+        # coin_id None sur le premier: DeveloperEvent.coin_id est un str requis,
+        # donc sa construction leve. Une ligne de mapping incomplete est le cas
+        # reel le plus proche.
+        repo_map=lambda: {
+            "S0": (None, [("o", "r0")]),
+            "S1": ("c1", [("o", "r1")]),
+            "S2": ("c2", [("o", "r2")]),
+        },
+        clock=lambda: NOW,
+        max_refresh_per_cycle=0,
+    )
+    await collector.poll_once()
+    assert {e.symbol for e in producer.published} == {"S1", "S2"}
+
+
+@pytest.mark.asyncio
 async def test_dead_repo_is_written_off_after_one_failure():
     RepoGone = load_service_module(
         "collector-github", "infrastructure.github_client"
@@ -1866,6 +2098,8 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
+
+from pydantic import ValidationError
 
 from cmi_common.events import DeveloperEvent, Source
 from cmi_common.kafka import Topic
@@ -1981,23 +2215,65 @@ class GitHubCollector:
                 for snap in [await self._store.latest(o, r) for o, r in pairs]
                 if snap is not None
             ]
-            activity = aggregate(snapshots, now)
+            try:
+                activity = aggregate(snapshots, now)
+            except Exception as exc:  # noqa: BLE001
+                # aggregate() est pur mais pas total : un snapshot partiel
+                # (stars absent alors que stars_prev existe) ou un horodatage
+                # naïf y lèvent TypeError. Hors de ce try, l'exception sortait
+                # de la boucle et coûtait le cycle aux ~249 autres tokens —
+                # la garde plus bas ne couvrait que la construction de
+                # l'événement, pas le calcul qui la précède.
+                UNMEASURED.labels(SERVICE, "aggregate", type(exc).__name__).inc()
+                logger.error("github: %s — agrégation impossible: %s", symbol, exc)
+                continue
             if activity is None:
                 # Aucun dépôt lu pour ce symbole. Publier un événement à zéro
                 # transformerait « pas encore mesuré » en « aucune activité »,
                 # et l'axe pèserait alors contre le token.
                 continue
-            event = DeveloperEvent(
-                source=Source.GITHUB,
-                symbol=symbol,
-                coin_id=coin_id,
-                repo_count=activity.repo_count,
-                commit_ratio_4w=activity.commit_ratio_4w,
-                pr_ratio_4w=activity.pr_ratio_4w,
-                days_since_push=activity.days_since_push,
-                star_growth_pct_7d=activity.star_growth_pct_7d,
-                all_repos_archived=activity.all_repos_archived,
-            )
+            if activity.push_timestamp_rejected:
+                UNMEASURED.labels(SERVICE, "days_since_push", "clock_skew").inc()
+            if not activity.all_repos_archived and not any(
+                (
+                    activity.commit_ratio_4w,
+                    activity.pr_ratio_4w,
+                    activity.days_since_push,
+                    activity.star_growth_pct_7d,
+                )
+            ):
+                # Des dépôts existent mais aucune mesure n'a abouti — tous en
+                # 202, par exemple. L'événement serait valide au sens du schéma
+                # et n'affirmerait rien : le FeatureStore n'y trouverait que
+                # `dev_repo_count`, et l'axe resterait absent de toute façon.
+                # Ne pas publier vaut mieux que publier du vide.
+                continue
+            try:
+                event = DeveloperEvent(
+                    source=Source.GITHUB,
+                    symbol=symbol,
+                    coin_id=coin_id,
+                    repo_count=activity.repo_count,
+                    commit_ratio_4w=activity.commit_ratio_4w,
+                    pr_ratio_4w=activity.pr_ratio_4w,
+                    days_since_push=activity.days_since_push,
+                    star_growth_pct_7d=activity.star_growth_pct_7d,
+                    all_repos_archived=activity.all_repos_archived,
+                )
+            except ValidationError as exc:
+                # Un token invalide ne doit pas coûter le cycle aux 249 autres.
+                # C'est la leçon de l'incident fees_24h_usd : là-bas, un ge=0
+                # sur des frais légitimement négatifs levait dans une boucle
+                # d'émission sans garde, et un seul protocole entrant dans
+                # l'univers faisait publier *zéro* événement pour tous les
+                # tokens du cycle. Le schéma de DeveloperEvent rejette
+                # repo_count=0 sans all_repos_archived, ce que aggregate() ne
+                # peut pas produire — donc lever ici signale un bug de
+                # l'agrégateur, et un bug d'agrégateur sur un token n'est pas
+                # une raison de faire taire les autres.
+                UNMEASURED.labels(SERVICE, "developer_event", "ValidationError").inc()
+                logger.error("github: %s — événement invalide: %s", symbol, exc)
+                continue
             await self._producer.publish(Topic.DEVELOPER, event)
             EVENTS_PRODUCED.labels(SERVICE, Topic.DEVELOPER.value, event.event_type).inc()
             published += 1
@@ -2023,7 +2299,46 @@ git commit -m "feat(collector-github): cycle deux horloges, publication depuis l
 **Files:**
 - Create: `services/collector-github/app/infrastructure/store.py`, `lists_client.py`, `app/main.py`
 - Modify: `docker-compose.yml`, `docker-compose.vps.yml`, `.env.example`
+- Modify: `.github/workflows/deploy.yml` — **ne pas oublier**
 - Test: `tests/test_github_store.py`
+
+> **Deux éditions distinctes dans `deploy.yml`, et oublier l'une ou l'autre est
+> silencieux.**
+>
+> **a) La matrice d'images.** Chaque service du dépôt figure dans `strategy.matrix.include`.
+> Sans la sienne, `docker-compose.vps.yml` référencerait
+> `ghcr.io/nbeny/bottrading-collector-github:latest`, une image que la CI ne construit
+> jamais, et le déploiement VPS échouerait au `pull` — après un build vert. Ajouter, en
+> respectant l'alignement des colonnes :
+>
+> ```yaml
+>           - { name: collector-github,      dockerfile: docker/Dockerfile,     path: services/collector-github }
+> ```
+>
+> **b) La liste blanche de tests.** Le job `test` ne lance pas `pytest tests/` : il énumère
+> ~25 chemins de fichiers à la main. **Tout fichier absent de cette liste ne s'exécute
+> jamais en CI**, quel que soit son état local. Les treize fichiers de ce chantier doivent
+> y être ajoutés, y compris `test_developer_event.py` livré en tâche 1 :
+>
+> ```
+>             tests/test_developer_event.py \
+>             tests/test_github_activity.py \
+>             tests/test_github_aggregate.py \
+>             tests/test_github_lists.py \
+>             tests/test_github_client.py \
+>             tests/test_github_models.py \
+>             tests/test_github_repo_map.py \
+>             tests/test_github_collector.py \
+>             tests/test_github_store.py \
+>             tests/test_github_registry.py \
+>             tests/test_haiku_developer_features.py \
+>             tests/test_scoring_developer_axis.py \
+>             tests/test_axis_parity.py \
+> ```
+>
+> Le job installe `cmi_common` et `api-gateway` seulement ; c'est suffisant, puisque les
+> tests chargent le code de service par chemin via `load_service_module` et non par import
+> de paquet. `pytest-asyncio` y est déjà, ce dont les tests des tâches 5, 7 et 8 ont besoin.
 
 - [ ] **Step 1 : écrire le test qui échoue**
 
@@ -2333,6 +2648,10 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
             break  # un coin par cycle : le mapping est quasi immuable
 
     async def cycle() -> None:
+        # Un seul `now` par cycle, échantillonné ici et passé jusqu'à
+        # days_since_push. Le relire par dépôt ferait glisser la fenêtre de
+        # CLOCK_SKEW_TOLERANCE au fil d'un cycle long, donc rétrécirait
+        # silencieusement la tolérance pour les derniers dépôts traités.
         await refresh_mapping()
         await collector.poll_once()
 
@@ -2476,10 +2795,18 @@ def test_developer_event_does_not_trigger_scoring() -> None:
     """Contexte, pas declencheur: scorer un symbole dont on n'a pas le prix
     inventerait une opportunite a partir d'une statistique de depot.
 
-    _ready est une staticmethod prenant le dict de features.
+    _ready est une staticmethod exigeant has_market ET has_signal; aucune cle
+    developer_* n'appartient a l'une ou l'autre liste, donc la propriete tient
+    par construction. Ce test la fige contre un elargissement futur.
     """
     assert hw.HaikuWorker._ready({"commit_ratio_4w": 1.5}) is False
 ```
+
+> **Ne pas relâcher `_ready`.** Il exige `has_market` (`price_change_pct_24h` ou
+> `liquidity_usd`) **et** `has_signal` (`sentiment_score`, `has_social` ou
+> `volume_spike_ratio`). Ajouter une clé `developer_*` à l'une de ces listes ferait scorer
+> des symboles sur une statistique de dépôt sans prix — exactement ce que le commentaire
+> de `DerivativesEvent` interdit dans le même fichier.
 
 - [ ] **Step 2 : lancer le test, vérifier qu'il échoue**
 
@@ -3108,6 +3435,15 @@ if __name__ == "__main__":
 
 Run: `GITHUB_TOKEN=<le token régénéré> python scripts/verify_github_activity.py`
 Expected: une ligne par token, puis couverture, médiane, écart-type et déciles. La couverture doit atteindre au moins 60 % (critère n°1 du spec) et les déciles ne doivent pas être concentrés.
+
+> **Sortir aussi la distribution du seul sous-signal `star_growth`, séparément de l'axe.**
+> Son seuil de saturation est à 2 % sur 7 jours : exigeant pour un dépôt à 10 000 étoiles
+> (il faut en gagner 100), trivial pour un dépôt à 50 (une seule étoile en 12 h se
+> normalise à 14 % et sature). Si le sous-signal sature pour la majorité des petits
+> dépôts, il n'ordonne plus rien et vaut du bruit à 0.10 du poids de l'axe. Deux issues :
+> relever le seuil, ou exiger une base absolue minimale d'étoiles en dessous de laquelle
+> la croissance relative rend `None`. Trancher sur les données réelles, pas a priori —
+> c'est exactement pour ce genre d'arbitrage que ce script existe.
 
 - [ ] **Step 3 : consigner le résultat**
 

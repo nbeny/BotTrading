@@ -27,6 +27,10 @@ from typing import Any
 #: rien ne vérifie qu'elles restent alignées : un huitième axe ajouté au scoring
 #: n'apparaîtrait jamais dans le drawer, sans erreur ni test rouge. Les trois
 #: doivent bouger ensemble.
+#: Une des trois copies de la liste d'axes, avec decision-engine/scoring.py et
+#: frontend/dossier.ts. Aucune n'importe les autres — api-gateway ne doit pas
+#: dependre de decision-engine — donc tests/test_axis_parity.py est ce qui les
+#: tient alignees. Les trois bougent ensemble, ou le nouvel axe est invisible.
 AXIS_KEYS: tuple[str, ...] = (
     "volume_growth",
     "social_score",
@@ -35,6 +39,7 @@ AXIS_KEYS: tuple[str, ...] = (
     "liquidity_score",
     "positioning",
     "fundamentals",
+    "developer_activity",
 )
 
 

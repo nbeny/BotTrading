@@ -7,7 +7,7 @@ drift: a renamed/removed response field breaks this test in CI, not the browser.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from service_modules import load_service_module
@@ -30,7 +30,7 @@ map_token = read_api.map_token
 
 CONTRACT = load_service_module("api-gateway", "read_contract").CONTRACT
 
-NOW = datetime(2026, 7, 25, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 25, 12, 0, tzinfo=UTC)
 
 
 # ── fake rows ─────────────────────────────────────────────────────────────────

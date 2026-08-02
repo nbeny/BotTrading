@@ -35,13 +35,19 @@ from dataclasses import dataclass, field
 #: proportions exactly — this expresses no new opinion about the old model, it
 #: only makes room for the two new ones.
 WEIGHTS = {
-    "volume_growth": 0.1875,
-    "social_score": 0.1500,
-    "news_score": 0.1500,
-    "market_trend": 0.1500,
-    "liquidity_score": 0.1125,
-    "positioning": 0.1500,
-    "fundamentals": 0.1000,
+    # Rescalés x0.92 lors de l'ajout de developer_activity, pour que la somme
+    # reste exactement 1.0 : _MIN_PRESENT_WEIGHT est un seuil sur cette somme,
+    # et la laisser dériver à 1.08 aurait changé le sens de la porte sans que
+    # rien ne le signale. Le rescale est uniforme, donc les sept axes gardent
+    # leurs proportions entre eux.
+    "volume_growth": 0.1725,
+    "social_score": 0.1380,
+    "news_score": 0.1380,
+    "market_trend": 0.1380,
+    "liquidity_score": 0.1035,
+    "positioning": 0.1380,
+    "fundamentals": 0.0920,
+    "developer_activity": 0.0800,
 }
 
 
@@ -71,6 +77,14 @@ class Features:
     next_unlock_pct_supply: float | None = None
     next_unlock_days: float | None = None
     has_unlock_schedule: bool = False
+    #: Activité GitHub. Ratios bruts : 1.0 = le projet avance à son rythme
+    #: habituel. all_repos_archived True est un constat de mort mesuré, à
+    #: distinguer de l'absence de toute lecture — voir _norm_developer_activity.
+    commit_ratio_4w: float | None = None
+    pr_ratio_4w: float | None = None
+    days_since_push: int | None = None
+    star_growth_pct_7d: float | None = None
+    all_repos_archived: bool = False
     present: set[str] = field(default_factory=set)
 
 
@@ -159,12 +173,30 @@ def _norm_liquidity(liq: float | None) -> float | None:
 #: normal state of crypto perps, so the typical symbol reads mildly crowded.
 #: That is a property of the market, not a bias to calibrate away.
 #: Below this share of model weight, no score is emitted at all. Set just above
-#: the heaviest single axis (volume_growth, 0.1875) so one axis can never speak
-#: for seven, and just below the lightest legitimate pair (fundamentals +
-#: liquidity, 0.2125). Renormalisation exists so absent data stops dragging a
-#: score down; without this floor it also lets a sliver of data manufacture
-#: certainty.
-_MIN_PRESENT_WEIGHT = 0.20
+#: the heaviest single axis (volume_growth, 0.1725) so one axis can never speak
+#: for eight.
+#:
+#: La seconde contrainte historique - "juste en dessous de la paire legitime la
+#: plus legere" - n'est plus satisfiable, et il vaut mieux le dire que la
+#: recopier. Depuis l'ajout de developer_activity (0.08), la paire la plus
+#: legere est fundamentals + developer_activity a 0.1720, soit *moins* que l'axe
+#: le plus lourd a 0.1725 : aucun seuil ne peut etre a la fois au-dessus de l'un
+#: et en dessous de l'autre. On garde donc la premiere contrainte, et
+#: developer_activity ne peut pas former de paire scorable avec les deux axes
+#: les plus legers. C'est conservateur - score 0 et insufficient_evidence,
+#: jamais une valeur inventee - mais c'est une decision, pas un heritage.
+#:
+#: Renormalisation exists so absent data stops dragging a score down; without
+#: this floor it also lets a sliver of data manufacture certainty.
+#:
+#: Rescalé x0.92 avec les poids en même temps que developer_activity, et c'est
+#: le point délicat de cette rebalance : garder la somme à 1.0 ne suffit pas.
+#: Ce seuil est absolu, donc laisser 0.20 en place aurait resserré la porte en
+#: silence — la paire fundamentals + liquidity, explicitement calibrée comme la
+#: plus légère *légitime*, tombait à 0.1955 et cessait de scorer. Le seuil suit
+#: les poids, sinon ajouter un axe rend plus sévère un critère que personne n'a
+#: décidé de durcir.
+_MIN_PRESENT_WEIGHT = 0.184
 _FUNDING_SCALE = 0.0001
 #: An unlock of this share of supply is treated as maximally severe.
 _UNLOCK_FULL_SEVERITY_PCT = 5.0
@@ -248,6 +280,89 @@ def _norm_fundamentals(
     )
 
 
+#: Un projet qui triple son rythme sature l'échelle ; un projet tombé au tiers
+#: la vide. Symétrique par construction, ce que fait le logarithme et qu'une
+#: échelle linéaire ne donnerait pas.
+_MOMENTUM_SPAN = 3.0
+_FRESH_DAYS = 7.0
+_STALE_DAYS = 90.0
+#: +2 % d'étoiles sur 7 jours sature le terme. Exigeant pour un gros dépôt,
+#: trivial pour un petit — la tâche 13 mesure la distribution réelle avant de
+#: faire confiance à ce seuil.
+_STAR_GROWTH_FULL = 0.02
+_DEV_SUB_WEIGHTS = {
+    "commit": 0.40,
+    "pr": 0.25,
+    "freshness": 0.25,
+    "stars": 0.10,
+}
+
+
+def _norm_developer_activity(
+    *,
+    commit_ratio: float | None,
+    pr_ratio: float | None,
+    days_since_push: int | None,
+    star_growth: float | None,
+    all_archived: bool,
+) -> float | None:
+    """Momentum de développement relatif au projet, dans [0, 1].
+
+    Relatif, et non absolu : Bitcoin a 1 200 contributeurs et un token récent
+    en a quatre. Un axe bâti sur des volumes bruts classerait mécaniquement les
+    grandes capitalisations en tête et ne dirait rien que le pipeline ne sache
+    déjà — il dupliquerait la capitalisation sous un autre nom.
+
+    ``all_archived`` court-circuite : tous les dépôts connus sont archivés ou
+    forkés, ce qui est un zéro **mesuré**. C'est le seul de la chaîne. Tout le
+    reste, absent, laisse l'axe à ``None`` et donc exclu de la renormalisation.
+    """
+    if all_archived:
+        return 0.0
+    terms = {
+        "commit": _momentum(commit_ratio),
+        "pr": _momentum(pr_ratio),
+        "freshness": _freshness(days_since_push),
+        "stars": (
+            None
+            if star_growth is None
+            else max(0.0, min(1.0, star_growth / _STAR_GROWTH_FULL))
+        ),
+    }
+    present = {k: v for k, v in terms.items() if v is not None}
+    if not present:
+        return None
+    # Moyenne sur le poids présent, même règle que pour les axes eux-mêmes un
+    # cran plus haut : un sous-signal absent est exclu, pas compté à zéro.
+    weight = sum(_DEV_SUB_WEIGHTS[k] for k in present)
+    return sum(present[k] * _DEV_SUB_WEIGHTS[k] for k in present) / weight
+
+
+def _momentum(ratio: float | None) -> float | None:
+    """Ratio d'activité mis à l'échelle, 1.0 (rythme habituel) valant 0.5.
+
+    Un ratio de 0 avec une baseline réelle vaut 0.0 : le projet commitait et
+    s'est arrêté, ce qui est une observation. Le collector rend ``None`` — et
+    non 0 — quand la baseline elle-même est indisponible, donc les deux cas ne
+    se confondent pas ici.
+    """
+    if ratio is None:
+        return None
+    if ratio <= 0:
+        return 0.0
+    return max(0.0, min(1.0, 0.5 + 0.5 * math.log(ratio) / math.log(_MOMENTUM_SPAN)))
+
+
+def _freshness(days: int | None) -> float | None:
+    if days is None:
+        return None
+    if days <= _FRESH_DAYS:
+        return 1.0
+    if days >= _STALE_DAYS:
+        return 0.0
+    return 1.0 - (days - _FRESH_DAYS) / (_STALE_DAYS - _FRESH_DAYS)
+
+
 def score(features: Features) -> ScoreResult:
     sub: dict[str, float | None] = {
         "volume_growth": _norm_volume(features.volume_spike_ratio),
@@ -270,6 +385,13 @@ def score(features: Features) -> ScoreResult:
             unlock_pct=features.next_unlock_pct_supply,
             unlock_days=features.next_unlock_days,
             has_schedule=features.has_unlock_schedule,
+        ),
+        "developer_activity": _norm_developer_activity(
+            commit_ratio=features.commit_ratio_4w,
+            pr_ratio=features.pr_ratio_4w,
+            days_since_push=features.days_since_push,
+            star_growth=features.star_growth_pct_7d,
+            all_archived=features.all_repos_archived,
         ),
     }
     # Presence is read off the normalised values rather than re-derived from the

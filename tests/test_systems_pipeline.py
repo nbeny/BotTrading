@@ -7,16 +7,15 @@ stays None all the way out, and is never smoothed into a zero.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
-
 from service_modules import load_service_module
 
 sp = load_service_module("api-gateway", "systems_pipeline")
 
-NOW = datetime(2026, 7, 31, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 31, 12, 0, tzinfo=UTC)
 
 
 def _services(**overrides):

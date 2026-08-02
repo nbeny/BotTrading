@@ -10,8 +10,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import pytest
-
 _LIB = Path(__file__).resolve().parents[1] / "libs" / "cmi_common"
 if str(_LIB) not in sys.path:
     sys.path.insert(0, str(_LIB))
@@ -44,7 +42,7 @@ class _FakeCache:
 
 def _client(transport, cache) -> ClaudeClient:
     c = ClaudeClient("", "claude-haiku-4-5-20251001", cache=cache)
-    c._transport = transport  # noqa: SLF001 - swap in the fake
+    c._transport = transport
     return c
 
 
@@ -81,7 +79,7 @@ async def test_cooldown_when_no_reset_stamp(monkeypatch) -> None:
 
     transport = _FakeTransport(quota_times=1, reset_at=None)
     client = ClaudeClient("", "m", cache=None, quota_cooldown_s=900)
-    client._transport = transport  # noqa: SLF001
+    client._transport = transport
     resp = await client.complete(system="s", prompt="p", service="svc")
 
     assert resp.text == '{"ok": 1}'

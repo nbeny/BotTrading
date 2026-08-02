@@ -1,7 +1,8 @@
 import asyncio
 
-from cmi_common.auth import decode_token
 from tests.control_api_helpers import load_module
+
+from cmi_common.auth import decode_token
 
 
 def test_login_issues_decodable_token(monkeypatch) -> None:

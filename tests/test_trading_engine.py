@@ -1,11 +1,12 @@
 # tests/test_trading_engine.py
 import asyncio
 
-from cmi_common.events.base import Source
-from cmi_common.events.execution import ExecutionEvent, ExecutionKind
-from cmi_common.events.risk import RiskApprovedEvent
-from cmi_common.events.decision import Direction
 from tests.trading_helpers import load_module
+
+from cmi_common.events.base import Source
+from cmi_common.events.decision import Direction
+from cmi_common.events.execution import ExecutionKind
+from cmi_common.events.risk import RiskApprovedEvent
 
 
 class FakeCache:

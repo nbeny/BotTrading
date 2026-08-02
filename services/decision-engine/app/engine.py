@@ -152,6 +152,11 @@ class DecisionEngine:
             next_unlock_pct_supply=raw.get("next_unlock_pct_supply"),
             next_unlock_days=_unlock_days(raw),
             has_unlock_schedule=bool(raw.get("has_unlock_schedule")),
+            commit_ratio_4w=raw.get("commit_ratio_4w"),
+            pr_ratio_4w=raw.get("pr_ratio_4w"),
+            days_since_push=raw.get("days_since_push"),
+            star_growth_pct_7d=raw.get("star_growth_pct_7d"),
+            all_repos_archived=bool(raw.get("all_repos_archived")),
         )
         result = score(features)
         if result.opportunity_score < self._threshold:

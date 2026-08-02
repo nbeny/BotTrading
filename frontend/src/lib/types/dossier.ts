@@ -18,6 +18,7 @@ export const SCORE_AXES = [
   'liquidity_score',
   'positioning',
   'fundamentals',
+  'developer_activity',
 ] as const;
 
 export type ScoreAxis = (typeof SCORE_AXES)[number];
@@ -30,6 +31,7 @@ export const AXIS_LABELS: Record<ScoreAxis, string> = {
   liquidity_score: 'Liquidité',
   positioning: 'Positionnement',
   fundamentals: 'Fondamentaux',
+  developer_activity: 'Développement',
 };
 
 export interface TokenScore {

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -26,7 +26,7 @@ def test_windows_constant_matches_approved_set() -> None:
 
 
 def test_aggregate_no_decay_is_plain_mean() -> None:
-    now = datetime(2024, 1, 2, tzinfo=timezone.utc)
+    now = datetime(2024, 1, 2, tzinfo=UTC)
     rows = [
         BucketRow(
             now - timedelta(hours=1),
@@ -53,13 +53,13 @@ def test_aggregate_no_decay_is_plain_mean() -> None:
 
 
 def test_aggregate_empty_is_zeros() -> None:
-    now = datetime(2024, 1, 2, tzinfo=timezone.utc)
+    now = datetime(2024, 1, 2, tzinfo=UTC)
     out = aggregate_buckets([], now=now, half_life_h=None)
     assert out == {"mentions": 0, "avg": 0.0, "weighted_avg": 0.0, "engagement": 0.0}
 
 
 def test_aggregate_decay_weights_recent_more() -> None:
-    now = datetime(2024, 1, 2, tzinfo=timezone.utc)
+    now = datetime(2024, 1, 2, tzinfo=UTC)
     recent = BucketRow(
         now - timedelta(hours=1),
         mentions=1,
@@ -102,7 +102,7 @@ class _FakeSession:
 async def test_series_returns_exactly_points_gap_filled() -> None:
     from cmi_common.sources import SqlSentimentAggReader
 
-    now = datetime(2024, 1, 2, 10, 30, tzinfo=timezone.utc)
+    now = datetime(2024, 1, 2, 10, 30, tzinfo=UTC)
     current_hour = now.replace(minute=0, second=0, microsecond=0)
     two_ago = current_hour - timedelta(hours=2)
     # _fetch_buckets projects (bucket_start, mentions, score_sum, confidence_sum,
@@ -132,7 +132,7 @@ class _QueueSession:
 async def test_window_stats_unions_hourly_and_daily() -> None:
     from cmi_common.sources import SqlSentimentAggReader
 
-    now = datetime(2024, 6, 1, tzinfo=timezone.utc)
+    now = datetime(2024, 6, 1, tzinfo=UTC)
     hourly = [(now - timedelta(hours=1), 1, 1.0, 1.0, 1.0, 0.0)]  # recent
     daily = [(now - timedelta(days=200), 1, -1.0, 1.0, -1.0, 0.0)]  # aged-out
     # window_stats fetches hourly first, then daily.

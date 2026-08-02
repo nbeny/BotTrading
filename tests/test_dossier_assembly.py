@@ -8,14 +8,14 @@ score dans la direction de cette lecture.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from service_modules import load_service_module
 
 dossier = load_service_module("api-gateway", "dossier")
 
-NOW = datetime(2026, 8, 1, 9, 12, tzinfo=timezone.utc)
+NOW = datetime(2026, 8, 1, 9, 12, tzinfo=UTC)
 
 
 def _decision(**kw):
@@ -48,7 +48,9 @@ def test_measured_axes_are_reported_with_their_value() -> None:
     assert score["value"] == 84
     assert score["confidence"] == 0.62
     assert score["axes"]["positioning"] == 0.93
-    assert score["axes_total"] == 7
+    # Huit depuis developer_activity: axes_total est len(AXIS_KEYS), donc
+    # ce chiffre bouge avec la liste et pas avec ce qui est mesure.
+    assert score["axes_total"] == 8
     assert score["insufficient_evidence"] is False
 
 
@@ -120,7 +122,9 @@ def test_no_decision_reports_unknown_not_zero() -> None:
     assert score["value"] is None
     assert score["confidence"] is None
     assert score["axes"] == {}
-    assert score["axes_total"] == 7
+    # Huit depuis developer_activity: axes_total est len(AXIS_KEYS), donc
+    # ce chiffre bouge avec la liste et pas avec ce qui est mesure.
+    assert score["axes_total"] == 8
     assert score["computed_at"] is None
     assert score["insufficient_evidence"] is False, (
         "aucune décision n'est pas la même chose que des preuves insuffisantes : "

@@ -263,6 +263,24 @@ services:
       DEFILLAMA_POLL_INTERVAL: ${DEFILLAMA_POLL_INTERVAL:-600}
       DEFILLAMA_MAX_UNLOCK_FETCHES: ${DEFILLAMA_MAX_UNLOCK_FETCHES:-3}
 
+  collector-github:
+    <<: *service-defaults
+    build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/collector-github } }
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_POLL_INTERVAL: ${GITHUB_POLL_INTERVAL:-600}
+      GITHUB_MAX_REFRESH_PER_CYCLE: ${GITHUB_MAX_REFRESH_PER_CYCLE:-7}
+      GITHUB_UNIVERSE_SIZE: ${GITHUB_UNIVERSE_SIZE:-250}
+      GITHUB_LISTS_REFRESH_HOURS: ${GITHUB_LISTS_REFRESH_HOURS:-168}
+
   collector-binance-futures:
     <<: *service-defaults
     build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/collector-binance-futures } }
@@ -358,7 +376,17 @@ services:
       # config was changed to fix, and local reproduction of production is
       # impossible by construction.
       RISK_MIN_SCORE: ${RISK_MIN_SCORE:-70}
-      RISK_MIN_CONFIDENCE: ${RISK_MIN_CONFIDENCE:-0.41}
+      # Rescale une seconde fois, x0.92, a l'ajout du huitieme axe
+      # (developer_activity, 0.08): 0.55 x 0.75 x 0.92 = 0.3795. La chaine est
+      # recalculee depuis l'origine plutot que depuis le 0.41 affiche, qui
+      # etait deja un arrondi de 0.4125: rescaler un arrondi compose l'erreur.
+      # Meme raisonnement
+      # qu'au passage a sept axes, et il faut le refaire a chaque fois. Le
+      # plancher porte sur une somme *absolue* de poids: laisser 0.41 aurait
+      # rejete des symboles qui passaient, et — la taille de position etant
+      # lineaire en confiance — retreci toutes les positions approuvees de 8%.
+      # C'est la valeur operante: le defaut de rules.py est surcharge ici.
+      RISK_MIN_CONFIDENCE: ${RISK_MIN_CONFIDENCE:-0.3795}
       RISK_MAX_POSITION_PCT: ${RISK_MAX_POSITION_PCT:-0.05}
 
   trading-engine:

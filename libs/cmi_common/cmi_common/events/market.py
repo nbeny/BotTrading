@@ -1,5 +1,5 @@
-"""Market data events: price, volume, DEX activity, derivatives positioning
-and protocol fundamentals."""
+"""Market data events: price, volume, DEX activity, derivatives positioning,
+protocol fundamentals and developer activity."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from .base import BaseEvent, EventType
 
@@ -140,6 +140,77 @@ class FundamentalsEvent(BaseEvent):
     next_unlock_at: datetime | None = None
     next_unlock_pct_supply: float | None = Field(default=None, ge=0)
     has_unlock_schedule: bool = False
+
+    def partition_key(self) -> str:
+        return self.symbol
+
+
+class DeveloperEvent(BaseEvent):
+    """Activité de développement agrégée par token, sur ``market.developer.events``.
+
+    Tous les champs de mesure transportent des **ratios bruts**, pas des valeurs
+    mises à l'échelle : la mise à l'échelle vit dans ``decision-engine`` comme
+    pour les sept autres axes.
+
+    ``all_repos_archived`` est le seul zéro légitime de cette chaîne. Il dit
+    « on a regardé, tous les dépôts connus sont archivés ou forkés » — une
+    observation, à distinguer d'une absence de mesure, qui reste ``None``.
+    """
+
+    event_type: Literal[EventType.DEVELOPER] = EventType.DEVELOPER
+    symbol: str
+    coin_id: str = Field(
+        ...,
+        description=(
+            "CoinGecko id, e.g. 'aave' — joint directement Token.coin_id, comme "
+            "FundamentalsEvent."
+        ),
+    )
+    #: Dépôts retenus dans l'agrégat (archivés et forks exclus). Un décompte,
+    #: pas une mesure. ``0`` est légal et n'accompagne qu'un cas :
+    #: ``all_repos_archived=True``, où il dit « des dépôts existent, aucun n'est
+    #: vivant ». Quand *aucun* dépôt n'a pu être lu, le collector ne publie pas
+    #: d'événement du tout, plutôt qu'un événement à zéro. L'invariant est
+    #: imposé à la construction et au décodage par ``_validate_repo_count``
+    #: ci-dessous, pas seulement documenté : un événement qui le viole et
+    #: atteint Redis deviendrait infalsifiable après coup.
+    repo_count: int = Field(..., ge=0)
+    #: commits sur 4 semaines / (médiane hebdomadaire sur 52 semaines x 4).
+    #: 1.0 = rythme habituel. Borné en bas à 0 : c'est un rapport de comptages.
+    commit_ratio_4w: float | None = Field(default=None, ge=0)
+    pr_ratio_4w: float | None = Field(default=None, ge=0)
+    #: Jours depuis le push le plus récent, tous dépôts confondus.
+    days_since_push: int | None = Field(default=None, ge=0)
+    #: Croissance des étoiles sur 7 jours, en fraction (0.02 = +2 %). Peut être
+    #: négative : un dépôt perd des étoiles. Volontairement non bornée en bas,
+    #: contrairement aux ratios ci-dessus : c'est un flux, pas un décompte, et
+    #: un ``ge=0`` ajouté ici par excès de rigueur romprait la publication du
+    #: token entier au premier repo en perte d'étoiles -- même incident que
+    #: ``fees_24h_usd`` sur FundamentalsEvent.
+    star_growth_pct_7d: float | None = None
+    all_repos_archived: bool = False
+
+    @model_validator(mode="after")
+    def _validate_repo_count(self) -> DeveloperEvent:
+        """Runs on construction *and* on decode (``parse_event`` /
+        ``model_validate_json``), which is the half of this that matters: a
+        malformed message from someone else's producer on the topic must be
+        rejected too, not just a value we built ourselves.
+
+        Does **not** run on ``model_copy(update=...)`` -- Pydantic skips
+        validators on copy, so a collector patching a cached event that way
+        (this service's two-clock republish is a standing invitation to)
+        could still slip repo_count=0 past this check. See the same warning
+        left on ``collector-binance-futures``'s ``long_short_ratio`` for the
+        precedent this bit us on before.
+        """
+        if self.repo_count == 0 and not self.all_repos_archived:
+            raise ValueError(
+                "repo_count=0 requires all_repos_archived=True: a token with "
+                'no live repos is a measurement ("we looked, all archived"), '
+                "not the same as an event that was never emitted"
+            )
+        return self
 
     def partition_key(self) -> str:
         return self.symbol

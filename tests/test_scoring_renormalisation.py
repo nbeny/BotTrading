@@ -36,13 +36,18 @@ def test_weights_sum_to_one() -> None:
 def test_legacy_axes_keep_their_relative_proportions() -> None:
     # The rescale expresses no new opinion about the old model; it only makes
     # room. Any drift here is a silent recalibration.
+    #
+    # Two generations of rescale now: 0.75 when positioning and fundamentals
+    # landed, then 0.92 when developer_activity did. The product is what the
+    # legacy axes are worth today.
     for key, legacy in LEGACY_WEIGHTS.items():
-        assert abs(scoring.WEIGHTS[key] - legacy * 0.75) < 1e-9
+        assert abs(scoring.WEIGHTS[key] - legacy * 0.75 * 0.92) < 1e-9
 
 
 def test_new_axes_carry_the_freed_weight() -> None:
-    assert abs(scoring.WEIGHTS["positioning"] - 0.15) < 1e-9
-    assert abs(scoring.WEIGHTS["fundamentals"] - 0.10) < 1e-9
+    assert abs(scoring.WEIGHTS["positioning"] - 0.138) < 1e-9
+    assert abs(scoring.WEIGHTS["fundamentals"] - 0.092) < 1e-9
+    assert abs(scoring.WEIGHTS["developer_activity"] - 0.08) < 1e-9
 
 
 def test_a_symbol_missing_axes_is_scored_on_what_is_known() -> None:
@@ -60,7 +65,11 @@ def test_a_symbol_missing_axes_is_scored_on_what_is_known() -> None:
     )
     result = scoring.score(f)
     assert result.opportunity_score == 100
-    assert result.confidence == 0.75  # five of seven axes present
+    # Cinq axes sur huit. La valeur baisse de 0.75 a 0.69 non pas parce que
+    # la mesure a change, mais parce que le modele compte un axe de plus
+    # qui n'est pas mesure ici: la confiance est la part du modele
+    # adossee a une evidence propre au symbole.
+    assert result.confidence == 0.69
 
 
 def test_migration_identity_holds_on_unrounded_values() -> None:
@@ -159,7 +168,10 @@ def test_a_single_thin_axis_cannot_score_at_all() -> None:
 
 
 def test_the_lightest_legitimate_pair_still_scores() -> None:
-    # fundamentals (0.10) + liquidity (0.1125) = 0.2125, just over the floor.
+    # fundamentals (0.092) + liquidity (0.1035) = 0.1955, just over the
+    # floor of 0.184. Both moved together when developer_activity landed: a
+    # floor left at 0.20 would have dropped this pair without anyone deciding
+    # to make the gate stricter.
     result = scoring.score(
         scoring.Features(liquidity_usd=1_000_000.0, has_unlock_schedule=True)
     )

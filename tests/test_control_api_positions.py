@@ -1,9 +1,10 @@
 # tests/test_control_api_positions.py
 import asyncio
 
-from cmi_common.events.control import ControlCommand
 from tests.control_api_helpers import load_module
 from tests.test_control_api_settings import FakePublisher
+
+from cmi_common.events.control import ControlCommand
 
 
 class FakeReader:

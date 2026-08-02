@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from service_modules import load_service_module
 
 _activity = load_service_module("collector-github", "domain.activity")
@@ -26,6 +27,7 @@ def _stats(**kw):
         "pr_merged_4w": 8,
         "pr_merged_52w": 104,
         "stars_prev": 990,
+        "stars_prev_at": datetime(2026, 7, 26, tzinfo=UTC),
     }
     base.update(kw)
     return RepoStats(**base)
@@ -130,12 +132,81 @@ def test_days_since_push_just_beyond_clock_skew_tolerance_is_none():
     assert r != 0
 
 
+def test_days_since_push_at_exact_clock_skew_tolerance_boundary_is_zero():
+    """A la limite exacte (avance de 5 min pile), l'ecart n'est pas
+    strictement au-dela du seuil: 0, pas None. Pin le mutant qui changerait
+    `delta < -CLOCK_SKEW_TOLERANCE` en `<=`."""
+    pushed_at = NOW + timedelta(minutes=5)
+    r = days_since_push(_stats(pushed_at=pushed_at), NOW)
+    assert r == 0
+    assert r is not None
+
+
 def test_star_growth_is_none_on_first_snapshot():
     """Un delta demande deux observations. 0.0 inventerait une stagnation."""
-    g = star_growth_pct(_stats(stars=1000, stars_prev=None))
+    g = star_growth_pct(_stats(stars=1000, stars_prev=None), NOW)
     assert g is None
     assert g != 0.0
 
 
 def test_star_growth_can_be_negative():
-    assert star_growth_pct(_stats(stars=990, stars_prev=1000)) == -0.01
+    # stars_prev_at par defaut est a exactement 7 jours de NOW -> facteur de
+    # normalisation 1.0, la croissance brute et normalisee coincident.
+    assert star_growth_pct(_stats(stars=990, stars_prev=1000), NOW) == -0.01
+
+
+def test_star_growth_is_none_when_stars_is_none():
+    """stars absent (fetch partiel) alors que stars_prev existe deja: None,
+    pas de TypeError sur la soustraction. Pin le mutant qui retire ce garde."""
+    r = star_growth_pct(_stats(stars=None, stars_prev=990), NOW)
+    assert r is None
+
+
+def test_star_growth_is_none_when_stars_prev_is_exactly_zero():
+    """stars_prev=0 est courant pour un petit depot mappe recemment: doit
+    etre exclu au meme titre qu'un negatif, sans quoi c'est une
+    ZeroDivisionError. Pin le mutant qui changerait `<= 0` en `< 0`."""
+    r = star_growth_pct(_stats(stars=10, stars_prev=0), NOW)
+    assert r is None
+
+
+def test_star_growth_is_none_without_prev_timestamp():
+    """stars_prev existe mais sans horodatage: le delta ne peut pas etre
+    ramene a un taux, cadence round-robin oblige."""
+    r = star_growth_pct(_stats(stars=990, stars_prev=1000, stars_prev_at=None), NOW)
+    assert r is None
+    assert r != 0.0
+
+
+def test_star_growth_is_none_below_minimum_interval():
+    """Moins d'une heure entre deux snapshots: extrapoler a 7 jours
+    multiplierait le bruit par ~168. Pas assez de recul, donc None."""
+    stars_prev_at = NOW - timedelta(minutes=30)
+    r = star_growth_pct(
+        _stats(stars=1010, stars_prev=1000, stars_prev_at=stars_prev_at), NOW
+    )
+    assert r is None
+    assert r != 0.0
+
+
+def test_star_growth_is_none_when_prev_timestamp_is_in_the_future():
+    """stars_prev_at posterieur a now: intervalle negatif, horodatage
+    incoherent, taux indefini."""
+    stars_prev_at = NOW + timedelta(hours=1)
+    r = star_growth_pct(
+        _stats(stars=1010, stars_prev=1000, stars_prev_at=stars_prev_at), NOW
+    )
+    assert r is None
+    assert r != 0.0
+
+
+def test_star_growth_normalises_to_seven_days():
+    """1% de croissance brute observee sur 12h -> 14% une fois ramenee a
+    l'echelle 7 jours (7 j / 12 h = 14), l'echelle que revendiquent le champ
+    evenement star_growth_pct_7d et le seuil de scoring a 2%/7j. Sans cette
+    normalisation le meme delta se lirait 14x trop bas."""
+    stars_prev_at = NOW - timedelta(hours=12)
+    r = star_growth_pct(
+        _stats(stars=1010, stars_prev=1000, stars_prev_at=stars_prev_at), NOW
+    )
+    assert r == pytest.approx(0.14)

@@ -26,6 +26,18 @@ WEEKS_PER_YEAR = 52
 #: horodatage auquel on ne peut plus faire confiance.
 CLOCK_SKEW_TOLERANCE = timedelta(minutes=5)
 
+#: Durée sur laquelle `star_growth_pct` normalise son résultat, pour matcher
+#: le champ événement `star_growth_pct_7d` et le seuil de scoring qui le lit.
+STAR_GROWTH_NORMALISATION_WINDOW = timedelta(days=7)
+
+#: En dessous de cet intervalle entre deux snapshots, extrapoler à 7 jours
+#: multiplierait le bruit par un facteur ~168 (7 j / <1 h) : on n'a pas encore
+#: assez de recul pour affirmer quoi que ce soit sur un taux. Une heure est le
+#: bon ordre de grandeur au vu du cycle round-robin de 12h — largement en
+#: dessous du plus petit intervalle réel entre deux relevés, donc sans jamais
+#: rejeter une mesure légitime.
+MIN_STAR_GROWTH_INTERVAL = timedelta(hours=1)
+
 
 @dataclass(frozen=True, slots=True)
 class RepoStats:
@@ -45,10 +57,18 @@ class RepoStats:
     pr_merged_52w: int | None = None
     #: Étoiles au snapshot précédent. None au premier passage.
     stars_prev: int | None = None
+    #: Horodatage de ce snapshot précédent. Sans lui, un delta ne peut pas
+    #: être ramené à un taux : la cadence round-robin fait varier l'intervalle
+    #: (un repo qui rate son tour sur un 202 ou une erreur saute une fenêtre).
+    stars_prev_at: datetime | None = None
 
 
-def _ratio(recent: int | None, expected: float | None) -> float | None:
-    if recent is None or expected is None or expected <= 0:
+def _ratio(recent: int | None, expected: float) -> float | None:
+    # `expected` est un float non optionnel : les deux appelants calculent sa
+    # valeur seulement après avoir écarté l'absence de leur propre baseline,
+    # donc le None ne peut pas atteindre cette fonction — mypy le garantit
+    # désormais à la place d'un `if` mort à l'exécution.
+    if recent is None or expected <= 0:
         # expected <= 0 : le ratio est indéfini. Le rendre infini (ou 1.0 au
         # motif que « tout commit est une accélération ») inventerait une
         # lecture à partir d'une division impossible.
@@ -89,6 +109,10 @@ def days_since_push(stats: RepoStats, now: datetime) -> int | None:
     valeur inventée — mais seulement une fois la tolérance de gigue d'horloge
     dépassée ; en-deçà, une avance de quelques secondes ou minutes est un
     dépôt qui vient tout juste d'être poussé, et vaut 0.
+
+    ``now`` doit être *aware* (avec fuseau), comme ``pushed_at`` : soustraire
+    un naïf d'un aware lève ``TypeError``. C'est le cas de tous les appelants
+    de production ; ce n'est simplement pas vérifié ici.
     """
     if stats.pushed_at is None:
         return None
@@ -98,12 +122,32 @@ def days_since_push(stats: RepoStats, now: datetime) -> int | None:
     return max(0, delta.days)
 
 
-def star_growth_pct(stats: RepoStats) -> float | None:
-    """Croissance relative des étoiles depuis le snapshot précédent.
+def star_growth_pct(stats: RepoStats, now: datetime) -> float | None:
+    """Croissance des étoiles depuis le snapshot précédent, normalisée sur 7 jours.
 
     ``None`` au premier passage : un delta demande deux observations, et un 0.0
     y affirmerait une stagnation qu'on n'a pas observée.
+
+    Le rafraîchissement est round-robin sur 12h et variable (un dépôt qui
+    répond 202 ou en erreur saute son tour), donc l'intervalle réel entre
+    ``stars_prev_at`` et ``now`` n'est jamais garanti être 7 jours. Le nom du
+    champ événement (``star_growth_pct_7d``) et le seuil de scoring
+    (``0.3 + 0.7·clamp(growth / 0.02, 0, 1)``, calibré pour 2 % sur 7 jours)
+    supposent pourtant tous deux cette durée. Sans normalisation, un delta
+    mesuré sur ~12h serait comparé à un seuil pensé pour 7 jours — environ 14
+    fois trop petit — et pousserait systématiquement ce sous-signal vers le
+    bas de sa bande plutôt que de l'exclure : pire qu'une absence, au sens où
+    ce module est construit pour l'éviter.
     """
     if stats.stars is None or stats.stars_prev is None or stats.stars_prev <= 0:
         return None
-    return (stats.stars - stats.stars_prev) / stats.stars_prev
+    if stats.stars_prev_at is None:
+        return None
+    interval = now - stats.stars_prev_at
+    if interval < MIN_STAR_GROWTH_INTERVAL:
+        # Couvre aussi bien l'intervalle trop court (peu de recul, bruit
+        # amplifié ~168x en extrapolant à 7 jours) que l'intervalle nul ou
+        # négatif (horodatage incohérent) : les deux rendent le taux indéfini.
+        return None
+    raw_growth = (stats.stars - stats.stars_prev) / stats.stars_prev
+    return raw_growth * (STAR_GROWTH_NORMALISATION_WINDOW / interval)

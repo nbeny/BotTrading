@@ -73,8 +73,9 @@ TOPIC_PARTITIONS = {
     Topic.DERIVATIVES: 6,
     # One event per protocol per 10 min: far quieter than the price topics.
     Topic.FUNDAMENTALS: 3,
-    # One event per token per collector cycle (hours, not minutes): the
-    # quietest market topic, on par with fundamentals.
+    # Published from cache every 600s (GitHub itself is refreshed round-robin
+    # over 12h) so the entry outlives FeatureStore's 900s TTL: same cadence and
+    # same reason as fundamentals.
     Topic.DEVELOPER: 3,
     Topic.NEWS: 6,
     Topic.SOCIAL: 6,

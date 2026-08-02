@@ -29,7 +29,12 @@ def test_measures_default_to_none_not_zero():
     assert e.event_type == EventType.DEVELOPER
 
 
-def test_round_trip_preserves_none():
+def test_round_trip_through_the_discriminated_union():
+    """`model_validate_json` alone would still pass if DeveloperEvent were
+    dropped from `AnyEvent` -- it bypasses the discriminator entirely. Going
+    through `parse_event` is what would have caught the JournalEntryEvent
+    failure mode: missing from the union, publishes fine, fails on
+    consumption."""
     e = DeveloperEvent(
         source=Source.GITHUB,
         symbol="AAVE",
@@ -40,6 +45,7 @@ def test_round_trip_preserves_none():
     )
     back = parse_event(e.as_kafka_value())
     assert isinstance(back, DeveloperEvent)
+    assert back.repo_count == 2
     assert back.commit_ratio_4w == 1.5
     assert back.pr_ratio_4w is None
     assert back.days_since_push == 3
@@ -50,16 +56,34 @@ def test_topic_is_registered():
     assert TOPIC_EVENT[Topic.DEVELOPER] is DeveloperEvent
 
 
-def test_ratios_reject_negatives():
-    """Un ratio est un rapport de comptages: negatif = bug amont, pas une mesure."""
+@pytest.mark.parametrize("field", ["commit_ratio_4w", "pr_ratio_4w", "days_since_push"])
+def test_ratios_reject_negatives(field):
+    """Ces trois champs sont des rapports ou des décomptes de comptages:
+    negatif = bug amont, pas une mesure."""
     with pytest.raises(ValidationError):
         DeveloperEvent(
             source=Source.GITHUB,
             symbol="AAVE",
             coin_id="aave",
             repo_count=1,
-            commit_ratio_4w=-0.5,
+            **{field: -1},
         )
+
+
+def test_star_growth_accepts_negatives():
+    """Contrairement aux trois champs ci-dessus, star_growth_pct_7d est un
+    flux (un dépôt peut perdre des étoiles), pas un décompte -- il doit rester
+    non borné en bas. C'est l'incident fees_24h_usd sous un autre nom: un
+    ``ge=0`` ajouté ici romprait la publication du token entier au premier
+    repo en perte d'étoiles."""
+    e = DeveloperEvent(
+        source=Source.GITHUB,
+        symbol="AAVE",
+        coin_id="aave",
+        repo_count=1,
+        star_growth_pct_7d=-0.05,
+    )
+    assert e.star_growth_pct_7d == -0.05
 
 
 def test_events_partition_by_symbol():
@@ -72,6 +96,21 @@ def test_events_partition_by_symbol():
         ).partition_key()
         == "ETH"
     )
+
+
+def test_zero_repos_requires_all_archived():
+    """repo_count=0 n'est légal qu'accompagné de all_repos_archived=True (« on
+    a regardé, tout est mort »). Sans ce garde-fou à la construction, un
+    collector pourrait publier repo_count=0 sans avoir rien regardé, et
+    l'événement deviendrait infalsifiable une fois dans Redis."""
+    with pytest.raises(ValidationError):
+        DeveloperEvent(
+            source=Source.GITHUB,
+            symbol="AAVE",
+            coin_id="aave",
+            repo_count=0,
+            all_repos_archived=False,
+        )
 
 
 def test_a_measured_zero_and_an_absent_field_stay_distinct():
@@ -94,8 +133,10 @@ def test_a_measured_zero_and_an_absent_field_stay_distinct():
             source=Source.GITHUB,
             symbol="XYZ",
             coin_id="xyz",
-            repo_count=0,
+            repo_count=2,
         ).as_kafka_value()
     )
-    assert all_dead.all_repos_archived != never_looked.all_repos_archived
-    assert all_dead.commit_ratio_4w is None and never_looked.commit_ratio_4w is None
+    assert all_dead.all_repos_archived is True
+    assert never_looked.all_repos_archived is False
+    assert all_dead.commit_ratio_4w is None
+    assert never_looked.commit_ratio_4w is None

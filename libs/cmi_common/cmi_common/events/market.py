@@ -7,7 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from .base import BaseEvent, EventType
 
@@ -170,7 +170,10 @@ class DeveloperEvent(BaseEvent):
     #: pas une mesure. ``0`` est légal et n'accompagne qu'un cas :
     #: ``all_repos_archived=True``, où il dit « des dépôts existent, aucun n'est
     #: vivant ». Quand *aucun* dépôt n'a pu être lu, le collector ne publie pas
-    #: d'événement du tout, plutôt qu'un événement à zéro.
+    #: d'événement du tout, plutôt qu'un événement à zéro. L'invariant est
+    #: imposé à la construction par ``_validate_repo_count`` ci-dessous, pas
+    #: seulement documenté : un événement qui le viole et atteint Redis
+    #: deviendrait infalsifiable après coup.
     repo_count: int = Field(..., ge=0)
     #: commits sur 4 semaines / (médiane hebdomadaire sur 52 semaines x 4).
     #: 1.0 = rythme habituel. Borné en bas à 0 : c'est un rapport de comptages.
@@ -179,9 +182,23 @@ class DeveloperEvent(BaseEvent):
     #: Jours depuis le push le plus récent, tous dépôts confondus.
     days_since_push: int | None = Field(default=None, ge=0)
     #: Croissance des étoiles sur 7 jours, en fraction (0.02 = +2 %). Peut être
-    #: négative : un dépôt perd des étoiles.
+    #: négative : un dépôt perd des étoiles. Volontairement non bornée en bas,
+    #: contrairement aux ratios ci-dessus : c'est un flux, pas un décompte, et
+    #: un ``ge=0`` ajouté ici par excès de rigueur romprait la publication du
+    #: token entier au premier repo en perte d'étoiles -- même incident que
+    #: ``fees_24h_usd`` sur FundamentalsEvent.
     star_growth_pct_7d: float | None = None
     all_repos_archived: bool = False
+
+    @model_validator(mode="after")
+    def _validate_repo_count(self) -> DeveloperEvent:
+        if self.repo_count == 0 and not self.all_repos_archived:
+            raise ValueError(
+                "repo_count=0 requires all_repos_archived=True: a token with "
+                'no live repos is a measurement ("we looked, all archived"), '
+                "not the same as an event that was never emitted"
+            )
+        return self
 
     def partition_key(self) -> str:
         return self.symbol

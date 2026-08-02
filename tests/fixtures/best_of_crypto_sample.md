@@ -18,3 +18,8 @@
 
 - [GitHub](https://github.com/bitcoin/bitcoin):
 </details>
+
+<details><summary><b>no-title-link</b> - titre non lie, corps avec un lien.</summary>
+
+<p><a href="https://github.com/someone/else">miroir</a></p>
+</details>

@@ -355,7 +355,6 @@ class TelegramProvider:
             text = (getattr(msg, "message", None) or "").strip()
             if not text:
                 continue  # media-only post: nothing to score
-            views = getattr(msg, "views", None)
             items.append(
                 RawItem(
                     source=self.name,
@@ -366,9 +365,7 @@ class TelegramProvider:
                     text=text[:MAX_TEXT],
                     url=f"https://t.me/{handle}/{msg_id}",
                     author=handle,
-                    # Views are absent on non-broadcast peers. None means "not
-                    # measured"; 0.0 would mean "measured, nobody read it".
-                    engagement=float(views) if views is not None else None,
+                    engagement=_engagement(msg),
                     published_at=getattr(msg, "date", None),
                     # Symbols are left to the collector's normalizer, which sees
                     # every provider and overwrites whatever is set here.
@@ -376,6 +373,46 @@ class TelegramProvider:
             )
         self._cursor[channel] = highest
         return items
+
+
+def _engagement(msg: Any) -> float | None:
+    """Reach of one post: the sum of the counters Telegram actually reported.
+
+    Views alone understate it — a forward carries the call to another desk and a
+    reaction is the cheapest signal a reader can leave — but the three are
+    independently optional: views are absent on non-broadcast peers, forwards on
+    a peer that disallows them, reactions on a channel that turned them off.
+
+    So the sum runs over what is *present*. An absent counter contributes
+    nothing, and all three absent gives ``None``, never ``0.0``: the value lands
+    in ``content_sentiment_agg.engagement_sum``, which weights the social signal
+    feeding decision-engine, where "nobody engaged" and "Telegram did not say"
+    move the score in opposite ways.
+
+    Read through ``getattr`` like the rest of the mapping: these fields are
+    optional on telethon's own message object, not merely optional in principle.
+    """
+    counters = (
+        getattr(msg, "views", None),
+        getattr(msg, "forwards", None),
+        _reaction_count(getattr(msg, "reactions", None)),
+    )
+    reported = [float(c) for c in counters if c is not None]
+    return sum(reported) if reported else None
+
+
+def _reaction_count(reactions: Any) -> int | None:
+    """Reactions across every emoji, or ``None`` when there is no block at all.
+
+    The absent-vs-empty distinction is the whole point. ``reactions is None`` is
+    Telegram saying nothing; a block whose ``results`` is empty is Telegram
+    saying "reactions are enabled and nobody used one", which is a measured zero
+    and belongs in the sum.
+    """
+    if reactions is None:
+        return None
+    results = getattr(reactions, "results", None) or []
+    return sum(int(getattr(r, "count", 0) or 0) for r in results)
 
 
 def _reason(exc: Exception) -> str:

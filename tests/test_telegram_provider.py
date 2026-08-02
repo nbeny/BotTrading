@@ -77,14 +77,36 @@ ERRORS = SimpleNamespace(
 
 
 def _msg(
-    msg_id: int, text: str, *, views: int | None = 10, date: datetime | None = None
+    msg_id: int,
+    text: str,
+    *,
+    views: int | None = 10,
+    date: datetime | None = None,
+    **extra: Any,
 ) -> Any:
+    """A message carrying only the attributes it is given.
+
+    `forwards` and `reactions` go through ``**extra`` rather than being defaulted
+    parameters on purpose: a real telethon message can be missing them entirely,
+    and a fake that always sets them would never exercise the ``getattr``
+    fallbacks the provider reads them through.
+    """
     return SimpleNamespace(
         id=msg_id,
         message=text,
         views=views,
         date=date or datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
+        **extra,
     )
+
+
+def _reactions(*counts: int) -> Any:
+    """Telethon's ``MessageReactions``: ``.results``, each row with a ``.count``.
+
+    Called with no arguments it is the case the whole distinction turns on — a
+    reactions block that *is* present and reports nothing.
+    """
+    return SimpleNamespace(results=[SimpleNamespace(count=c) for c in counts])
 
 
 class FakeClient:
@@ -219,15 +241,75 @@ async def test_maps_messages_and_leaves_symbols_to_the_normalizer() -> None:
     assert it.symbols == []  # the collector's normalizer owns symbol resolution
 
 
-async def test_absent_views_stay_none_rather_than_zero() -> None:
-    # A post with no view count is unmeasured, not unread. Scoring excludes an
-    # absent axis but prices a 0.0 as worst-case evidence.
+# --- engagement: views + forwards + reactions, over what was reported -----
+
+
+async def test_engagement_sums_every_counter_telegram_reported() -> None:
+    # Views alone understate reach: a forward carries the call to another desk
+    # and a reaction is the cheapest signal a reader can leave.
+    client = FakeClient(
+        messages={
+            "alpha": [_msg(1, "call", views=10, forwards=3, reactions=_reactions(4, 2))]
+        }
+    )
+    provider = _provider(client)
+
+    items = await provider.fetch()
+
+    assert items[0].engagement == 19.0
+
+
+async def test_no_counter_at_all_is_not_measured_rather_than_zero() -> None:
+    # A post is unmeasured here, not unread: views are absent on non-broadcast
+    # peers, and the message carries neither `forwards` nor `reactions` at all.
+    # `engagement` feeds `content_sentiment_agg.engagement_sum`, which weights
+    # the social signal — a 0.0 is the claim "nobody engaged", and would drag
+    # the weighted signal down on evidence Telegram never supplied.
     client = FakeClient(messages={"alpha": [_msg(1, "call", views=None)]})
     provider = _provider(client)
 
     items = await provider.fetch()
 
     assert items[0].engagement is None
+
+
+async def test_one_present_counter_is_not_diluted_by_the_absent_ones() -> None:
+    # An absent counter contributes nothing — it must not be summed in as a 0
+    # and it must not drag the total to None either.
+    client = FakeClient(messages={"alpha": [_msg(1, "call", views=None, forwards=7)]})
+    provider = _provider(client)
+
+    items = await provider.fetch()
+
+    assert items[0].engagement == 7.0
+
+
+async def test_a_present_but_empty_reactions_block_is_a_measured_zero() -> None:
+    # The distinction the whole function exists for: `reactions is None` means
+    # Telegram said nothing, while a block with an empty `results` is Telegram
+    # saying "reactions are on and nobody used one" — a reading, not a silence.
+    client = FakeClient(
+        messages={"alpha": [_msg(1, "call", views=None, reactions=_reactions())]}
+    )
+    provider = _provider(client)
+
+    items = await provider.fetch()
+
+    # Zero, and specifically not None: `None == 0.0` is False, so this pins the
+    # side of the distinction the block falls on with nothing else absent.
+    assert items[0].engagement == 0.0
+
+
+async def test_reactions_are_summed_across_every_kind() -> None:
+    # `results` is one row per emoji; only their total is engagement.
+    client = FakeClient(
+        messages={"alpha": [_msg(1, "call", views=None, reactions=_reactions(1, 2, 3))]}
+    )
+    provider = _provider(client)
+
+    items = await provider.fetch()
+
+    assert items[0].engagement == 6.0
 
 
 async def test_media_only_posts_are_skipped() -> None:

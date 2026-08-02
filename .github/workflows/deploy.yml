@@ -41,7 +41,9 @@ jobs:
             tests/test_scorer_diagnostics.py \
             tests/test_sonnet_budget.py \
             tests/test_collector_runtime.py \
+            tests/test_collector_social_main.py \
             tests/test_control_api_turnstile.py \
+            tests/test_control_api_collectors.py \
             tests/test_derivatives_fundamentals_events.py \
             tests/test_shared_universe.py \
             tests/test_defillama_unlocks.py \

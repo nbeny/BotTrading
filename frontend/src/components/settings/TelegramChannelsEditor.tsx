@@ -23,7 +23,32 @@ const STALE_AFTER_MS = 15 * 60 * 1000;
  *  parent panel. */
 const AGE_TICK_MS = 30_000;
 
-function SourceHealth({ status, now }: { status: SourceStatus | undefined; now: number }) {
+function SourceHealth({
+  status,
+  now,
+  enabled,
+}: {
+  status: SourceStatus | undefined;
+  now: number;
+  enabled: boolean;
+}) {
+  // Switched off outranks every reading, and is checked before them: the poll
+  // loop skips the provider entirely, so the durable key stops moving at the
+  // exact moment it stops meaning anything. Whatever it still holds — a green,
+  // a fault, an hour-old stamp — describes the last cycle before the operator
+  // pulled the switch, and rendering any of it would report on a source that
+  // is not running.
+  if (!enabled) {
+    return (
+      <Chip
+        size="small"
+        variant="outlined"
+        data-testid="telegram-health"
+        label="Source coupée — aucune collecte en cours"
+      />
+    );
+  }
+
   // Absent from `source_status` = never reported. Not healthy, not broken —
   // unknown, and said so rather than painted green.
   if (!status) {
@@ -72,6 +97,11 @@ export interface TelegramChannelsEditorProps {
   channels: string[];
   /** `undefined` when Telegram has never published health. */
   status: SourceStatus | undefined;
+  /** Whether the platform switch is on, i.e. whether the loop still polls.
+   *  The list stays editable either way — configuring the desk before turning
+   *  it on is the natural order — but the health readout does not, since a key
+   *  nothing rewrites cannot describe a running source. */
+  enabled: boolean;
   busy: boolean;
   /** Posts the **complete** list; resolves true when the server accepted it. */
   onSave: (channels: string[]) => Promise<boolean>;
@@ -80,6 +110,7 @@ export interface TelegramChannelsEditorProps {
 export function TelegramChannelsEditor({
   channels,
   status,
+  enabled,
   busy,
   onSave,
 }: TelegramChannelsEditorProps) {
@@ -114,7 +145,7 @@ export function TelegramChannelsEditor({
         <Typography variant="body2" sx={{ fontWeight: 700 }}>
           Canaux Telegram
         </Typography>
-        <SourceHealth status={status} now={now} />
+        <SourceHealth status={status} now={now} enabled={enabled} />
       </Stack>
 
       {channels.length === 0 ? (

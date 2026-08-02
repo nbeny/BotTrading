@@ -90,10 +90,13 @@ export function SourcesPanel() {
     if (!rt) return null;
     const enabled = kind === 'social' ? rt.social_enabled : rt.news_enabled;
     const platforms = rt.known_platforms[kind] ?? [];
-    // The channel list only governs anything while Telegram is actually being
-    // polled, so it follows both switches rather than sitting there inert.
-    const showTelegram =
-      kind === 'social' && enabled && platforms.includes('telegram') && (rt.platforms.telegram ?? true);
+    // Deliberately independent of the Telegram switch: the desk is set up
+    // first and turned on second, and hiding the editor until the source is
+    // live forces the reverse — the provider then polls the seed list for as
+    // long as it takes the operator to fix it. The editor renders the switch
+    // state instead, which is also the moment the health key freezes.
+    const telegramOn = rt.platforms.telegram ?? true;
+    const showTelegram = kind === 'social' && enabled && platforms.includes('telegram');
     return (
       <Box>
         <FormControlLabel
@@ -133,6 +136,7 @@ export function SourcesPanel() {
           <TelegramChannelsEditor
             channels={rt.telegram_channels ?? []}
             status={rt.source_status?.telegram}
+            enabled={telegramOn}
             busy={busy}
             onSave={(channels) => patch({ telegram_channels: channels })}
           />

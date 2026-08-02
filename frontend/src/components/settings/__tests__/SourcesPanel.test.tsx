@@ -188,6 +188,40 @@ describe('SourcesPanel — santé de la source Telegram', () => {
     expect(screen.queryByTestId('telegram-health-reason')).not.toBeInTheDocument();
   });
 
+  /** Couper la plateforme est exactement la condition qui fige la clé : la
+   *  boucle saute le provider, donc plus rien ne réécrit `collectors:status`.
+   *  Le dernier relevé n’est alors ni vivant, ni un défaut — il est hors sujet. */
+  describe('plateforme coupée', () => {
+    const offWith = (st: Partial<SourceStatus>) =>
+      runtime({ platforms: { telegram: false }, source_status: { telegram: status(st) } });
+
+    it('annonce la source coupée au lieu de la peindre en vert', async () => {
+      await mount(offWith({ ok: true }));
+
+      const health = screen.getByTestId('telegram-health');
+      expect(health).toHaveTextContent('Source coupée');
+      expect(health).not.toHaveTextContent('Source active');
+    });
+
+    it('n’affiche pas un défaut hérité du dernier cycle', async () => {
+      await mount(offWith({ ok: false, reason: 'all 2 configured channels are unreadable' }));
+
+      const health = screen.getByTestId('telegram-health');
+      expect(health).toHaveTextContent('Source coupée');
+      expect(health).not.toHaveTextContent(/défaut/);
+      expect(screen.queryByTestId('telegram-health-reason')).not.toBeInTheDocument();
+    });
+
+    it('ne parle pas de lecture figée : la source est coupée, pas en panne de relevé', async () => {
+      await mount(offWith({ updated_at: new Date(Date.now() - 3_600_000).toISOString() }));
+
+      const health = screen.getByTestId('telegram-health');
+      expect(health).toHaveTextContent('Source coupée');
+      expect(health).not.toHaveTextContent('Lecture figée');
+      expect(screen.queryByTestId('telegram-health-age')).not.toBeInTheDocument();
+    });
+  });
+
   it('signale un canal écarté et rend sa raison atteignable', async () => {
     await mount(
       runtime({
@@ -207,14 +241,32 @@ describe('SourcesPanel — santé de la source Telegram', () => {
 });
 
 describe('SourcesPanel — visibilité de l’éditeur', () => {
-  it('masque l’éditeur quand la plateforme Telegram est coupée', async () => {
-    api.runtime.mockResolvedValue(runtime({ platforms: { telegram: false } }));
-    api.aiQuota.mockResolvedValue({ paused: false, resume_at: null, workers: [] });
-    render(<SourcesPanel />);
+  /** Le cas « le pupitre se prépare avant d’être branché » : la liste doit être
+   *  configurable tant que la catégorie sociale est active, sans quoi il faut
+   *  allumer Telegram d’abord — et le provider interroge alors la liste
+   *  d’amorçage en attendant. */
+  const off = () => runtime({ platforms: { telegram: false } });
 
-    await screen.findByText('Sources de données');
-    await waitFor(() => expect(screen.getByText('Bluesky')).toBeInTheDocument());
-    expect(screen.queryByText('Canaux Telegram')).not.toBeInTheDocument();
+  it('affiche l’éditeur même quand la plateforme Telegram est coupée', async () => {
+    await mount(off());
+
+    expect(screen.getByText('Canaux Telegram')).toBeInTheDocument();
+    expect(screen.getByText('bwenews')).toBeInTheDocument();
+  });
+
+  it('laisse éditer la liste alors que la plateforme est coupée', async () => {
+    await mount(off());
+
+    fireEvent.change(screen.getByLabelText('Ajouter un canal'), {
+      target: { value: '@NewDesk' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Ajouter' }));
+
+    await waitFor(() =>
+      expect(api.setRuntime).toHaveBeenCalledWith({
+        telegram_channels: ['bwenews', 'whalechart', '@NewDesk'],
+      }),
+    );
   });
 
   it('masque l’éditeur quand toute la catégorie sociale est coupée', async () => {

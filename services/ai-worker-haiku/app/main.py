@@ -45,6 +45,7 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
             Topic.SENTIMENT,
             Topic.DERIVATIVES,
             Topic.FUNDAMENTALS,
+            Topic.DEVELOPER,
         ],
         worker.handle,
         group_id="ai-worker-haiku",

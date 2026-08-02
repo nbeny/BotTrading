@@ -7,30 +7,20 @@ environment (and out of CI, which installs no service dependencies).
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 from datetime import UTC, datetime
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from service_modules import load_service_module
 
-_spec = importlib.util.spec_from_file_location(
-    "telegram_provider",
-    Path(__file__).resolve().parents[1]
-    / "services"
-    / "collector-social"
-    / "app"
-    / "providers"
-    / "telegram.py",
-)
-tg = importlib.util.module_from_spec(_spec)
-assert _spec.loader
-sys.modules[_spec.name] = tg
-_spec.loader.exec_module(tg)
+from cmi_common.sources import RateLimitedError
 
-from cmi_common.sources import RateLimitedError  # noqa: E402
+# The shared loader, not a hand-rolled `importlib` block: it registers the
+# service's `app` package (and `app.providers`) under a per-service alias, so a
+# relative import added to `telegram.py` tomorrow resolves against *this*
+# service rather than whichever one happened to load its `app` first.
+tg = load_service_module("collector-social", "providers.telegram")
 
 # --- fake telethon -------------------------------------------------------
 
@@ -124,10 +114,19 @@ class FakeClient:
         self._entities = entities or {}
         self._resolve_error = resolve_error
         self._authorized = authorized
+        # Setup faults, settable after construction. `connect` and
+        # `is_user_authorized` are both network round trips, so both raise on an
+        # ordinary flap — and neither has published the client anywhere yet.
+        self.connect_error: Exception | None = None
+        self.auth_error: Exception | None = None
         # Set *after* construction to break a client that already connected —
         # the only way to reproduce a fault that appears mid-life, which is the
         # case `_ensure_client`'s short-circuit makes invisible.
         self.fail_with: Exception | None = None
+        # Per-channel history failures, for the case `fail_with` cannot express:
+        # a cycle that reads some channels *successfully* and then aborts on a
+        # later one. That asymmetry is the whole subject of the cursor tests.
+        self.fail_channels: dict[str, Exception] = {}
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.resolved: list[str] = []
         self.disconnected = False
@@ -138,9 +137,13 @@ class FakeClient:
 
     async def connect(self) -> None:
         self.connects += 1
+        if self.connect_error is not None:
+            raise self.connect_error
 
     async def is_user_authorized(self) -> bool:
         self.auth_checks += 1
+        if self.auth_error is not None:
+            raise self.auth_error
         return self._authorized
 
     async def disconnect(self) -> None:
@@ -166,6 +169,8 @@ class FakeClient:
         async def _gen() -> Any:
             if self.fail_with is not None:
                 raise self.fail_with
+            if handle in self.fail_channels:
+                raise self.fail_channels[handle]
             for m in msgs:
                 yield m
 
@@ -326,6 +331,7 @@ async def test_cursor_advances_so_the_next_cycle_only_pulls_new_posts() -> None:
     provider = _provider(client)
 
     first = await provider.fetch()
+    await provider.commit()  # what AdaptivePollLoop does once they are stored
     client._messages["alpha"].append(_msg(6, "c"))
     second = await provider.fetch()
 
@@ -343,9 +349,140 @@ async def test_cursor_advances_past_media_only_posts() -> None:
     provider = _provider(client)
 
     await provider.fetch()
+    await provider.commit()
     await provider.fetch()
 
     assert client.calls[1][1]["min_id"] == 9
+
+
+# --- the cursor is a claim that the items were persisted ------------------
+#
+# Telegram is the only provider in this repo holding a consumption cursor.
+# Every other one re-reads a window each cycle and lets
+# UNIQUE(source, external_id) absorb the overlap — an argument that covers a
+# restart but not an aborted cycle, because there the cursor moved forward while
+# nothing was written. AdaptivePollLoop catches the exception and `continue`s
+# without ever calling `insert_items`, so the items are discarded; if the cursor
+# advanced anyway, the next cycle's `min_id` skips straight past them and they
+# can never be fetched again. No exception, no log, no metric.
+
+
+async def test_an_aborted_cycle_leaves_the_earlier_channels_cursors_untouched() -> None:
+    # The reachable case: a FloodWaitError on channel k of 24, every 300s. The
+    # channels walked *before* it were read into the local list and are about to
+    # be thrown away with the exception — their cursors must not have moved.
+    client = FakeClient(
+        messages={"alpha": [_msg(1, "a"), _msg(2, "b")], "beta": [_msg(5, "c")]}
+    )
+    client.fail_channels["beta"] = FloodWaitError(30)
+    provider = _provider(client, cache=FakeCache(["alpha", "beta"]))
+
+    with pytest.raises(RateLimitedError):
+        await provider.fetch()  # the loop discards whatever `fetch` had read
+
+    client.fail_channels.clear()
+    items = await provider.fetch()
+
+    # Both of alpha's messages come back. Nothing was persisted, so nothing may
+    # have been skipped.
+    assert sorted(i.external_id.split(":")[1] for i in items) == ["1", "2", "5"]
+    assert "min_id" not in client.calls[-2][1]
+
+
+async def test_a_mid_cycle_unauthorized_leaves_the_earlier_cursors_untouched() -> None:
+    # Same shape, different abort: the session is revoked from the phone while
+    # the walk is halfway through. `fetch` raises, the loop discards the items.
+    client = FakeClient(messages={"alpha": [_msg(1, "a")], "beta": [_msg(2, "b")]})
+    client.fail_channels["beta"] = AuthKeyUnregisteredError("revoked")
+    provider = _provider(client, cache=FakeCache(["alpha", "beta"]))
+
+    with pytest.raises(RuntimeError, match="TELEGRAM_SESSION"):
+        await provider.fetch()
+
+    client.fail_channels.clear()
+    items = await provider.fetch()
+
+    assert sorted(i.external_id.split(":")[1] for i in items) == ["1", "2"]
+
+
+async def test_a_cycle_whose_items_were_never_persisted_is_read_again() -> None:
+    # The half part (a) cannot reach: `fetch` returns cleanly, the loop calls
+    # `insert_items`, and *that* raises — a transient DB failure, which
+    # AdaptivePollLoop's own comment documents as an expected path. The provider
+    # never hears about it, so the advance has to stay pending until it does.
+    client = FakeClient(messages={"alpha": [_msg(1, "a"), _msg(2, "b")]})
+    provider = _provider(client)
+
+    first = await provider.fetch()  # loop: insert_items raises -> no commit()
+    second = await provider.fetch()
+
+    assert [i.external_id for i in first] == [i.external_id for i in second]
+    assert "min_id" not in client.calls[1][1]
+
+
+async def test_commit_is_what_advances_the_cursor() -> None:
+    # The other side of the same seam: once the loop confirms the items are
+    # durable, the next cycle must not re-read them.
+    client = FakeClient(messages={"alpha": [_msg(1, "a"), _msg(2, "b")]})
+    provider = _provider(client)
+
+    await provider.fetch()
+    await provider.commit()
+    second = await provider.fetch()
+
+    assert second == []
+    assert client.calls[1][1]["min_id"] == 2
+
+
+async def test_committing_a_cycle_does_not_replay_an_earlier_discarded_one() -> None:
+    # A channel read *successfully* in a discarded cycle, then dropped from the
+    # list, has nothing persisted. Its stale advance must not ride along on the
+    # commit of a later, unrelated cycle: re-adding the channel would then skip
+    # exactly the posts that were thrown away. Only the walk that produced the
+    # committed items may advance anything — the pending set is replaced by each
+    # cycle, not accumulated across them.
+    client = FakeClient(
+        messages={"alpha": [_msg(1, "a")], "beta": [_msg(7, "b")], "gamma": []}
+    )
+    cache = FakeCache(["alpha", "beta", "gamma"])
+    provider = _provider(client, cache=cache)
+
+    client.fail_channels["gamma"] = FloodWaitError(5)
+    with pytest.raises(RateLimitedError):
+        await provider.fetch()  # alpha and beta were read, then discarded
+
+    client.fail_channels.clear()
+    cache.set_channels(["alpha"])  # operator drops beta and gamma
+    await provider.fetch()
+    await provider.commit()  # commits alpha only
+
+    cache.set_channels(["beta"])  # ...and puts beta back
+    items = await provider.fetch()
+
+    assert [i.external_id.split(":")[1] for i in items] == ["7"]
+
+
+async def test_a_cycle_that_polls_nobody_commits_nothing() -> None:
+    # The early return for an empty list is still a cycle the loop commits: it
+    # persists `[]` successfully and calls `commit()`. Advances left pending by
+    # a *discarded* cycle must not be applied by it — clearing the list is the
+    # likeliest way to reach this, and re-adding the channel afterwards would
+    # then skip exactly the posts that were thrown away.
+    client = FakeClient(messages={"alpha": [_msg(3, "a")]})
+    cache = FakeCache(["alpha"])
+    provider = _provider(client, cache=cache)
+
+    await provider.fetch()  # completes, staging alpha -> 3...
+    # ...and the loop's `insert_items` raises, so `commit` is never called.
+
+    cache.set_channels([])  # operator clears the list
+    assert await provider.fetch() == []
+    await provider.commit()
+
+    cache.set_channels(["alpha"])
+    items = await provider.fetch()
+
+    assert [i.external_id.split(":")[1] for i in items] == ["3"]
 
 
 async def test_flood_wait_becomes_rate_limited_with_telegrams_own_delay() -> None:
@@ -386,6 +523,57 @@ async def test_unresolvable_channel_is_dropped_without_killing_the_cycle(
     # Second cycle must not spend another ResolveUsername call on the dead one.
     await provider.fetch()
     assert client.resolved == ["alpha"]
+
+
+# --- client setup hangs up on every path out ------------------------------
+#
+# `_ensure_client` publishes to `self._client` only on the very last line, so
+# anything raising before that leaves a client `_drop_client` cannot reach. The
+# loop backs off 120s and builds another; over a multi-hour outage that is
+# hundreds of dangling clients and sockets.
+
+
+async def test_a_failed_connect_is_hung_up_rather_than_stranded() -> None:
+    client = FakeClient(messages={"alpha": [_msg(1, "a")]})
+    client.connect_error = ConnectionResetError("connection reset by peer")
+    provider = _provider(client)
+
+    with pytest.raises(ConnectionResetError):
+        await provider.fetch()
+
+    assert client.disconnected
+
+
+async def test_an_authorization_check_that_raises_is_hung_up_too() -> None:
+    # The one that actually happens: `is_user_authorized` is an MTProto round
+    # trip, so a network flap raises here routinely — and here the client is
+    # already *connected*, which the `returned False` path below hangs up but
+    # the raising path did not.
+    client = FakeClient(messages={"alpha": [_msg(1, "a")]})
+    client.auth_error = TimeoutError("no response from the datacenter")
+    provider = _provider(client)
+
+    with pytest.raises(TimeoutError):
+        await provider.fetch()
+
+    assert client.disconnected
+
+
+async def test_the_next_cycle_builds_a_fresh_client_after_a_setup_failure() -> None:
+    # Nothing was cached, so the recovery path is a rebuild — the same shape as
+    # the mid-life revocation, reached without ever having a usable client.
+    client = FakeClient(messages={"alpha": [_msg(1, "a")]})
+    client.auth_error = TimeoutError("no response from the datacenter")
+    provider = _provider(client)
+
+    with pytest.raises(TimeoutError):
+        await provider.fetch()
+
+    client.auth_error = None
+    items = await provider.fetch()
+
+    assert [i.author for i in items] == ["alpha"]
+    assert (client.connects, client.auth_checks) == (2, 2)
 
 
 async def test_unauthorized_session_raises_instead_of_reporting_silence() -> None:

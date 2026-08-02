@@ -28,6 +28,25 @@ class Provider(Protocol):
 
     async def close(self) -> None: ...
 
+    # There is a third, *optional* method the loop honours but this protocol
+    # deliberately does not require: ``async def commit(self) -> None``.
+    #
+    # Most providers re-read a window each cycle and let
+    # UNIQUE(source, external_id) absorb the overlap — a restart costs one
+    # duplicate read and nothing else, so there is nothing to confirm and
+    # nothing to implement. A provider that instead holds a **consumption
+    # cursor** (Telegram's ``min_id``, the only one in this repo) is in a
+    # different position: advancing that cursor is a claim that the items were
+    # persisted, and the provider cannot make that claim. Returning from
+    # ``fetch`` proves only that the items were *read* — they still have to
+    # survive normalization and ``insert_items``, and ``AdaptivePollLoop``
+    # discards them on any failure in between without telling the provider.
+    #
+    # So such a provider holds its advances pending between ``fetch`` and
+    # ``commit``, and the loop calls ``commit`` once ``insert_items`` has
+    # returned. Kept off the protocol so the providers that do not need it stay
+    # untouched; ``AdaptivePollLoop`` probes for it with ``getattr``.
+
 
 # A rate-limit pause is never legitimately longer than this. Header values are
 # capped at it so an epoch-style ``X-RateLimit-Reset`` (a huge absolute

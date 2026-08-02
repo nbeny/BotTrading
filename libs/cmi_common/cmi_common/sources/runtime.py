@@ -9,6 +9,7 @@ collectors run fully out of the box.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Iterable
 from typing import Any
 
@@ -75,6 +76,17 @@ _INVITE_MARKERS = ("+", "joinchat")
 
 _LINK_PREFIXES = ("https://t.me/", "http://t.me/", "t.me/", "@")
 
+#: Telegram's own username grammar: 4 to 32 of letters, digits and underscore.
+#: Stripping the `t.me/` prefix is not validation — `https://t.me/name/1234`, a
+#: *message* permalink, survives it as `name/1234`, and copying one of those out
+#: of the app is far more common than copying an invite link. Anything that is
+#: not a username resolves to nothing, so it is written off for the life of the
+#: process after the operator has already been told the save succeeded: the same
+#: permanent, silent write-off the invite-link guard above exists to prevent.
+#: Matched case-insensitively — the handle is lowercased before it gets here,
+#: and the rule must not quietly depend on that.
+_USERNAME_RE = re.compile(r"[A-Za-z0-9_]{4,32}")
+
 
 def source_status_key(platform: str) -> str:
     """Redis key a provider publishes its own health under.
@@ -94,9 +106,9 @@ def normalize_channel(target: str) -> str:
     byte-identical to what the poll loop resolves, or a saved channel silently
     polls nothing.
 
-    Raises ``ValueError`` on a blank entry or an invite link. What that means is
-    the caller's call, and the two callers want opposite things — see
-    ``parse_channels``.
+    Raises ``ValueError`` on a blank entry, an invite link, or anything that is
+    not a Telegram username. What that means is the caller's call, and the two
+    callers want opposite things — see ``parse_channels``.
     """
     handle = target.strip().rstrip("/")
     for prefix in _LINK_PREFIXES:
@@ -106,8 +118,18 @@ def normalize_channel(target: str) -> str:
     handle = handle.lower()
     if not handle:
         raise ValueError("empty channel name")
+    # Before the grammar check, which `+AbCdEf` and `joinchat/AbCdEf` would also
+    # fail: the invite-link message names the actual problem, and telling an
+    # operator who pasted an invite link that it is not a valid username sends
+    # them looking for a typo that is not there.
     if any(marker in handle for marker in _INVITE_MARKERS):
         raise ValueError(f"unsupported invite link: {target!r}")
+    if not _USERNAME_RE.fullmatch(handle):
+        raise ValueError(
+            f"not a Telegram channel username: {handle!r} (from {target!r}) — "
+            "expected 4 to 32 letters, digits or underscores; a message link "
+            "like t.me/name/1234 is not a channel, use t.me/name"
+        )
     return handle
 
 

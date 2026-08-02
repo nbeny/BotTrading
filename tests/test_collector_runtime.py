@@ -148,6 +148,47 @@ def test_normalize_channel_rejects_a_blank_entry() -> None:
         runtime.normalize_channel("  ")
 
 
+def test_normalize_channel_rejects_a_message_permalink() -> None:
+    """Copying a *message* link out of Telegram is far more common than copying
+    an invite link, and stripping the `t.me/` prefix leaves `name/1234` — which
+    resolves to nothing. Accepted, the operator gets a 200, sees the handle in
+    the chip list, and the provider writes it off for the life of the process:
+    exactly the outcome the invite-link guard exists to prevent."""
+    for bad in (
+        "https://t.me/binancekillers/1234",
+        "t.me/coinbureau/9",
+        "https://t.me/s/durov",  # the web-preview form, same trap
+    ):
+        with pytest.raises(ValueError):
+            runtime.normalize_channel(bad)
+
+
+def test_normalize_channel_rejects_anything_outside_telegrams_grammar() -> None:
+    """A username is 4-32 of `[A-Za-z0-9_]`. Nothing downstream validates it, so
+    whatever passes here is what the provider spends a ResolveUsername call on
+    every restart before writing it off."""
+    for bad in ("@coin bureau", "a", "abc", "coin-bureau", "coin.bureau", "a" * 33):
+        with pytest.raises(ValueError):
+            runtime.normalize_channel(bad)
+
+
+def test_normalize_channel_accepts_the_edges_of_the_grammar() -> None:
+    # The bounds are inclusive on both ends, and `_` is a legal username char —
+    # a rule tightened past Telegram's own would reject handles that do resolve.
+    assert runtime.normalize_channel("abcd") == "abcd"
+    assert runtime.normalize_channel("a" * 32) == "a" * 32
+    assert runtime.normalize_channel("@Fat_Pig_Signals1") == "fat_pig_signals1"
+
+
+def test_every_seeded_channel_satisfies_the_rule_the_terminal_enforces() -> None:
+    """The seed is what the operator is handed, and the first save from the
+    terminal sends it straight back through `normalize_channel`. A seed entry
+    the validator rejects would 422 that save."""
+    assert runtime.TELEGRAM_SEED_CHANNELS
+    for handle in runtime.TELEGRAM_SEED_CHANNELS:
+        assert runtime.normalize_channel(handle) == handle
+
+
 def test_dedupe_channels_keeps_the_first_occurrence() -> None:
     assert runtime.dedupe_channels(["b", "a", "b"]) == ["b", "a"]
 

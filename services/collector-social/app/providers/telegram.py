@@ -17,6 +17,7 @@ from __future__ import annotations
 import inspect
 import logging
 from collections.abc import Callable
+from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
 
@@ -134,11 +135,37 @@ class TelegramProvider:
         # unique index absorbs the overlap.
         self._entities: dict[str, Any] = {}
         self._cursor: dict[str, int] = {}
+        # Advances read by the last completed cycle, held until the loop
+        # confirms the items reached the database. See `commit`.
+        self._pending: dict[str, int] = {}
         # Handle -> why it was written off; see `_write_off`.
         self._dead: dict[str, str] = {}
 
     async def close(self) -> None:
         await self._drop_client()
+
+    async def commit(self) -> None:
+        """Fold the last cycle's advances into the cursors. Called by the loop.
+
+        The cursor is a claim that these messages are in `raw_content`, and this
+        provider is not in a position to make it: `fetch` returning proves only
+        that they were *read*. AdaptivePollLoop still has to normalize and
+        `insert_items` them, and it discards them on any failure in between —
+        the DB blip its own comment documents as an expected path — without
+        telling the provider anything. So it says so afterwards, here.
+
+        Advancing before that confirmation loses messages permanently and
+        silently: the items are dropped while `min_id` has already moved past
+        them, so the next cycle never asks for them again. No exception, no log,
+        no metric — the read simply never happens.
+
+        Optional on the `Provider` protocol (see `cmi_common.sources.provider`):
+        every other provider re-reads a window each cycle and lets
+        UNIQUE(source, external_id) absorb the overlap, so it has no claim to
+        confirm. Telegram is the only one here holding a consumption cursor.
+        """
+        self._cursor.update(self._pending)
+        self._pending = {}
 
     async def fetch(self) -> list[RawItem]:
         """One poll cycle, whose outcome is always published before it returns.
@@ -164,6 +191,14 @@ class TelegramProvider:
             raise
 
     async def _poll_cycle(self) -> list[RawItem]:
+        # Anything still staged belongs to a cycle the loop never committed,
+        # which means it never persisted it either — the advance is void, and
+        # this cycle is about to re-read that window from `self._cursor`. Cleared
+        # here rather than only on the way out, because the early return below
+        # is still a cycle the loop commits: it persists `[]` successfully and
+        # calls `commit`, which would otherwise apply a dead advance for a
+        # channel this cycle never even looked at.
+        self._pending = {}
         channels = await self._configured_channels()
         self._expire_write_offs(channels)
         if not channels:
@@ -174,11 +209,18 @@ class TelegramProvider:
             return []
         client, errors = await self._ensure_client()
         items: list[RawItem] = []
+        # Staged, not applied: a channel's advance is only meaningful together
+        # with the items of every channel walked after it, because the loop
+        # takes the cycle's items as one batch or not at all. Committing channel
+        # k's cursor while channel k+1 is still to be read means a flood wait
+        # there — likely, with 24 channels every 300s — discards k's messages
+        # with the cursor already past them.
+        advanced: dict[str, int] = {}
         for channel in channels:
             if channel in self._dead:
                 continue
             try:
-                items.extend(await self._fetch_channel(client, channel))
+                items.extend(await self._fetch_channel(client, channel, advanced))
             except errors.FloodWaitError as exc:
                 # Telegram states the pause it wants, in seconds. Hand it to the
                 # loop instead of walking the remaining channels into the wall.
@@ -203,6 +245,10 @@ class TelegramProvider:
                 self._write_off(channel, _reason(exc))
         ok, reason = self._verdict(channels)
         await self._publish_status(ok=ok, reason=reason)
+        # The walk completed, so `items` is the whole batch the loop will take
+        # and these advances describe exactly it — no more, since the stage was
+        # cleared above, and no less. They stay pending until `commit`.
+        self._pending = advanced
         return items
 
     async def _configured_channels(self) -> list[str]:
@@ -292,8 +338,22 @@ class TelegramProvider:
         if self._client is not None and self._errors is not None:
             return self._client, self._errors
         client, errors = self._factory()
-        await client.connect()
-        if not await client.is_user_authorized():
+        try:
+            await client.connect()
+            authorized = await client.is_user_authorized()
+        except BaseException:
+            # Both calls are network round trips — `is_user_authorized` is an
+            # MTProto request, so an ordinary flap raises there — and neither
+            # has published the client to `self._client` yet, so `_drop_client`
+            # would find nothing to hang up. The loop then backs off 120s and
+            # builds another: over a multi-hour outage, hundreds of dangling
+            # clients and sockets. Suppressed on the way out because the fault
+            # the operator has to see is the one being re-raised, not a
+            # disconnect that failed for the same underlying reason.
+            with suppress(Exception):
+                await _disconnect(client)
+            raise
+        if not authorized:
             # Drop the socket here, not via `_drop_client`: the failed client was
             # never published to self._client, so that would have nothing to hang
             # up and every backed-off retry would leak a connection.
@@ -332,7 +392,9 @@ class TelegramProvider:
         except ValueError as exc:
             raise UnresolvableChannelError(_reason(exc)) from exc
 
-    async def _fetch_channel(self, client: Any, channel: str) -> list[RawItem]:
+    async def _fetch_channel(
+        self, client: Any, channel: str, advanced: dict[str, int]
+    ) -> list[RawItem]:
         entity = self._entities.get(channel)
         if entity is None:
             entity = await self._resolve(client, channel)
@@ -340,6 +402,8 @@ class TelegramProvider:
         handle = getattr(entity, "username", None) or channel
         peer_id = getattr(entity, "id", channel)
 
+        # `self._cursor`, never `self._pending`: an uncommitted advance is
+        # exactly the window that has to be read again.
         last = self._cursor.get(channel)
         kwargs: dict[str, Any] = {
             "limit": self._backfill if last is None else self._max_per_cycle
@@ -371,7 +435,7 @@ class TelegramProvider:
                     # every provider and overwrites whatever is set here.
                 )
             )
-        self._cursor[channel] = highest
+        advanced[channel] = highest
         return items
 
 

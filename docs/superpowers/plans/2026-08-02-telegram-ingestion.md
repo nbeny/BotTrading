@@ -25,11 +25,11 @@ Ce qui a réellement été fait, et où lire la vérité :
 | Tâche du plan | Devenu |
 |---|---|
 | **1** — canaux dans `collectors:runtime` | fait tel quel (`8b9854f`) |
-| **2** — mapper pur `telegram_map.py` | **abandonné.** Le provider existant teste déjà la règle absent/zéro (`test_absent_views_stay_none_rather_than_zero`) ; extraire un mapper aurait été du refactoring sans gain. |
+| **2** — mapper pur `telegram_map.py` | **abandonné.** Le provider existant teste déjà la règle absent/zéro (`test_no_counter_at_all_is_not_measured_rather_than_zero`) ; extraire un mapper aurait été du refactoring sans gain. |
 | **3** — `TelegramProvider` | existait déjà, et en mieux : cache d'entités, mise à l'écart des canaux irrésolubles, import Telethon paresseux. Remplacé par **D1** (liste relue à chaque cycle) et **D2** (clé de santé). |
 | **4** — câblage | existait déjà. `TELEGRAM_POLL_INTERVAL` abandonné (non demandé, non utilisé). |
 | **5** — control-api | fait en **D3**, avec deux écarts assumés : plafond à **50** et non 25 (la graine compte 24 canaux, 25 ne laissait de place que pour un ajout), et `normalize_channel` vit dans `cmi_common.sources.runtime`, pas dans `collectors.py` — control-api n'a pas le droit d'importer un collecteur, et deux normalisations divergentes laisseraient l'opérateur saisir un handle que le provider n'interroge jamais. |
-| **6** — terminal | inchangé, reste à faire |
+| **6** — terminal | **fait** (`079500b`, `b8fd308`) : éditeur de canaux et pastille de santé dans `SourcesPanel`, l'éditeur restant accessible même plateforme coupée — sinon on ne peut plus corriger la liste qui a motivé la coupure. |
 | **7** — déploiement | largement apporté par le merge. `deploy.yml` n'est **pas** modifié pour les secrets (il n'en transporte aucun) mais il lance une **liste explicite de fichiers de test** en CI, ce que ce plan avait manqué. |
 
 S'y ajoute **D2b**, absente du plan d'origine : une revue de qualité a trouvé que la clé de

@@ -57,6 +57,15 @@ class AdaptivePollLoop:
         max_calls, window = self._provider.rate_limit
         name = self._provider.name
         kind = self._provider.kind
+        # Optional capability, deliberately not part of the `Provider` protocol.
+        # Most providers re-read a window every cycle and let
+        # UNIQUE(source, external_id) absorb the overlap, so they have nothing
+        # to confirm. A provider that instead holds a *consumption cursor* has:
+        # a cursor is a claim that the data was persisted, and only this loop
+        # knows whether it was. `fetch` returning is not that claim — the items
+        # still have to survive the normalizer and `insert_items`, and every
+        # path out of the `except` blocks below discards them silently.
+        commit = getattr(self._provider, "commit", None)
         while True:
             # Operator toggle (collectors:runtime) — skip a cycle when this
             # platform or its whole category is disabled from the UI.
@@ -77,6 +86,11 @@ class AdaptivePollLoop:
                 # Persist inside the try so a transient DB failure backs off
                 # like any other error instead of silently killing this loop.
                 inserted = await self._repo.insert_items(items)
+                if commit is not None:
+                    # The items are durable now, and only now may a cursor say
+                    # so. Inside the try for the same reason as the persist:
+                    # a failure here backs off rather than killing the loop.
+                    await commit()
             except RateLimitedError as exc:
                 wait = exc.retry_after if exc.retry_after is not None else window
                 UPSTREAM_REQUESTS.labels(self._service, name, "ratelimit").inc()

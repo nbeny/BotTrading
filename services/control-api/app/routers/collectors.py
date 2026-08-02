@@ -44,9 +44,13 @@ _PENDING_WHERE = (
 #: anyone has to think about the poll interval.
 MAX_TELEGRAM_CHANNELS = 50
 
-#: Platforms whose provider publishes a health blob of its own. Only Telegram
-#: does today; keying by platform lets the others join without a contract change.
-_STATUS_PLATFORMS = ("telegram",)
+#: Platforms probed for a health blob of their own. Derived from the canonical
+#: list rather than enumerated here: a hardcoded tuple drops a new provider's
+#: health silently — no error, no failing test, just a source that never reports
+#: — which is the same drift CLAUDE.md documents for the three axis lists. Only
+#: Telegram publishes today, so most of these are misses; that costs a dozen
+#: Redis GETs per call, and `_source_status` already omits what is absent.
+_STATUS_PLATFORMS = tuple(p for ps in KNOWN_PLATFORMS.values() for p in ps)
 
 
 def _cache(request: Request):

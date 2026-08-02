@@ -12,3 +12,9 @@ htmlcov/
 .coverage
 docs/
 tests/
+# Telethon login session: a full account credential, git-ignored for the same
+# reason. Harmless today because the Dockerfiles copy only `libs/cmi_common` and
+# one service directory, but `.env.example` promises it stays out of the images
+# too — that half was enforced by the build layout, not by a rule.
+*.session
+*.session-journal

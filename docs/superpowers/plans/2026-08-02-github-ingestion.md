@@ -1562,7 +1562,9 @@ class GithubRepoSnapshot(Base):
     __table_args__ = (Index("ix_github_snapshot_repo", "owner", "repo", "observed_at"),)
 ```
 
-Vérifier que `Float`, `Integer`, `Text` et `Index` sont bien importés en tête du fichier ; les ajouter à l'import `from sqlalchemy import ...` sinon.
+Aucun import à ajouter : `Boolean`, `DateTime`, `Float`, `Index`, `Integer`, `String` et
+`Text` figurent déjà dans le `from sqlalchemy import (...)` en tête de `models.py`
+(vérifié sur la branche).
 
 `migrations/alembic/versions/0017_github_activity.py` :
 
@@ -2778,10 +2780,18 @@ def test_developer_event_does_not_trigger_scoring() -> None:
     """Contexte, pas declencheur: scorer un symbole dont on n'a pas le prix
     inventerait une opportunite a partir d'une statistique de depot.
 
-    _ready est une staticmethod prenant le dict de features.
+    _ready est une staticmethod exigeant has_market ET has_signal; aucune cle
+    developer_* n'appartient a l'une ou l'autre liste, donc la propriete tient
+    par construction. Ce test la fige contre un elargissement futur.
     """
     assert hw.HaikuWorker._ready({"commit_ratio_4w": 1.5}) is False
 ```
+
+> **Ne pas relâcher `_ready`.** Il exige `has_market` (`price_change_pct_24h` ou
+> `liquidity_usd`) **et** `has_signal` (`sentiment_score`, `has_social` ou
+> `volume_spike_ratio`). Ajouter une clé `developer_*` à l'une de ces listes ferait scorer
+> des symboles sur une statistique de dépôt sans prix — exactement ce que le commentaire
+> de `DerivativesEvent` interdit dans le même fichier.
 
 - [ ] **Step 2 : lancer le test, vérifier qu'il échoue**
 

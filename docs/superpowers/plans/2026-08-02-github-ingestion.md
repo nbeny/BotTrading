@@ -670,6 +670,10 @@ class CoinActivity:
     days_since_push: int | None
     star_growth_pct_7d: float | None
     all_repos_archived: bool
+    #: Un `pushed_at` existait mais a été rejeté (horloge décalée). N'entre pas
+    #: dans l'événement : c'est un signal d'observabilité pour l'appelant, qui
+    #: seul a le droit d'incrémenter un compteur.
+    push_timestamp_rejected: bool = False
 
 
 def _is_live(stats: RepoStats) -> bool:
@@ -727,13 +731,21 @@ def aggregate(repos: Sequence[RepoStats], now: datetime) -> CoinActivity | None:
         pr_merged_52w=_sum_or_none([r.pr_merged_52w for r in live]),
         stars_prev=_sum_or_none([r.stars_prev for r in live]),
     )
+    freshness = days_since_push(merged, now)
     return CoinActivity(
         repo_count=len(live),
         commit_ratio_4w=commit_ratio(merged),
         pr_ratio_4w=pr_ratio(merged),
-        days_since_push=days_since_push(merged, now),
-        star_growth_pct_7d=star_growth_pct(merged),
+        days_since_push=freshness,
+        star_growth_pct_7d=star_growth_pct(merged, now),
         all_repos_archived=False,
+        # Rapporté, pas compté : ce module reste pur, et c'est l'appelant qui
+        # incrémente la métrique. L'horodatage existait mais n'a pas été cru —
+        # horloge décalée au-delà de CLOCK_SKEW_TOLERANCE. Sans cette
+        # remontée la perte serait invisible : freshness pèse 0.25 de l'axe,
+        # et une dérive d'horloge l'annule pour *tous* les dépôts récemment
+        # poussés d'un coup, l'axe se renormalisant en silence sur 0.75.
+        push_timestamp_rejected=merged.pushed_at is not None and freshness is None,
     )
 
 
@@ -2134,12 +2146,25 @@ class GitHubCollector:
                 for snap in [await self._store.latest(o, r) for o, r in pairs]
                 if snap is not None
             ]
-            activity = aggregate(snapshots, now)
+            try:
+                activity = aggregate(snapshots, now)
+            except Exception as exc:  # noqa: BLE001
+                # aggregate() est pur mais pas total : un snapshot partiel
+                # (stars absent alors que stars_prev existe) ou un horodatage
+                # naïf y lèvent TypeError. Hors de ce try, l'exception sortait
+                # de la boucle et coûtait le cycle aux ~249 autres tokens —
+                # la garde plus bas ne couvrait que la construction de
+                # l'événement, pas le calcul qui la précède.
+                UNMEASURED.labels(SERVICE, "aggregate", type(exc).__name__).inc()
+                logger.error("github: %s — agrégation impossible: %s", symbol, exc)
+                continue
             if activity is None:
                 # Aucun dépôt lu pour ce symbole. Publier un événement à zéro
                 # transformerait « pas encore mesuré » en « aucune activité »,
                 # et l'axe pèserait alors contre le token.
                 continue
+            if activity.push_timestamp_rejected:
+                UNMEASURED.labels(SERVICE, "days_since_push", "clock_skew").inc()
             try:
                 event = DeveloperEvent(
                     source=Source.GITHUB,
@@ -2191,7 +2216,18 @@ git commit -m "feat(collector-github): cycle deux horloges, publication depuis l
 **Files:**
 - Create: `services/collector-github/app/infrastructure/store.py`, `lists_client.py`, `app/main.py`
 - Modify: `docker-compose.yml`, `docker-compose.vps.yml`, `.env.example`
+- Modify: `.github/workflows/deploy.yml` — **ne pas oublier**
 - Test: `tests/test_github_store.py`
+
+> **L'entrée CI n'est pas optionnelle.** Chaque service du dépôt figure dans
+> `strategy.matrix.include` de `deploy.yml`. Sans la sienne, `docker-compose.vps.yml`
+> référencerait `ghcr.io/nbeny/bottrading-collector-github:latest`, une image que la CI ne
+> construit jamais, et le déploiement VPS échouerait au `pull` — après un build vert.
+> Ajouter, en respectant l'alignement des colonnes existantes :
+>
+> ```yaml
+>           - { name: collector-github,      dockerfile: docker/Dockerfile,     path: services/collector-github }
+> ```
 
 - [ ] **Step 1 : écrire le test qui échoue**
 

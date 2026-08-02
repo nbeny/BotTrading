@@ -26,20 +26,36 @@ class CoinActivity:
     repo_count: int
     commit_ratio_4w: float | None
     pr_ratio_4w: float | None
-    #: La plus petite valeur (le push le plus récent) parmi les dépôts dont
-    #: l'horodatage a été cru — jamais calculée sur un horodatage agrégé.
-    #: Un dépôt à l'horloge décalée est écarté individuellement, pas laissé
-    #: contaminer les autres : sans ça, un seul dépôt mal daté écraserait la
-    #: fraîcheur mesurée de tous les dépôts sains du même coin, jetant une
-    #: donnée correcte pour éviter d'en publier une fausse alors qu'écarter
-    #: le seul dépôt fautif suffit.
+    #: Fraîcheur en jours, la plus petite valeur crue parmi les dépôts vivants.
     days_since_push: int | None
     star_growth_pct_7d: float | None
     all_repos_archived: bool
-    #: Un `pushed_at` existait mais a été rejeté (horloge décalée). N'entre pas
-    #: dans l'événement : c'est un signal d'observabilité pour l'appelant, qui
-    #: seul a le droit d'incrémenter un compteur.
+    #: Au moins un dépôt avait un horodatage, mais il a été rejeté (horloge
+    #: décalée). Signal d'observabilité pour l'appelant, qui seul a le droit
+    #: d'incrémenter un compteur — voir le calcul dans `aggregate()`.
     push_timestamp_rejected: bool = False
+
+    @property
+    def has_measurement(self) -> bool:
+        """Vrai si au moins une des quatre mesures a été effectivement lue.
+
+        ``all_repos_archived=True`` doit rester une mesure ici, pas une
+        absence : ses zéros (``commit_ratio_4w=0.0``, ``pr_ratio_4w=0.0``)
+        sont un constat — « on a regardé, tout est mort » — au même titre
+        qu'une croissance ou une fraîcheur positive. Un prédicat fondé sur la
+        vérité booléenne des champs (``0.0`` est *falsy*) laisserait tomber
+        ce seul zéro légitime de toute la chaîne ; d'où la clause explicite
+        plutôt qu'un simple ``any(... is not None ...)`` sur les quatre
+        champs, qui suppose sans le garantir que la branche « tout archivé »
+        continuera à les poser à ``0.0``.
+        """
+        return (
+            self.all_repos_archived
+            or self.commit_ratio_4w is not None
+            or self.pr_ratio_4w is not None
+            or self.days_since_push is not None
+            or self.star_growth_pct_7d is not None
+        )
 
 
 def _is_live(stats: RepoStats) -> bool:
@@ -53,21 +69,30 @@ def _is_live(stats: RepoStats) -> bool:
     return not stats.archived and not stats.is_fork
 
 
-def _sum_or_none(values: Sequence[int | float | None]) -> int | float | None:
-    """Somme, ou None si *aucune* valeur n'a été mesurée.
+def _paired_sums(
+    pairs: Sequence[tuple[int | float, int | float]],
+) -> tuple[int | float | None, int | float | None]:
+    """Somme le numérateur et le dénominateur sur le *même* sous-ensemble.
 
-    Les None individuels (dépôt en 202) sont ignorés plutôt que de contaminer
-    tout l'agrégat : deux dépôts mesurés sur trois valent mieux qu'aucune
-    lecture. Mais zéro dépôt mesuré ne vaut pas 0.
+    Ne jamais sommer les deux côtés d'un ratio indépendamment : Task 5 exige
+    ``len(weeks) >= 4`` pour ``commits_4w`` mais ``>= 8`` pour
+    ``commits_median_52w`` à partir du même appel API, donc un dépôt jeune de
+    4 à 7 semaines a des commits mesurés sans médiane. Sommer chaque champ
+    sur son propre sous-ensemble de dépôts présents ferait alors comparer les
+    commits récents de ce dépôt à la baseline d'un *autre* dépôt — une valeur
+    qui n'a jamais été mesurée sur aucun repo. Côté PR c'est pire :
+    ``pr_merged_4w`` et ``pr_merged_52w`` viennent de deux appels
+    ``/search/issues`` indépendants sur le seau de recherche, fragile aux
+    limites de débit, donc l'un des deux peut manquer sans l'autre.
 
-    Sert aussi bien des comptages entiers (``commits_4w``) que des médianes
-    hebdomadaires (``commits_median_52w``) : dans les deux cas la somme des
-    valeurs par dépôt est la meilleure estimation de l'ensemble, et la seule
-    différence entre les deux usages était une annotation de type que rien
-    ne fait respecter — `mypy` ne tourne nulle part dans ce dépôt.
+    Un dépôt qui n'a que la moitié de la paire sort donc de l'agrégat pour ce
+    ratio entier, pas seulement du côté qui manque : on ne peut pas dire si
+    ses commits sont rapides ou lents sans sa propre baseline. Même position
+    que ``_ratio`` sur ``expected <= 0``.
     """
-    present = [v for v in values if v is not None]
-    return sum(present) if present else None
+    if not pairs:
+        return None, None
+    return sum(n for n, _ in pairs), sum(d for _, d in pairs)
 
 
 def aggregate(repos: Sequence[RepoStats], now: datetime) -> CoinActivity | None:
@@ -98,33 +123,55 @@ def aggregate(repos: Sequence[RepoStats], now: datetime) -> CoinActivity | None:
     # champs étoiles ou date sur `merged` en conclurait raisonnablement que la
     # croissance d'étoiles ou la fraîcheur en découlent, ce qui est
     # exactement l'erreur que les deux blocs ci-dessous existent pour éviter.
+    #
+    # Numérateur et dénominateur de chaque ratio viennent du même
+    # sous-ensemble de dépôts (voir `_paired_sums`) : les sommer
+    # indépendamment ferait comparer les commits récents d'un dépôt jeune,
+    # sans médiane annuelle encore disponible, à la baseline d'un tout autre
+    # dépôt.
+    commit_pairs = [
+        (r.commits_4w, r.commits_median_52w)
+        for r in live
+        if r.commits_4w is not None and r.commits_median_52w is not None
+    ]
+    pr_pairs = [
+        (r.pr_merged_4w, r.pr_merged_52w)
+        for r in live
+        if r.pr_merged_4w is not None and r.pr_merged_52w is not None
+    ]
+    commits_4w, commits_median_52w = _paired_sums(commit_pairs)
+    pr_merged_4w, pr_merged_52w = _paired_sums(pr_pairs)
     merged = RepoStats(
         owner=live[0].owner,
         repo=f"<{len(live)} repos>",
-        commits_4w=_sum_or_none([r.commits_4w for r in live]),
-        commits_median_52w=_sum_or_none([r.commits_median_52w for r in live]),
-        pr_merged_4w=_sum_or_none([r.pr_merged_4w for r in live]),
-        pr_merged_52w=_sum_or_none([r.pr_merged_52w for r in live]),
+        commits_4w=commits_4w,
+        commits_median_52w=commits_median_52w,
+        pr_merged_4w=pr_merged_4w,
+        pr_merged_52w=pr_merged_52w,
     )
 
     # Fraîcheur : par dépôt, pas sur un `max(pushed_at)` agrégé. Le `max`
     # ferait gagner le dépôt le plus mal daté avant même de savoir si son
     # horodatage est crédible — un seul dépôt à l'horloge décalée écraserait
-    # alors la fraîcheur mesurée de tous les dépôts sains du même coin.
-    # `days_since_push` filtre déjà la gigue d'horloge au niveau d'un dépôt ;
-    # on ne fait ici que garder le plus petit nombre de jours parmi les
-    # dépôts dont l'horodatage a été cru, et ignorer les autres plutôt que de
-    # laisser l'un d'eux invalider le lot.
-    per_repo_freshness = [days_since_push(r, now) for r in live]
-    believed = [f for f in per_repo_freshness if f is not None]
+    # alors la fraîcheur mesurée de tous les dépôts sains du même coin, jetant
+    # une donnée correcte pour éviter d'en publier une fausse, alors
+    # qu'écarter le seul dépôt fautif suffit. `days_since_push` filtre déjà
+    # la gigue d'horloge au niveau d'un dépôt ; on ne garde ici que le plus
+    # petit nombre de jours parmi les dépôts dont l'horodatage a été cru.
+    #
+    # Dépôt et fraîcheur calculés dans la même compréhension pour que le
+    # pairage ne puisse pas se décaler — deux listes construites séparément
+    # puis recombinées par `zip` sont un ordre implicite qu'un futur tri ou
+    # filtre casserait silencieusement.
+    per_repo_freshness = [(r, days_since_push(r, now)) for r in live]
+    believed = [f for _, f in per_repo_freshness if f is not None]
     freshness = min(believed) if believed else None
     # Un rejet individuel reste rapporté même quand un autre dépôt sauve la
     # fraîcheur du coin : c'est un signal d'observabilité pour l'appelant
     # (qui seul a le droit d'incrémenter un compteur), pas une condition sur
     # le résultat final.
     push_timestamp_rejected = any(
-        r.pushed_at is not None and f is None
-        for r, f in zip(live, per_repo_freshness, strict=True)
+        r.pushed_at is not None and f is None for r, f in per_repo_freshness
     )
 
     return CoinActivity(
@@ -157,7 +204,21 @@ def _weighted_star_growth(live: Sequence[RepoStats]) -> float | None:
     transforme jamais en lecture complète : seuls les dépôts dont le taux est
     effectivement calculable entrent dans la moyenne, et si aucun ne l'est le
     résultat reste ``None`` plutôt qu'un 0.0 fabriqué.
+
+    Prend ``live`` (dépôts vivants), jamais la liste brute des dépôts du
+    coin : un fork aux relevés d'étoiles exploitables mais à la base
+    massive dominerait sinon la moyenne pondérée d'un projet dont il n'est
+    qu'un miroir.
     """
+    # Le filtre `stars_prev > 0` est mort au sens strict : `star_growth_pct`
+    # rejette déjà `stars_prev is None` ou `<= 0` et rend `None` dans les
+    # deux cas, donc `rate` serait de toute façon absent sans lui. Il reste
+    # écrit pour une raison locale : c'est la preuve que `total` plus bas est
+    # strictement positif, sans laquelle rien n'empêcherait un poids nul ou
+    # négatif de s'infiltrer dans la moyenne pondérée. Même choix que la
+    # branche `expected is None` de `_ratio`, elle aussi morte mais gardée
+    # pour la même raison — `mypy` ne tourne nulle part dans ce dépôt, donc
+    # ce genre de garde reste la seule protection qui s'exécute réellement.
     rates = [
         (star_growth_pct(r), r.stars_prev)
         for r in live

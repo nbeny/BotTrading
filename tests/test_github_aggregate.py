@@ -1,12 +1,25 @@
 # tests/test_github_aggregate.py
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from service_modules import load_service_module
 
 RepoStats = load_service_module("collector-github", "domain.activity").RepoStats
-aggregate = load_service_module("collector-github", "domain.aggregate").aggregate
+_aggregate_module = load_service_module("collector-github", "domain.aggregate")
+aggregate = _aggregate_module.aggregate
+CoinActivity = _aggregate_module.CoinActivity
 
 NOW = datetime(2026, 8, 2, tzinfo=UTC)
+
+#: Depot dont aucune mesure n'a abouti: GitHub repond encore 202 sur /stats
+#: et les deux appels /search ont echoue.
+_ALL_PENDING = {
+    "commits_4w": None,
+    "commits_median_52w": None,
+    "pr_merged_4w": None,
+    "pr_merged_52w": None,
+    "pushed_at": None,
+}
 
 
 def _repo(name, **kw):
@@ -31,6 +44,10 @@ def test_sums_across_live_repos():
     a = aggregate([_repo("core"), _repo("periphery")], NOW)
     assert a.repo_count == 2
     assert a.commit_ratio_4w == 1.0  # 80 commits / (20 mediane * 4)
+    # I5: pr_ratio_4w n'etait jamais verifie ici. Remplacer pr_merged_52w par
+    # celui d'un seul depot (au lieu de sommer les deux) survivrait sans ce
+    # test: 16 PR mergees / ((104/52)*4) = 16/8 = 2.0.
+    assert a.pr_ratio_4w == 1.0  # 16 PR / ((208/52)*4)
 
 
 def test_archived_repos_are_excluded_not_zeroed():
@@ -55,6 +72,11 @@ def test_all_archived_reports_measured_zero():
     # oubli sur cette seule branche laisserait passer None ici sans qu'aucun
     # test ne le remarque.
     assert a.pr_ratio_4w == 0.0
+    # m9: le defaut de push_timestamp_rejected est False. Un defaut inverse
+    # ferait passer "tout est mort" pour un incident d'horloge, sans qu'aucun
+    # test existant ne le remarque puisque cette branche ne le posait pas
+    # explicitement.
+    assert a.push_timestamp_rejected is False
 
 
 def test_no_repos_at_all_returns_none():
@@ -184,3 +206,87 @@ def test_weighted_star_growth_partial_repos_stay_partial_not_fabricated_whole():
     # doit sortir de la moyenne plutot que d'y entrer a taux 0, ce qui
     # donnerait (0.10*1000 + 0*50) / 1050 = 0.0952... au lieu de 0.10.
     assert a.star_growth_pct_7d == 0.1
+
+
+def test_a_young_repo_does_not_inflate_an_established_repos_ratio():
+    """C1: numerateur et denominateur doivent venir du meme sous-ensemble.
+
+    Un depot de 4 a 7 semaines a un commits_4w mais pas encore de mediane
+    annuelle -- deterministe, puisque recent_commits exige 4 semaines
+    d'historique la ou weekly_median en exige 8. Sommer les deux champs
+    separement comparerait ses commits recents a la baseline d'un autre
+    depot: 140 / (10 * 4) = 3.5, une acceleration inventee.
+    """
+    core = _repo("core", commits_4w=40, commits_median_52w=10.0)
+    young = _repo("sdk", commits_4w=100, commits_median_52w=None)
+    assert aggregate([core, young], NOW).commit_ratio_4w == 1.0
+
+
+def test_a_young_repo_does_not_inflate_the_pr_ratio_either():
+    """Meme defaut cote PR, ou les deux champs viennent de deux appels
+    /search/issues distincts: l'un peut manquer sans l'autre."""
+    core = _repo("core", pr_merged_4w=8, pr_merged_52w=104)
+    young = _repo("sdk", pr_merged_4w=50, pr_merged_52w=None)
+    assert aggregate([core, young], NOW).pr_ratio_4w == 1.0
+
+
+def test_weighting_is_by_star_base_not_repo_count():
+    """I2: un depot de doc a 100 etoiles ne pese pas autant que le client a 40k.
+
+    +10% sur 40 000 et +100% sur 100 donnent ~10% pour le coin, pas ~55%.
+    """
+    week = {"stars_at": NOW, "stars_prev_at": NOW - timedelta(days=7)}
+    big = _repo("big", stars=44000, stars_prev=40000, **week)
+    docs = _repo("docs", stars=200, stars_prev=100, **week)
+    growth = aggregate([big, docs], NOW).star_growth_pct_7d
+    assert growth == pytest.approx((0.1 * 40000 + 1.0 * 100) / 40100)
+    assert growth < 0.11
+
+
+def test_star_growth_ignores_forks_and_archived_repos():
+    """I3: un miroir forke a 40k etoiles ne doit pas dominer la croissance.
+
+    Le filtre `live` est verifie pour repo_count et pour la fraicheur; sans
+    ce test il ne l'est pas pour la croissance d'etoiles.
+    """
+    week = {"stars_at": NOW, "stars_prev_at": NOW - timedelta(days=7)}
+    real = _repo("core", stars=1100, stars_prev=1000, **week)
+    mirror = _repo("mirror", is_fork=True, stars=80000, stars_prev=40000, **week)
+    assert aggregate([real, mirror], NOW).star_growth_pct_7d == pytest.approx(0.1)
+
+
+def test_a_repo_without_a_timestamp_is_not_a_rejected_timestamp():
+    """I4: absence de pushed_at != horodatage lu puis rejete.
+
+    Les autres tests sont homogenes -- tous les depots portent un horodatage
+    ou aucun. Le cas mixte est celui ou un mauvais appariement rapporterait un
+    incident d'horloge fantome sur un coin ou rien n'a ete rejete.
+    """
+    a = aggregate(
+        [
+            _repo("nopush", pushed_at=None),
+            _repo("healthy", pushed_at=NOW - timedelta(days=3)),
+        ],
+        NOW,
+    )
+    assert a.days_since_push == 3
+    assert a.push_timestamp_rejected is False
+
+
+def test_has_measurement_is_false_when_nothing_was_measured():
+    """Des depots existent, aucune mesure n'a abouti (tous en 202)."""
+    a = aggregate([_repo("pending", **_ALL_PENDING)], NOW)
+    assert a.repo_count == 1
+    assert a.has_measurement is False
+
+
+def test_has_measurement_is_true_for_the_all_archived_zero():
+    """Le zero de "tout est archive" est une mesure, pas une absence.
+
+    Un predicat base sur la veracite plutot que sur `is not None` rendrait
+    False ici et ferait sauter la publication du seul zero legitime de toute
+    la chaine.
+    """
+    a = aggregate([_repo("a", archived=True)], NOW)
+    assert a.all_repos_archived is True
+    assert a.has_measurement is True

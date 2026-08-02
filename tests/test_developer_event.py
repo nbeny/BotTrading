@@ -9,6 +9,8 @@ and `tests/test_derivatives_fundamentals_events.py`, which this file follows).
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from pydantic import ValidationError
 
@@ -111,6 +113,26 @@ def test_zero_repos_requires_all_archived():
             repo_count=0,
             all_repos_archived=False,
         )
+
+
+def test_wire_payload_rejects_zero_repos_without_all_archived():
+    """The constructor-only version of this check proves our own code is
+    careful; this proves something more valuable, per this file's header
+    docstring: a malformed message from a *third-party* producer on
+    ``market.developer.events`` -- one that never went through
+    ``DeveloperEvent(...)`` at all -- is rejected on decode too."""
+    payload = json.dumps(
+        {
+            "event_type": "DeveloperEvent",
+            "source": "github",
+            "symbol": "AAVE",
+            "coin_id": "aave",
+            "repo_count": 0,
+            "all_repos_archived": False,
+        }
+    ).encode("utf-8")
+    with pytest.raises(ValidationError):
+        parse_event(payload)
 
 
 def test_a_measured_zero_and_an_absent_field_stay_distinct():

@@ -171,9 +171,9 @@ class DeveloperEvent(BaseEvent):
     #: ``all_repos_archived=True``, où il dit « des dépôts existent, aucun n'est
     #: vivant ». Quand *aucun* dépôt n'a pu être lu, le collector ne publie pas
     #: d'événement du tout, plutôt qu'un événement à zéro. L'invariant est
-    #: imposé à la construction par ``_validate_repo_count`` ci-dessous, pas
-    #: seulement documenté : un événement qui le viole et atteint Redis
-    #: deviendrait infalsifiable après coup.
+    #: imposé à la construction et au décodage par ``_validate_repo_count``
+    #: ci-dessous, pas seulement documenté : un événement qui le viole et
+    #: atteint Redis deviendrait infalsifiable après coup.
     repo_count: int = Field(..., ge=0)
     #: commits sur 4 semaines / (médiane hebdomadaire sur 52 semaines x 4).
     #: 1.0 = rythme habituel. Borné en bas à 0 : c'est un rapport de comptages.
@@ -192,6 +192,18 @@ class DeveloperEvent(BaseEvent):
 
     @model_validator(mode="after")
     def _validate_repo_count(self) -> DeveloperEvent:
+        """Runs on construction *and* on decode (``parse_event`` /
+        ``model_validate_json``), which is the half of this that matters: a
+        malformed message from someone else's producer on the topic must be
+        rejected too, not just a value we built ourselves.
+
+        Does **not** run on ``model_copy(update=...)`` -- Pydantic skips
+        validators on copy, so a collector patching a cached event that way
+        (this service's two-clock republish is a standing invitation to)
+        could still slip repo_count=0 past this check. See the same warning
+        left on ``collector-binance-futures``'s ``long_short_ratio`` for the
+        precedent this bit us on before.
+        """
         if self.repo_count == 0 and not self.all_repos_archived:
             raise ValueError(
                 "repo_count=0 requires all_repos_archived=True: a token with "

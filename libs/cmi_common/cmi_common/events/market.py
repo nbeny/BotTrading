@@ -172,7 +172,7 @@ class DeveloperEvent(BaseEvent):
     #: vivant ». Quand *aucun* dépôt n'a pu être lu, le collector ne publie pas
     #: d'événement du tout, plutôt qu'un événement à zéro.
     repo_count: int = Field(..., ge=0)
-    #: commits sur 4 semaines / (médiane hebdomadaire sur 52 semaines × 4).
+    #: commits sur 4 semaines / (médiane hebdomadaire sur 52 semaines x 4).
     #: 1.0 = rythme habituel. Borné en bas à 0 : c'est un rapport de comptages.
     commit_ratio_4w: float | None = Field(default=None, ge=0)
     pr_ratio_4w: float | None = Field(default=None, ge=0)

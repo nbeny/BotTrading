@@ -12,11 +12,19 @@ est positive et qui n'a rien produit en quatre semaines s'est réellement arrêt
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 #: Fenêtre récente, en semaines. La baseline est ramenée à cette même durée.
 WINDOW_WEEKS = 4
 WEEKS_PER_YEAR = 52
+
+#: Tolérance de dérive d'horloge, pas une règle métier : un décalage NTP de
+#: quelques secondes à quelques minutes entre notre horloge et celle de GitHub
+#: est la norme, pas une anomalie, et il touche précisément les dépôts qui
+#: viennent de pousser — les plus actifs, ceux que ce signal existe pour
+#: repérer. Au-delà de cette fenêtre, l'avance n'est plus de la gigue mais un
+#: horodatage auquel on ne peut plus faire confiance.
+CLOCK_SKEW_TOLERANCE = timedelta(minutes=5)
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,19 +80,22 @@ def pr_ratio(stats: RepoStats) -> float | None:
 def days_since_push(stats: RepoStats, now: datetime) -> int | None:
     """Âge du dernier push, en jours.
 
-    Un ``pushed_at`` dans le futur signale une dérive d'horloge ou une lecture
-    API corrompue — pas un dépôt hyperactif. Ramener silencieusement ce cas à 0
-    fabriquerait la lecture la plus favorable possible (« poussé il y a 0
-    jour ») à partir d'une donnée à laquelle on ne peut pas faire confiance :
-    exactement l'anti-motif que ce module évite partout ailleurs. On rapporte
-    donc l'absence plutôt qu'une valeur inventée.
+    Un ``pushed_at`` dans le futur au-delà de ``CLOCK_SKEW_TOLERANCE`` signale
+    une dérive d'horloge ou une lecture API corrompue — pas un dépôt
+    hyperactif. Ramener silencieusement ce cas à 0 fabriquerait la lecture la
+    plus favorable possible (« poussé il y a 0 jour ») à partir d'une donnée à
+    laquelle on ne peut pas faire confiance : exactement l'anti-motif que ce
+    module évite partout ailleurs. On rapporte donc l'absence plutôt qu'une
+    valeur inventée — mais seulement une fois la tolérance de gigue d'horloge
+    dépassée ; en-deçà, une avance de quelques secondes ou minutes est un
+    dépôt qui vient tout juste d'être poussé, et vaut 0.
     """
     if stats.pushed_at is None:
         return None
-    delta_days = (now - stats.pushed_at).days
-    if delta_days < 0:
+    delta = now - stats.pushed_at
+    if delta < -CLOCK_SKEW_TOLERANCE:
         return None
-    return delta_days
+    return max(0, delta.days)
 
 
 def star_growth_pct(stats: RepoStats) -> float | None:

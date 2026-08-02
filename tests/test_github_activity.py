@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from service_modules import load_service_module
 
@@ -103,10 +103,29 @@ def test_days_since_push_is_none_without_timestamp():
 
 
 def test_days_since_push_is_none_when_pushed_at_is_in_the_future():
-    """Horodatage futur = derive d'horloge ou lecture API corrompue, pas un
-    depot hyperactif. Un clamp a 0 fabriquerait la lecture la plus favorable
-    possible a partir d'une donnee a laquelle on ne peut pas faire confiance."""
+    """Horodatage futur de plusieurs jours = derive d'horloge ou lecture API
+    corrompue, pas un depot hyperactif. Un clamp a 0 fabriquerait la lecture
+    la plus favorable possible a partir d'une donnee a laquelle on ne peut
+    pas faire confiance."""
     r = days_since_push(_stats(pushed_at=datetime(2026, 8, 10, tzinfo=UTC)), NOW)
+    assert r is None
+    assert r != 0
+
+
+def test_days_since_push_within_clock_skew_tolerance_is_zero():
+    """Une avance de 4 min 59 s reste dans la fenetre de gigue NTP: c'est un
+    push tout juste arrive, pas une anomalie. 0, pas None."""
+    pushed_at = NOW + timedelta(minutes=4, seconds=59)
+    r = days_since_push(_stats(pushed_at=pushed_at), NOW)
+    assert r == 0
+    assert r is not None
+
+
+def test_days_since_push_just_beyond_clock_skew_tolerance_is_none():
+    """Une avance de 5 min 1 s depasse la fenetre de gigue NTP: la lecture
+    n'est plus credible. None, pas 0."""
+    pushed_at = NOW + timedelta(minutes=5, seconds=1)
+    r = days_since_push(_stats(pushed_at=pushed_at), NOW)
     assert r is None
     assert r != 0
 

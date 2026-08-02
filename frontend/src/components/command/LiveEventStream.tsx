@@ -62,6 +62,18 @@ const TYPE_META: Record<string, { label: string; color: ChipColor }> = {
   AccountSnapshotEvent: { label: 'SOLDE', color: 'secondary' },
 };
 
+/**
+ * Types with no decisional lineage to show, however valid their
+ * `correlation_id` is. An account snapshot is the trading-engine reporting the
+ * venue balance: it carries no symbol and feeds no stage, so its trace is empty
+ * by construction. Offering "trace →" on it is an invitation to a dead click —
+ * and at ~1400 rows/24h it is the single most common row in the signal tier.
+ *
+ * Everything else in the feed resolves: raw market and sentiment events are
+ * linked to the analysis that consumed them by `/trace/{cid}`.
+ */
+const UNTRACEABLE_TYPES = new Set(['AccountSnapshotEvent']);
+
 interface Filter {
   key: string;
   label: string;
@@ -243,7 +255,9 @@ export function LiveEventStream({
           visible.map((e) => {
             const meta = TYPE_META[e.event_type] ?? { label: e.event_type, color: 'default' as ChipColor };
             const gist = summarize(e);
-            const traceable = Boolean(e.correlation_id && onSelect);
+            const traceable = Boolean(
+              e.correlation_id && onSelect && !UNTRACEABLE_TYPES.has(e.event_type),
+            );
             return (
               <Stack
                 key={e.event_id}

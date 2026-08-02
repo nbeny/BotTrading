@@ -33,7 +33,7 @@ mypy_path = "libs/cmi_common"
 explicit_package_bases = true
 # Third-party libs without stubs.
 [[tool.mypy.overrides]]
-module = ["aiokafka.*", "transformers.*", "anthropic.*"]
+module = ["aiokafka.*", "transformers.*", "anthropic.*", "telethon.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

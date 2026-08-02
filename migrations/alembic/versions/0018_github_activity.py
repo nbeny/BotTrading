@@ -12,8 +12,12 @@ Toutes les colonnes de mesure de github_repo_snapshot sont nullables et sans
 défaut : un NOT NULL DEFAULT 0 y transformerait « pas encore lu » en « mesuré à
 zéro », et le scoring exclut un axe absent mais pénalise un axe mesuré mauvais.
 
-Revision ID: 0017
-Revises: 0016
+Revision ID: 0018
+Revises: 0017
+
+Renumerotee de 0017 a 0018 au merge: master avait entre-temps livre sa propre
+0017 (signals_correlation_index). Deux revisions homonymes auraient donne deux
+tetes a alembic, et `upgrade head` aurait refuse de migrer -- en production.
 Create Date: 2026-08-02
 """
 
@@ -22,8 +26,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0017"
-down_revision = "0016"
+revision = "0018"
+down_revision = "0017"
 branch_labels = None
 depends_on = None
 

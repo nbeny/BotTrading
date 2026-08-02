@@ -1,7 +1,37 @@
 # Telegram comme source d'ingestion — design
 
 **Date :** 2026-08-02
-**Statut :** validé, prêt pour le plan d'implémentation
+**Statut :** implémenté, mais **la partie « Composants » ne décrit pas le code livré** — lire
+l'encadré ci-dessous avant de s'y fier.
+
+## Ce qui a divergé à l'implémentation
+
+Ce design a été écrit sans savoir qu'une implémentation Telegram existait déjà, non mergée,
+dans un worktree verrouillé (branche `worktree-telegram-collector`). Elle a été reprise comme
+base ; les décisions ci-dessous ont donc été remplacées par de meilleures, ou par des
+contraintes qu'on n'avait pas vues.
+
+- **Les curseurs `min_id` sont en mémoire, pas dans Redis.** Un redémarrage relit la queue de
+  chaque canal, et la contrainte `UNIQUE(source, external_id)` absorbe le recouvrement.
+- **Pas de mapper pur séparé.** La règle absent/zéro sur `engagement` était déjà couverte par
+  un test ; l'extraire n'aurait rien prouvé de plus.
+- **Un canal irrésoluble est mis à l'écart** jusqu'à ce qu'il quitte la liste, au lieu d'être
+  retenté à chaque cycle — une `ResolveUsername` au lieu d'une par cycle et par canal.
+- **Le plafond est de 50 canaux, pas 25.** La graine en compte 24 : 25 ne laissait de place
+  que pour un seul ajout depuis le terminal.
+- **La normalisation des handles vit dans `cmi_common.sources.runtime`**, pas dans
+  `control-api`. Ce dernier n'a pas le droit d'importer un collecteur, et deux normalisations
+  divergentes laisseraient l'opérateur saisir un handle que le provider n'interroge jamais.
+- **La clé de santé porte `updated_at` et un `ok` agrégé**, ajoutés après qu'une revue a
+  montré qu'elle annonçait `ok: true` indéfiniment dès qu'un cycle échouait après connexion —
+  soit exactement la panne qu'elle devait rendre visible.
+- **`deploy.yml` lance une liste explicite de fichiers de test en CI.** Tout nouveau fichier
+  de test doit y être ajouté, sinon il ne tourne jamais en intégration continue.
+
+Ce qui a tenu sans changement : le provider dans `collector-social` piloté par
+`AdaptivePollLoop`, l'entrée par `raw_content` sans topic Kafka, la résolution des symboles
+laissée au `ContentNormalizer` commun, le key-gating sur les trois secrets, et la règle
+`engagement = None` quand Telegram ne rapporte aucun compteur.
 
 ## Objectif
 

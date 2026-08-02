@@ -7,15 +7,23 @@ the `ai:quota:*` status the AI workers publish while paused on a usage limit.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import text
 
 from cmi_common.auth import Principal
 from cmi_common.events import AnalysisEvent
 from cmi_common.kafka import Topic
-from cmi_common.sources import KNOWN_PLATFORMS, get_runtime, set_runtime
+from cmi_common.sources import (
+    KNOWN_PLATFORMS,
+    dedupe_channels,
+    get_runtime,
+    normalize_channel,
+    set_runtime,
+    source_status_key,
+)
 
 from ..auth_dep import require_principal
 
@@ -30,22 +38,77 @@ _PENDING_WHERE = (
 )
 
 
+#: One channel costs one MTProto call per cycle, and that call budget is what the
+#: cap exists to bound — not the size of the JSON. The shipped seed is 24
+#: channels, so this leaves the operator room to roughly double the desk before
+#: anyone has to think about the poll interval.
+MAX_TELEGRAM_CHANNELS = 50
+
+#: Platforms probed for a health blob of their own. Derived from the canonical
+#: list rather than enumerated here: a hardcoded tuple drops a new provider's
+#: health silently — no error, no failing test, just a source that never reports
+#: — which is the same drift CLAUDE.md documents for the three axis lists. Only
+#: Telegram publishes today, so most of these are misses; that costs a dozen
+#: Redis GETs per call, and `_source_status` already omits what is absent.
+_STATUS_PLATFORMS = tuple(p for ps in KNOWN_PLATFORMS.values() for p in ps)
+
+
 def _cache(request: Request):
     return request.app.state.cache
+
+
+async def _source_status(cache: Any) -> dict[str, Any]:
+    """Per-platform health, as published by the providers themselves.
+
+    A platform that has never reported is *omitted*, not defaulted to healthy:
+    "not measured" and "measured, fine" are different claims, and only the
+    caller can render the difference once we stop erasing it here.
+    """
+    out: dict[str, Any] = {}
+    for platform in _STATUS_PLATFORMS:
+        status = await cache.get_json(source_status_key(platform))
+        if status:
+            out[platform] = status
+    return out
 
 
 class RuntimePatch(BaseModel):
     social_enabled: bool | None = None
     news_enabled: bool | None = None
     platforms: dict[str, bool] | None = None
+    telegram_channels: list[str] | None = None
+
+    @field_validator("telegram_channels")
+    @classmethod
+    def _normalize_channels(cls, value: list[str] | None) -> list[str] | None:
+        # `None` is "not patched" and `[]` is "poll nobody" — an explicit clear
+        # is a legitimate operator action, and the route's
+        # `model_dump(exclude_none=True)` drops the former while carrying the
+        # latter through to `set_runtime`, which replaces the list wholesale.
+        if value is None:
+            return None
+        # Normalized through the same helper the provider resolves with, so what
+        # the terminal shows back is exactly what gets polled. A rejected entry
+        # raises here and FastAPI answers 422: unlike the env bootstrap, which
+        # skips a bad handle, a request has a human behind it who can retype it.
+        channels = dedupe_channels(normalize_channel(v) for v in value)
+        # Counted after dedup, because duplicate mirrors cost no extra call.
+        if len(channels) > MAX_TELEGRAM_CHANNELS:
+            raise ValueError(f"at most {MAX_TELEGRAM_CHANNELS} channels")
+        return channels
 
 
 @router.get("/collectors/runtime")
 async def get_collectors_runtime(
     request: Request, principal: Principal = Depends(require_principal)
 ) -> dict:
-    rt = await get_runtime(_cache(request))
-    return {**rt, "known_platforms": KNOWN_PLATFORMS}
+    cache = _cache(request)
+    rt = await get_runtime(cache)
+    return {
+        **rt,
+        "known_platforms": KNOWN_PLATFORMS,
+        "source_status": await _source_status(cache),
+    }
 
 
 @router.post("/collectors/runtime")
@@ -54,8 +117,13 @@ async def set_collectors_runtime(
     request: Request,
     principal: Principal = Depends(require_principal),
 ) -> dict:
-    rt = await set_runtime(_cache(request), body.model_dump(exclude_none=True))
-    return {**rt, "known_platforms": KNOWN_PLATFORMS}
+    cache = _cache(request)
+    rt = await set_runtime(cache, body.model_dump(exclude_none=True))
+    return {
+        **rt,
+        "known_platforms": KNOWN_PLATFORMS,
+        "source_status": await _source_status(cache),
+    }
 
 
 @router.get("/systems/ai/quota")

@@ -29,6 +29,8 @@ from cmi_common.db import (
     AccountSnapshot,
     Decision,
     DecisionJournal,
+    EventMarket,
+    EventSignal,
     Price,
     ServiceHealth,
     Signal,
@@ -632,132 +634,281 @@ async def data_content(
     }
 
 
+def _opt_num(v: Any) -> float | None:
+    """Like `_num`, but keeps "not measured" apart from a measured zero.
+
+    `_num` answers 0.0 for `None`, which is right where the caller has already
+    established the value exists. In a trace it is not: a stop-loss the risk
+    engine never set would be published as `stop_loss: 0`, i.e. "protection at
+    zero" rather than "no protection recorded".
+    """
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _prune(detail: dict[str, Any]) -> dict[str, Any]:
+    """Drop the entries with nothing behind them.
+
+    The drawer renders one chip per entry, so a `None` reaches the operator as
+    the literal text `score: null`. Six stages of those is what an unresolved
+    trace used to look like.
+    """
+    return {k: v for k, v in detail.items() if v is not None}
+
+
+#: Archived raw events that seed a stage of the trace with their own payload.
+#: Anything else that feeds the scorer (derivatives, fundamentals) still links
+#: to the analysis it fed — it just has no stage of its own to fill.
+_ORIGIN_STAGE: dict[str, str] = {
+    "PriceEvent": "price",
+    "VolumeEvent": "price",
+    "DexEvent": "price",
+    "SentimentEvent": "sentiment",
+}
+
+_ORIGIN_LABEL: dict[str, str] = {
+    "PriceEvent": "Tick prix",
+    "VolumeEvent": "Volume",
+    "DexEvent": "Liquidité DEX",
+    "SentimentEvent": "Sentiment",
+}
+
+
+def origin_detail(event_type: str, p: dict) -> dict[str, Any]:
+    """The clicked event's own reading, straight from its archived payload."""
+    if event_type == "PriceEvent":
+        return {
+            "price_usd": _opt_num(p.get("price_usd")),
+            "change_24h_pct": _opt_num(p.get("price_change_pct_24h")),
+            "volume_24h_usd": _opt_num(p.get("volume_24h_usd")),
+        }
+    if event_type == "VolumeEvent":
+        return {
+            "volume_24h_usd": _opt_num(p.get("volume_24h_usd")),
+            "volume_spike": _opt_num(p.get("volume_spike_ratio")),
+        }
+    if event_type == "DexEvent":
+        return {
+            "dex": p.get("dex"),
+            "liquidity_usd": _opt_num(p.get("liquidity_usd")),
+            "change_1h_pct": _opt_num(p.get("price_change_pct_1h")),
+        }
+    return {
+        "score": _opt_num(p.get("sentiment_score")),
+        "confidence": _opt_num(p.get("confidence")),
+        "model": p.get("model_name"),
+        "kind": p.get("input_kind"),
+        "social_growth": _opt_num(p.get("social_growth")),
+    }
+
+
 def assemble_trace(
-    cid: str, signal: Any | None, decision: Any | None, trade: Any | None
+    cid: str,
+    signal: Any | None,
+    decision: Any | None,
+    trade: Any | None,
+    origin: Any | None = None,
 ) -> dict:
     """Reconstruct an end-to-end DecisionTrace from persisted rows. Pure.
 
     Stages map to what the pipeline durably records: analysis (signals) →
     decision (decisions) → risk + order (trades). Price/sentiment context is
     read from the analysis signal's payload when available.
+
+    `origin` is the archived raw event the correlation id belongs to, set by
+    the endpoint for the common case where that id never reached an analysis.
+    It fills its own stage from its own payload — the number the operator
+    clicked on, rather than the aggregate the analysis later computed — and
+    its presence is what makes a sentiment or price row traceable at all.
     """
     p = getattr(signal, "payload", None) or {}
+    origin_type = getattr(origin, "event_type", None) or ""
+    origin_payload = getattr(origin, "payload", None) or {}
+    origin_at = _iso(getattr(origin, "time", None))
+    origin_stage = _ORIGIN_STAGE.get(origin_type)
+    # The analysis was found by proximity, not by id: say so rather than let an
+    # inferred link read like a recorded one.
+    inferred = (
+        origin is not None and signal is not None and p.get("correlation_id") != cid
+    )
+
     symbol = (
         getattr(signal, "symbol", None)
         or getattr(decision, "symbol", None)
         or getattr(trade, "symbol", None)
+        or getattr(origin, "symbol", None)
         or "?"
     )
     filled = bool(
         trade and str(getattr(trade, "status", "")).lower() in {"filled", "closed"}
     )
+
+    price_detail = (
+        origin_detail(origin_type, origin_payload)
+        if origin_stage == "price"
+        else {
+            "change_24h_pct": p.get("price_change_pct_24h"),
+            "volume_spike": p.get("volume_spike_ratio"),
+        }
+    )
+    sentiment_detail = (
+        origin_detail(origin_type, origin_payload)
+        if origin_stage == "sentiment"
+        else {
+            "score": p.get("sentiment_score"),
+            "social_growth": p.get("social_growth"),
+        }
+    )
+
     stages = [
         {
             "kind": "price",
-            "at": _iso(getattr(signal, "time", None)),
-            "reached": "price_change_pct_24h" in p,
-            "summary": f"Contexte prix {symbol}",
-            "detail": {
-                "change_24h_pct": p.get("price_change_pct_24h"),
-                "volume_spike": p.get("volume_spike_ratio"),
-            },
+            "at": (
+                origin_at
+                if origin_stage == "price"
+                else _iso(getattr(signal, "time", None))
+            ),
+            # Was `"price_change_pct_24h" in p`, which is true of every analysis
+            # payload ever written: model_dump() emits the field whether or not
+            # the scorer had a price to put in it. A stage nothing measured is
+            # not a stage the pipeline reached.
+            "reached": any(v is not None for v in price_detail.values()),
+            "summary": (
+                f"{_ORIGIN_LABEL[origin_type]} {symbol}"
+                if origin_stage == "price"
+                else f"Contexte prix {symbol}"
+            ),
+            "detail": _prune(price_detail),
         },
         {
             "kind": "sentiment",
-            "at": _iso(getattr(signal, "time", None)),
-            "reached": p.get("sentiment_score") is not None,
-            "summary": "Sentiment agrégé",
-            "detail": {
-                "score": p.get("sentiment_score"),
-                "social_growth": p.get("social_growth"),
-            },
+            "at": (
+                origin_at
+                if origin_stage == "sentiment"
+                else _iso(getattr(signal, "time", None))
+            ),
+            "reached": sentiment_detail.get("score") is not None,
+            "summary": (
+                "Sentiment — événement d'origine"
+                if origin_stage == "sentiment"
+                else "Sentiment agrégé"
+            ),
+            "detail": _prune(sentiment_detail),
         },
         {
             "kind": "analysis",
             "at": _iso(getattr(signal, "time", None)),
             "reached": signal is not None,
-            "summary": "Haiku — triage",
-            "detail": {
-                "opportunity_score": getattr(signal, "opportunity_score", None),
-                "confidence": (
-                    _num(getattr(signal, "confidence", None)) if signal else None
-                ),
-                "escalate": (
-                    bool(getattr(signal, "escalated", False)) if signal else None
-                ),
-            },
+            "summary": (
+                "Haiku — triage (rattaché par proximité)"
+                if inferred
+                else "Haiku — triage"
+            ),
+            "detail": _prune(
+                {
+                    "opportunity_score": getattr(signal, "opportunity_score", None),
+                    "confidence": _opt_num(getattr(signal, "confidence", None)),
+                    "escalate": (
+                        bool(getattr(signal, "escalated", False)) if signal else None
+                    ),
+                }
+            ),
         },
         {
             "kind": "decision",
             "at": _iso(getattr(decision, "created_at", None)),
             "reached": decision is not None,
             "summary": "Sonnet — décision",
-            "detail": {
-                "direction": getattr(decision, "direction", None),
-                "confidence": (
-                    _num(getattr(decision, "confidence", None)) if decision else None
-                ),
-                "ai_validated": (
-                    bool(getattr(decision, "ai_validated", False)) if decision else None
-                ),
-            },
+            "detail": _prune(
+                {
+                    "direction": getattr(decision, "direction", None),
+                    "confidence": _opt_num(getattr(decision, "confidence", None)),
+                    "ai_validated": (
+                        bool(getattr(decision, "ai_validated", False))
+                        if decision
+                        else None
+                    ),
+                }
+            ),
         },
         {
             "kind": "risk",
             "at": _iso(getattr(trade, "created_at", None)),
             "reached": trade is not None,
             "summary": "Risque — sizing & protection",
-            "detail": {
-                "size_pct": (
-                    _num(getattr(trade, "position_size_pct", None)) if trade else None
-                ),
-                "stop_loss": _num(getattr(trade, "stop_loss", None)) if trade else None,
-                "take_profit": (
-                    _num(getattr(trade, "take_profit", None)) if trade else None
-                ),
-                "rr": (
-                    _num(getattr(trade, "risk_reward_ratio", None)) if trade else None
-                ),
-            },
+            "detail": _prune(
+                {
+                    "size_pct": _opt_num(getattr(trade, "position_size_pct", None)),
+                    "stop_loss": _opt_num(getattr(trade, "stop_loss", None)),
+                    "take_profit": _opt_num(getattr(trade, "take_profit", None)),
+                    "rr": _opt_num(getattr(trade, "risk_reward_ratio", None)),
+                }
+            ),
         },
         {
             "kind": "order",
             "at": _iso(getattr(trade, "created_at", None)),
             "reached": filled,
             "summary": "Ordre exécuté" if filled else "Ordre en attente",
-            "detail": {
-                "status": getattr(trade, "status", None) if trade else None,
-                "fill_price": (
-                    _num(getattr(trade, "fill_price", None))
-                    if trade and getattr(trade, "fill_price", None)
-                    else None
-                ),
-                "pnl": (
-                    _num(getattr(trade, "pnl", None))
-                    if trade and getattr(trade, "pnl", None) is not None
-                    else None
-                ),
-            },
+            "detail": _prune(
+                {
+                    "status": getattr(trade, "status", None) if trade else None,
+                    "fill_price": _opt_num(getattr(trade, "fill_price", None)),
+                    "pnl": _opt_num(getattr(trade, "pnl", None)),
+                }
+            ),
         },
     ]
     return {"correlation_id": cid, "symbol": symbol, "stages": stages}
 
 
-@router.get("/trace/{cid}")
-async def trace(cid: str, session: AsyncSession = Depends(get_session_dep)) -> dict:
-    sig = (
+#: How long after a raw event an analysis may still be taken as the one that
+#: consumed it. ai-worker-haiku aggregates a settle window bounded by
+#: CMI_ANALYSIS_MAX_DELAY_S (20 s) and publishes shortly after; the margin
+#: covers consumer lag without letting a quiet symbol borrow an unrelated
+#: analysis minutes later.
+TRACE_LINK_WINDOW = timedelta(seconds=120)
+
+
+#: A correlation id maps to at most one analysis: each input event mints its own
+#: uuid and ai-worker-haiku stamps a single AnalysisEvent with it (verified in
+#: production — the lookup returns exactly one row). The cap is what keeps
+#: "newest wins" true should that ever stop holding.
+_SIGNAL_CID_FANOUT = 10
+
+
+async def _signal_by_cid(session: AsyncSession, cid: str) -> Any | None:
+    """The analysis published under this correlation id.
+
+    Deliberately *not* `ORDER BY time DESC LIMIT 1`, and the newest row is
+    picked here instead. Sorting on time makes the planner abandon
+    ix_signals_correlation (migration 0017) for a descending walk of
+    signals_time_idx: it estimates a few thousand matches, so aborting early
+    looks cheap — and on a miss, which is the common case, it reads the whole
+    1.48M-row hypertable instead. Measured in production on 2026-08-02 with the
+    index in place: 142 s ordered against 0.35 ms unordered. The index existing
+    is not the same as the index being used.
+    """
+    rows = (
         (
             await session.execute(
                 select(Signal)
                 .where(Signal.payload["correlation_id"].astext == cid)
-                .order_by(Signal.time.desc())
-                .limit(1)
+                .limit(_SIGNAL_CID_FANOUT)
             )
         )
         .scalars()
-        .first()
+        .all()
     )
-    dec = (
+    return max(rows, key=lambda r: r.time) if rows else None
+
+
+async def _decision_by_cid(session: AsyncSession, cid: str) -> Any | None:
+    return (
         (
             await session.execute(
                 select(Decision)
@@ -769,7 +920,10 @@ async def trace(cid: str, session: AsyncSession = Depends(get_session_dep)) -> d
         .scalars()
         .first()
     )
-    trd = (
+
+
+async def _trade_by_cid(session: AsyncSession, cid: str) -> Any | None:
+    return (
         (
             await session.execute(
                 select(Trade)
@@ -781,7 +935,83 @@ async def trace(cid: str, session: AsyncSession = Depends(get_session_dep)) -> d
         .scalars()
         .first()
     )
-    return assemble_trace(cid, sig, dec, trd)
+
+
+async def _archived_event(session: AsyncSession, cid: str) -> Any | None:
+    """The raw event this correlation id was minted for, if it is still in the
+    archive. Signal tier first: it is the smaller table and the one holding the
+    types most worth tracing."""
+    for table in (EventSignal, EventMarket):
+        row = (
+            (
+                await session.execute(
+                    select(table)
+                    .where(table.correlation_id == cid)
+                    .order_by(table.time.desc())
+                    .limit(1)
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if row is not None:
+            return row
+    return None
+
+
+async def _consuming_signal(
+    session: AsyncSession, symbol: str, at: datetime
+) -> Any | None:
+    """The analysis that folded this event in: the first one for the symbol
+    after it arrived.
+
+    Correlation ids do not flow *into* the analysis. Every collector event gets
+    its own id (`BaseEvent.correlation_id` is a fresh uuid) and ai-worker-haiku
+    stamps the analysis with whichever one happened to arrive last in the settle
+    window, so all the others — measured at 95% of the feed, and 95% of
+    sentiment events specifically — have no id-based path to the analysis they
+    fed. Proximity on (symbol, time) is what is left, and it is bounded.
+    """
+    if at.tzinfo is not None:
+        # signals.time is TIMESTAMP WITHOUT TIME ZONE holding naive UTC (the
+        # persister writes it that way); the archive columns are TIMESTAMPTZ.
+        at = at.astimezone(UTC).replace(tzinfo=None)
+    return (
+        (
+            await session.execute(
+                select(Signal)
+                .where(
+                    Signal.symbol == symbol,
+                    Signal.time >= at,
+                    Signal.time < at + TRACE_LINK_WINDOW,
+                )
+                .order_by(Signal.time.asc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
+
+
+@router.get("/trace/{cid}")
+async def trace(cid: str, session: AsyncSession = Depends(get_session_dep)) -> dict:
+    sig = await _signal_by_cid(session, cid)
+    dec = await _decision_by_cid(session, cid)
+    trd = await _trade_by_cid(session, cid)
+    origin = None
+    if sig is None and dec is None and trd is None:
+        # Not a pipeline id — almost always a raw event the operator clicked in
+        # the live feed. Resolve it through the archive instead of handing back
+        # six empty stages.
+        origin = await _archived_event(session, cid)
+        if origin is not None and origin.symbol:
+            sig = await _consuming_signal(session, origin.symbol, origin.time)
+            linked = (getattr(sig, "payload", None) or {}).get("correlation_id")
+            if linked and linked != cid:
+                dec = await _decision_by_cid(session, linked)
+                trd = await _trade_by_cid(session, linked)
+    return assemble_trace(cid, sig, dec, trd, origin=origin)
 
 
 @router.get("/data/stats")

@@ -223,3 +223,104 @@ async def test_normalizer_error_backs_off_and_does_not_persist() -> None:
     assert provider.calls == 1  # it did poll
     assert repo.rows == []  # nothing reached the repository
     assert sleeps.calls == [120]  # backed off, loop survived
+
+
+class CommittingProvider(StubProvider):
+    """A provider holding a consumption cursor, like Telegram's.
+
+    It cannot advance that cursor from `fetch()`: the items it just returned are
+    not durable until `insert_items` has taken them, and only the loop knows
+    whether that happened. `commit()` is how the loop says so.
+    """
+
+    def __init__(self, **kw) -> None:
+        super().__init__(**kw)
+        self.commits = 0
+
+    async def commit(self) -> None:
+        self.commits += 1
+
+
+async def test_commit_is_called_once_the_items_are_persisted() -> None:
+    repo = FakeContentRepository()
+    provider = CommittingProvider(
+        items=[RawItem(source="stub", kind="social", external_id="1")]
+    )
+    sleeps = Sleeps(stop_after=1)
+    loop = AdaptivePollLoop(
+        provider,
+        repo,
+        FakeCache(),
+        poll_interval=300,
+        service="collector-social",
+        sleep=sleeps,
+    )
+    await _run(loop)
+    assert len(repo.rows) == 1
+    assert provider.commits == 1
+
+
+async def test_commit_is_not_called_when_the_persist_fails() -> None:
+    # The defect the seam exists for: a cursor advanced on a cycle whose items
+    # the loop threw away is a permanent, silent hole in the ingestion.
+    provider = CommittingProvider(
+        items=[RawItem(source="stub", kind="social", external_id="1")]
+    )
+    sleeps = Sleeps(stop_after=1)
+    loop = AdaptivePollLoop(
+        provider,
+        RaisingRepo(),
+        FakeCache(),
+        poll_interval=300,
+        service="collector-social",
+        error_backoff=120,
+        sleep=sleeps,
+    )
+    await _run(loop)
+    assert provider.calls == 1  # it did poll
+    assert provider.commits == 0  # ...and must not claim the items are durable
+    assert sleeps.calls == [120]  # backed off like any other error
+
+
+async def test_commit_is_not_called_when_the_normalizer_fails() -> None:
+    # Same reason: nothing reached the repository, so nothing is durable.
+    provider = CommittingProvider(
+        items=[RawItem(source="stub", kind="social", external_id="1")]
+    )
+    sleeps = Sleeps(stop_after=1)
+    loop = AdaptivePollLoop(
+        provider,
+        FakeContentRepository(),
+        FakeCache(),
+        poll_interval=300,
+        service="collector-social",
+        error_backoff=120,
+        sleep=sleeps,
+        normalizer=RaisingNormalizer(),
+    )
+    await _run(loop)
+    assert provider.commits == 0
+
+
+async def test_a_provider_without_commit_is_driven_exactly_as_before() -> None:
+    # Seven of the eight providers re-read a window each cycle and let
+    # UNIQUE(source, external_id) absorb the overlap: they have no claim to
+    # confirm, and `commit` must stay an optional capability rather than a
+    # method the `Provider` protocol forces on all of them.
+    repo = FakeContentRepository()
+    provider = StubProvider(
+        items=[RawItem(source="stub", kind="social", external_id="1")]
+    )
+    assert not hasattr(provider, "commit")
+    sleeps = Sleeps(stop_after=1)
+    loop = AdaptivePollLoop(
+        provider,
+        repo,
+        FakeCache(),
+        poll_interval=300,
+        service="collector-social",
+        sleep=sleeps,
+    )
+    await _run(loop)
+    assert len(repo.rows) == 1
+    assert sleeps.calls == [300]

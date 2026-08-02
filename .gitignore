@@ -23,6 +23,17 @@ next-env.d.ts
 # git worktrees for isolated feature work
 .worktrees/
 .superpowers/
+.claude/worktrees/
 
 # Playwright MCP session snapshots (local debugging artefacts)
 .playwright-mcp/
+
+# Telethon login session (contains an authenticated Telegram session)
+*.session
+*.session-journal
+
+# Provisoire : ce script porte un TELEGRAM_API_HASH en dur comme valeur par
+# defaut, donc un `git add -A` le publierait. A retirer d'ici quand il aura ete
+# soit supprime, soit aligne sur scripts/telegram_session.py, qui refuse de
+# demarrer sans ses variables d'environnement.
+scripts/telegram_channel_id.py

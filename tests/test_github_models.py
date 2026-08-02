@@ -20,7 +20,7 @@ from cmi_common.db.models import (
 
 _MIGRATION = (
     Path(__file__).resolve().parents[1]
-    / "migrations/alembic/versions/0017_github_activity.py"
+    / "migrations/alembic/versions/0018_github_activity.py"
 )
 
 #: Toute mesure lue chez GitHub. Aucune n'est garantie: /stats repond 202
@@ -48,7 +48,7 @@ def _is_true(node: ast.expr | None) -> bool:
 
 
 def _migration_columns() -> dict[str, dict[str, dict[str, bool]]]:
-    """Colonnes de la migration 0017 avec leurs proprietes, lues par AST.
+    """Colonnes de la migration 0018 avec leurs proprietes, lues par AST.
 
     Analyse syntaxique et non textuelle. Une premiere version par expression
     reguliere butait sur les parentheses imbriquees de ``sa.false()`` et
@@ -201,8 +201,8 @@ def test_no_measure_column_carries_a_zero_default_in_the_migration():
 
 def test_migration_chains_onto_the_previous_head():
     src = _MIGRATION.read_text(encoding="utf-8")
-    assert re.search(r'^revision = "0017"$', src, re.MULTILINE)
-    assert re.search(r'^down_revision = "0016"$', src, re.MULTILINE)
+    assert re.search(r'^revision = "0018"$', src, re.MULTILINE)
+    assert re.search(r'^down_revision = "0017"$', src, re.MULTILINE)
 
 
 def test_migration_downgrade_drops_every_table_it_creates():

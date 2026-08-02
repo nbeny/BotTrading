@@ -25,8 +25,23 @@ as two fan-out services — `collector-social` (Bluesky, Reddit, Mastodon, 4chan
 YouTube, Lens) and `collector-news` (CryptoCompare, RSS, GDELT, NewsData) — where each platform
 runs its own adaptive poll loop that
 self-throttles on its rate limit (learned from the API's headers) and persists raw items to
-Postgres `raw_content`. Key-gated sources (Farcaster, YouTube, NewsData) activate when their
-env key is set; Telegram/StockTwits/Messari/CoinGecko-news deferred (paid or session-based).
+Postgres `raw_content`. Key-gated sources (Farcaster, YouTube, NewsData, Telegram) activate when their
+env key is set; StockTwits/Messari/CoinGecko-news deferred (paid).
+
+**Telegram is the one source that is not HTTP.** It speaks MTProto through a *user* session
+(a bot only sees channels it administers, and every channel we read is third-party), so the
+container cannot log itself in: `scripts/telegram_session.py` mints a `StringSession`
+interactively once, and `TELEGRAM_SESSION` carries it in. That string grants full access to the
+account — it is a credential, not config. The provider keeps a per-channel message-id cursor and
+writes off channels that fail to resolve (private, renamed, banned), so a dead handle costs one
+`ResolveUsername` call rather than one per cycle; a handle removed from the list loses its
+write-off, so re-adding it retries. **The channel list is hot-reloaded** — `fetch()` re-reads
+`collectors:runtime.telegram_channels` every cycle, so editing it from the terminal takes effect
+at the next poll with no redeploy. The seed lives in
+`cmi_common.sources.runtime::TELEGRAM_SEED_CHANNELS` (the shared layer, because control-api must
+render the default list and may not import a collector); `TELEGRAM_CHANNELS` seeds the Redis key
+on first boot only, after which the operator owns it — an explicitly empty list is a deliberate
+"poll nobody" and survives restarts.
 `sentiment-service` scores unscored rows from the DB, upserts
 `content_sentiment_agg`, and still publishes `SentimentEvent` on Kafka for decision-engine.
 `risk-engine` emits `risk.approved.events`, the input to the execution core.

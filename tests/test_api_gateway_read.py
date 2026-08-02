@@ -451,6 +451,167 @@ def test_endpoint_trace_wiring() -> None:
     assert len(body["stages"]) == 6
 
 
+def test_endpoint_trace_picks_the_newest_signal_without_ordering_in_sql() -> None:
+    """`ORDER BY time DESC LIMIT 1` is what made the planner ignore
+    ix_signals_correlation and walk the whole hypertable (142 s vs 0.35 ms in
+    production), so the newest row is chosen in Python. It still has to be the
+    newest."""
+    older = SimpleNamespace(
+        symbol="BTC",
+        time=NOW - timedelta(minutes=5),
+        opportunity_score=10,
+        confidence=0.1,
+        escalated=False,
+        payload={},
+    )
+    newer = SimpleNamespace(
+        symbol="BTC",
+        time=NOW,
+        opportunity_score=90,
+        confidence=0.9,
+        escalated=True,
+        payload={},
+    )
+    client = _client([_Result(rows=[older, newer]), _Result(rows=[]), _Result(rows=[])])
+    kinds = {s["kind"]: s for s in client.get("/trace/corr-1").json()["stages"]}
+    assert kinds["analysis"]["detail"]["opportunity_score"] == 90
+
+
+def _archived(event_type, payload, symbol="BTC"):
+    return SimpleNamespace(
+        event_type=event_type, symbol=symbol, time=NOW, payload=payload
+    )
+
+
+def test_assemble_trace_unresolved_has_no_null_details() -> None:
+    """An id behind which nothing exists must not publish six stages of `None`:
+    the drawer renders one chip per entry, so those reached the operator as the
+    literal text `score: null`."""
+    t = assemble_trace("ghost", None, None, None)
+    assert t["symbol"] == "?"
+    for s in t["stages"]:
+        assert s["reached"] is False
+        assert s["detail"] == {}
+
+
+def test_assemble_trace_price_stage_needs_a_measurement() -> None:
+    """`"price_change_pct_24h" in payload` was true of every analysis ever
+    written -- model_dump() emits the field whether or not it was measured."""
+    sig = SimpleNamespace(
+        symbol="ETH",
+        time=NOW,
+        opportunity_score=60,
+        confidence=0.6,
+        escalated=False,
+        payload={"price_change_pct_24h": None, "volume_spike_ratio": None},
+    )
+    kinds = {s["kind"]: s for s in assemble_trace("c", sig, None, None)["stages"]}
+    assert kinds["price"]["reached"] is False
+    assert kinds["price"]["detail"] == {}
+
+
+def test_assemble_trace_from_sentiment_origin() -> None:
+    """The sentiment row the operator clicked fills the sentiment stage from its
+    own payload, and the analysis it fed is flagged as an inferred link."""
+    origin = _archived(
+        "SentimentEvent",
+        {
+            "sentiment_score": 0.42,
+            "confidence": 0.8,
+            "model_name": "ElKulako/cryptobert",
+            "input_kind": "social",
+            "social_growth": None,
+        },
+    )
+    sig = SimpleNamespace(
+        symbol="BTC",
+        time=NOW,
+        opportunity_score=71,
+        confidence=0.6,
+        escalated=False,
+        payload={"correlation_id": "corr-analysis"},
+    )
+    t = assemble_trace("sent-1", sig, None, None, origin=origin)
+    kinds = {s["kind"]: s for s in t["stages"]}
+    assert t["symbol"] == "BTC"
+    assert kinds["sentiment"]["reached"] is True
+    assert kinds["sentiment"]["detail"]["score"] == 0.42
+    assert kinds["sentiment"]["detail"]["model"] == "ElKulako/cryptobert"
+    # social_growth was not measured, so it is absent rather than 0.
+    assert "social_growth" not in kinds["sentiment"]["detail"]
+    assert kinds["analysis"]["reached"] is True
+    assert "proximité" in kinds["analysis"]["summary"]
+
+
+def test_assemble_trace_from_price_origin() -> None:
+    origin = _archived(
+        "PriceEvent",
+        {"price_usd": "66800.0", "price_change_pct_24h": 6.2, "volume_24h_usd": None},
+    )
+    kinds = {
+        s["kind"]: s
+        for s in assemble_trace("px-1", None, None, None, origin=origin)["stages"]
+    }
+    assert kinds["price"]["reached"] is True
+    assert kinds["price"]["detail"] == {"price_usd": 66800.0, "change_24h_pct": 6.2}
+    assert kinds["price"]["summary"] == "Tick prix BTC"
+    # Nothing downstream was found: the rest stays honestly empty.
+    assert kinds["analysis"]["reached"] is False
+
+
+def test_assemble_trace_keeps_unset_protection_absent() -> None:
+    """`_num` answers 0.0 for None, which would publish a stop-loss the risk
+    engine never set as `stop_loss: 0` -- protection at zero, not absent."""
+    trd = SimpleNamespace(
+        symbol="BTC",
+        created_at=NOW,
+        status="approved",
+        position_size_pct=0.04,
+        stop_loss=None,
+        take_profit=None,
+        risk_reward_ratio=None,
+        fill_price=None,
+        pnl=None,
+    )
+    kinds = {s["kind"]: s for s in assemble_trace("c", None, None, trd)["stages"]}
+    assert kinds["risk"]["detail"] == {"size_pct": 0.04}
+    assert kinds["order"]["detail"] == {"status": "approved"}
+
+
+def test_endpoint_trace_resolves_a_raw_event_through_the_archive() -> None:
+    """A sentiment id matches no signal/decision/trade. Measured in production:
+    95% of the live feed is in that case, and each one used to render an empty
+    drawer."""
+    origin = _archived(
+        "SentimentEvent", {"sentiment_score": -0.3, "model_name": "finbert"}, "SOL"
+    )
+    sig = SimpleNamespace(
+        symbol="SOL",
+        time=NOW,
+        opportunity_score=64,
+        confidence=0.55,
+        escalated=False,
+        payload={"correlation_id": "corr-analysis"},
+    )
+    client = _client(
+        [
+            _Result(rows=[]),  # signals by cid
+            _Result(rows=[]),  # decisions by cid
+            _Result(rows=[]),  # trades by cid
+            _Result(rows=[origin]),  # events_signal by cid
+            _Result(rows=[sig]),  # consuming analysis (symbol, time window)
+            _Result(rows=[]),  # decisions by the analysis cid
+            _Result(rows=[]),  # trades by the analysis cid
+        ]
+    )
+    body = client.get("/trace/sent-1").json()
+    assert body["symbol"] == "SOL"
+    kinds = {s["kind"]: s for s in body["stages"]}
+    assert kinds["sentiment"]["reached"] is True
+    assert kinds["sentiment"]["detail"]["score"] == -0.3
+    assert kinds["analysis"]["reached"] is True
+
+
 def _trade(**kw):
     base = dict(
         event_id="t1",

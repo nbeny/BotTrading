@@ -41,7 +41,9 @@ jobs:
             tests/test_scorer_diagnostics.py \
             tests/test_sonnet_budget.py \
             tests/test_collector_runtime.py \
+            tests/test_collector_social_main.py \
             tests/test_control_api_turnstile.py \
+            tests/test_control_api_collectors.py \
             tests/test_derivatives_fundamentals_events.py \
             tests/test_shared_universe.py \
             tests/test_defillama_unlocks.py \
@@ -71,7 +73,8 @@ jobs:
             tests/test_scoring_developer_axis.py \
             tests/test_axis_parity.py  \
             tests/test_deployment_wiring.py \
-            tests/test_risk_confidence_floor.py -q
+            tests/test_risk_confidence_floor.py \
+            tests/test_telegram_provider.py -q
 
   # -------------------------------------------------------------- images
   images:

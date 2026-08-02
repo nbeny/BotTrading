@@ -10,7 +10,7 @@ from pathlib import Path
 _APP_DIR = Path(__file__).resolve().parents[1] / "services" / "control-api" / "app"
 _PKG = "capi"
 _MODULES = ["commands", "state", "auth_dep", "turnstile"]
-_ROUTERS = ["auth", "settings", "positions", "opportunities", "orders"]
+_ROUTERS = ["auth", "settings", "positions", "opportunities", "orders", "collectors"]
 
 
 def load_app() -> types.ModuleType:

@@ -81,11 +81,19 @@ fenêtre horaire) et publie un `SentimentEvent` par (item × symbole détecté).
 | ------------------- | ------------------------------------------------------------- | ---------------------------------- |
 | **collector-social** | `bluesky`, `reddit`, `mastodon`, `fourchan`, `lens`          | keyless                            |
 |                     | `neynar` (Farcaster), `youtube`                               | `NEYNAR_API_KEY`, `YOUTUBE_API_KEY` |
+|                     | `telegram` (chaînes signal/annonces)                          | `TELEGRAM_API_ID` + `TELEGRAM_API_HASH` + `TELEGRAM_SESSION` |
 | **collector-news**  | `rss`, `gdelt`                                                | keyless                            |
 |                     | `cryptocompare`                                              | `CRYPTOCOMPARE_API_KEY` (optionnelle) |
 |                     | `newsdata`                                                   | `NEWSDATA_API_KEY`                 |
 
 Les sources key-gated ne s'activent que si leur variable d'environnement est renseignée.
+Telegram passe par **MTProto avec une session utilisateur** (un bot ne voit que les chaînes
+qu'il administre) : la session se génère une fois en local avec
+`python scripts/telegram_session.py`, puis se colle dans `.env` — le conteneur ne peut pas
+répondre à un code de connexion. La liste de chaînes est relue à chaque cycle depuis la clé
+Redis `collectors:runtime`, donc éditable depuis le terminal sans redéploiement ;
+`TELEGRAM_CHANNELS` ne fait que l'amorcer au premier démarrage, à défaut de quoi c'est la
+graine `cmi_common.sources.runtime::TELEGRAM_SEED_CHANNELS` qui sert.
 Le framework partagé est dans [`libs/cmi_common/cmi_common/sources/`](libs/cmi_common/cmi_common/sources)
 (`provider.py`, `raw.py`, `loop.py`, `repository.py`).
 

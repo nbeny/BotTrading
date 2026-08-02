@@ -136,11 +136,36 @@ export const settingsApi = {
 };
 
 // ── Collector sources (operator toggles) + AI quota status ─────────────────────
+
+/** Health of one collector platform, published by the provider itself.
+ *
+ *  Three things about this shape are easy to get wrong in a renderer:
+ *  - `reason` is populated on green paths too — `ok: true` ships with
+ *    "no channels configured" or "rate-limited by Telegram, resuming in 42s".
+ *    A non-null `reason` is **not** a fault; `ok` is the fault indicator.
+ *  - `ok` means "the source is contributing", not "the last cycle completed".
+ *  - `channels` maps a written-off handle to why it contributes nothing
+ *    (usually an operator typo). It is the only feedback the operator gets
+ *    that a handle they typed is wrong.
+ *  - `updated_at` exists so a frozen key is detectable: the key is durable and
+ *    the provider stops writing entirely while the platform is switched off. */
+export interface SourceStatus {
+  ok: boolean;
+  reason: string | null;
+  channels: Record<string, string>;
+  updated_at: string;
+}
+
 export interface CollectorRuntime {
   social_enabled: boolean;
   news_enabled: boolean;
   platforms: Record<string, boolean>;
   known_platforms: { social: string[]; news: string[] };
+  /** Channels the Telegram provider polls; re-read from Redis every cycle. */
+  telegram_channels: string[];
+  /** Keyed by platform. A platform that has never reported is **absent** —
+   *  that is "unknown", not "healthy", and must never render as green. */
+  source_status: Record<string, SourceStatus>;
 }
 
 export interface AiQuotaStatus {
@@ -160,6 +185,11 @@ export const collectorsApi = {
     social_enabled?: boolean;
     news_enabled?: boolean;
     platforms?: Record<string, boolean>;
+    /** Replaces the list wholesale — send the complete array, never a delta.
+     *  `[]` is accepted and means "poll nobody"; omit the field to leave the
+     *  list untouched. The server normalizes, dedupes, and 422s on an invite
+     *  link, a blank entry, or more than 50 channels. */
+    telegram_channels?: string[];
   }) => control.post<CollectorRuntime>('/collectors/runtime', patch).then((r) => r.data),
   aiQuota: () => control.get<AiQuotaStatus>('/systems/ai/quota').then((r) => r.data),
   coverage: () => control.get<Coverage>('/systems/coverage').then((r) => r.data),

@@ -55,3 +55,41 @@ async def test_get_runtime_exposes_known_platforms_shape() -> None:
     cache = _FakeCache()
     rt = await runtime.get_runtime(cache)
     assert "bluesky" in rt["platforms"] and "newsdata" in rt["platforms"]
+
+
+async def test_telegram_is_a_known_social_platform() -> None:
+    """SourcesPanel itère sur known_platforms; sans cette entrée l'interrupteur
+    n'apparaît jamais dans le terminal."""
+    assert "telegram" in runtime.KNOWN_PLATFORMS["social"]
+
+
+async def test_telegram_channels_default_to_the_seed() -> None:
+    cache = _FakeCache()
+    rt = await runtime.get_runtime(cache)
+    assert rt["telegram_channels"] == list(runtime.TELEGRAM_SEED_CHANNELS)
+
+
+async def test_an_explicitly_empty_channel_list_is_not_refilled_by_the_seed(
+    monkeypatch,
+) -> None:
+    """La graine livrée est vide, donc tester contre elle ne prouverait rien :
+    `[] or SEED` et le test `is None` se comportent identiquement quand SEED est
+    vide. On pose une graine non vide pour que la distinction soit falsifiable."""
+    monkeypatch.setattr(runtime, "TELEGRAM_SEED_CHANNELS", ["seeded"])
+    cache = _FakeCache({"telegram_channels": []})
+    rt = await runtime.get_runtime(cache)
+    assert rt["telegram_channels"] == []
+
+
+async def test_set_runtime_replaces_the_channel_list_wholesale() -> None:
+    """Remplacement, pas merge : sans ça un canal supprimé depuis l'UI
+    ressusciterait au patch suivant."""
+    cache = _FakeCache({"telegram_channels": ["alpha", "beta"]})
+    out = await runtime.set_runtime(cache, {"telegram_channels": ["gamma"]})
+    assert out["telegram_channels"] == ["gamma"]
+
+
+async def test_set_runtime_leaves_channels_alone_when_not_patched() -> None:
+    cache = _FakeCache({"telegram_channels": ["alpha"]})
+    out = await runtime.set_runtime(cache, {"platforms": {"reddit": False}})
+    assert out["telegram_channels"] == ["alpha"]

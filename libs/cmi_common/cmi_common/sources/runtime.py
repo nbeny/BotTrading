@@ -24,9 +24,15 @@ KNOWN_PLATFORMS: dict[str, list[str]] = {
         "neynar",
         "youtube",
         "lens",
+        "telegram",
     ],
     "news": ["cryptocompare", "gdelt", "newsdata", "rss"],
 }
+
+#: Canaux Telegram livrés par défaut. Vide à dessein : aucune liste vérifiée n'a
+#: été fournie, et des usernames inventés produiraient des canaux introuvables
+#: signalés en erreur à chaque cycle. L'opérateur la peuple depuis le terminal.
+TELEGRAM_SEED_CHANNELS: list[str] = []
 
 
 def default_runtime() -> dict[str, Any]:
@@ -34,6 +40,7 @@ def default_runtime() -> dict[str, Any]:
         "social_enabled": True,
         "news_enabled": True,
         "platforms": {p: True for ps in KNOWN_PLATFORMS.values() for p in ps},
+        "telegram_channels": list(TELEGRAM_SEED_CHANNELS),
     }
 
 
@@ -44,6 +51,11 @@ async def get_runtime(cache: Cache) -> dict[str, Any]:
     merged["social_enabled"] = bool(cfg.get("social_enabled", True))
     merged["news_enabled"] = bool(cfg.get("news_enabled", True))
     merged["platforms"].update(cfg.get("platforms", {}) or {})
+    channels = cfg.get("telegram_channels")
+    # `[]` est un "aucun canal" délibéré, pas un "non renseigné". Un `or` ferait
+    # revivre la graine que l'opérateur vient de vider.
+    if channels is not None:
+        merged["telegram_channels"] = [str(c) for c in channels]
     return merged
 
 
@@ -70,6 +82,9 @@ async def set_runtime(cache: Cache, patch: dict[str, Any]) -> dict[str, Any]:
         cur["news_enabled"] = bool(patch["news_enabled"])
     for name, on in (patch.get("platforms") or {}).items():
         cur["platforms"][name] = bool(on)
+    # Remplacement intégral, contrairement aux `platforms` qui se mergent.
+    if patch.get("telegram_channels") is not None:
+        cur["telegram_channels"] = [str(c) for c in patch["telegram_channels"]]
     # Durable key (no expiry) — persist, like trading:runtime.
     await cache.set_json(RUNTIME_KEY, cur, ttl_seconds=0)
     return cur

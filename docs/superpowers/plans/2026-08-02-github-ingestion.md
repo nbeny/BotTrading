@@ -459,6 +459,11 @@ class RepoStats:
     pr_merged_52w: int | None = None
     #: Étoiles au snapshot précédent. None au premier passage.
     stars_prev: int | None = None
+    #: Instants des deux relevés. Indispensables : sans eux, un delta d'étoiles
+    #: ne peut pas être ramené à un taux, et la cadence round-robin fait varier
+    #: l'intervalle d'un dépôt à l'autre et d'un cycle à l'autre.
+    stars_at: datetime | None = None
+    stars_prev_at: datetime | None = None
 
 
 def _ratio(recent: int | None, expected: float | None) -> float | None:
@@ -519,15 +524,39 @@ def days_since_push(stats: RepoStats, now: datetime) -> int | None:
     return max(0, delta.days)
 
 
+#: Fenêtre à laquelle la croissance d'étoiles est ramenée, parce que c'est celle
+#: que ``DeveloperEvent.star_growth_pct_7d`` et le seuil du scoring annoncent
+#: tous deux. Sans normalisation, un delta de 12 h était comparé à un seuil de
+#: 7 jours : une sous-estimation d'un facteur ~14, présente et plausible donc
+#: pire qu'une absence.
+STAR_GROWTH_NORMALISATION_WINDOW = timedelta(days=7)
+#: En dessous, extrapoler à 7 jours multiplie le bruit par ~168. On préfère ne
+#: rien dire.
+MIN_STAR_GROWTH_INTERVAL = timedelta(hours=1)
+
+
 def star_growth_pct(stats: RepoStats) -> float | None:
-    """Croissance relative des étoiles depuis le snapshot précédent.
+    """Croissance d'étoiles ramenée à 7 jours, entre les deux relevés.
+
+    Ne prend **pas** de ``now`` : l'intervalle court d'un snapshot à l'autre.
+    Le prendre jusqu'à l'horloge du cycle ferait décroître la même mesure à
+    chaque republication — mesuré sur la version précédente, une croissance de
+    0.14 tombait à 0.07 en douze heures et était republiée ~72 fois à des
+    valeurs décroissantes, sans qu'aucune donnée nouvelle ne soit lue.
 
     ``None`` au premier passage : un delta demande deux observations, et un 0.0
     y affirmerait une stagnation qu'on n'a pas observée.
     """
     if stats.stars is None or stats.stars_prev is None or stats.stars_prev <= 0:
         return None
-    return (stats.stars - stats.stars_prev) / stats.stars_prev
+    if stats.stars_prev_at is None or stats.stars_at is None:
+        return None
+    interval = stats.stars_at - stats.stars_prev_at
+    if interval < MIN_STAR_GROWTH_INTERVAL:
+        # Couvre aussi l'intervalle nul ou négatif : les deux sont < 1 h.
+        return None
+    growth = (stats.stars - stats.stars_prev) / stats.stars_prev
+    return growth * (STAR_GROWTH_NORMALISATION_WINDOW / interval)
 ```
 
 - [ ] **Step 4 : lancer le test, vérifier qu'il passe**

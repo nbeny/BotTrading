@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 _LIB = Path(__file__).resolve().parents[1] / "libs" / "cmi_common"
 if str(_LIB) not in sys.path:
     sys.path.insert(0, str(_LIB))
@@ -91,3 +93,53 @@ async def test_set_runtime_leaves_channels_alone_when_not_patched() -> None:
     cache = _FakeCache({"telegram_channels": ["alpha"]})
     out = await runtime.set_runtime(cache, {"platforms": {"reddit": False}})
     assert out["telegram_channels"] == ["alpha"]
+
+
+# --- handle normalization, shared by the provider and control-api ---------
+
+
+def test_normalize_channel_accepts_every_form_operators_paste() -> None:
+    for raw in (
+        "coinbureau",
+        "@CoinBureau",
+        "t.me/coinbureau",
+        "https://t.me/CoinBureau/",
+    ):
+        assert runtime.normalize_channel(raw) == "coinbureau"
+
+
+def test_normalize_channel_rejects_invite_links() -> None:
+    """An invite link resolves to nothing without a join flow; kept, it would be
+    written off on every restart with no hint of why it can never work."""
+    for bad in ("t.me/+AbCdEf", "https://t.me/joinchat/AbCdEf", "@+AbCdEf"):
+        with pytest.raises(ValueError):
+            runtime.normalize_channel(bad)
+
+
+def test_normalize_channel_rejects_a_blank_entry() -> None:
+    with pytest.raises(ValueError):
+        runtime.normalize_channel("  ")
+
+
+def test_dedupe_channels_keeps_the_first_occurrence() -> None:
+    assert runtime.dedupe_channels(["b", "a", "b"]) == ["b", "a"]
+
+
+def test_parse_channels_normalizes_handles_and_drops_duplicates() -> None:
+    parsed = runtime.parse_channels(
+        " @CoinBureau , https://t.me/CoinBureau, t.me/wublockchainenglish/ ,coinbureau"
+    )
+    assert parsed == ["coinbureau", "wublockchainenglish"]
+
+
+def test_parse_channels_falls_back_to_the_shared_seed_list() -> None:
+    # An empty seed would make the two assertions below pass vacuously.
+    assert runtime.TELEGRAM_SEED_CHANNELS
+    assert runtime.parse_channels(None) == list(runtime.TELEGRAM_SEED_CHANNELS)
+    assert runtime.parse_channels("   ") == list(runtime.TELEGRAM_SEED_CHANNELS)
+
+
+def test_parse_channels_skips_a_bad_entry_instead_of_killing_the_boot() -> None:
+    """The env path is a bootstrap, not a request: one unusable handle must not
+    take the whole collector down at startup, where nobody can fix it."""
+    assert runtime.parse_channels("alpha, t.me/+AbCdEf ,beta") == ["alpha", "beta"]

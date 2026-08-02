@@ -30,7 +30,7 @@ assert _spec.loader
 sys.modules[_spec.name] = tg
 _spec.loader.exec_module(tg)
 
-from cmi_common.sources import TELEGRAM_SEED_CHANNELS, RateLimitedError  # noqa: E402
+from cmi_common.sources import RateLimitedError  # noqa: E402
 
 # --- fake telethon -------------------------------------------------------
 
@@ -290,18 +290,10 @@ async def test_unauthorized_session_raises_instead_of_reporting_silence() -> Non
     assert client.disconnected
 
 
-def test_parse_channels_normalizes_handles_and_drops_duplicates() -> None:
-    parsed = tg.parse_channels(
-        " @CoinBureau , https://t.me/CoinBureau, t.me/wublockchainenglish/ ,coinbureau"
-    )
-    assert parsed == ["coinbureau", "wublockchainenglish"]
-
-
-def test_parse_channels_falls_back_to_the_shared_seed_list() -> None:
-    # An empty seed would make the two assertions below pass vacuously.
-    assert TELEGRAM_SEED_CHANNELS
-    assert tg.parse_channels(None) == list(TELEGRAM_SEED_CHANNELS)
-    assert tg.parse_channels("   ") == list(TELEGRAM_SEED_CHANNELS)
+# `parse_channels` and the handle normalization it builds on now live in
+# `cmi_common.sources.runtime` — control-api validates operator input with the
+# same rules and may not import a collector. Their tests moved with them, to
+# `tests/test_collector_runtime.py`.
 
 
 # --- the list is operator-editable, read fresh every cycle ----------------

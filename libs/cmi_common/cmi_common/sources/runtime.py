@@ -8,9 +8,13 @@ collectors run fully out of the box.
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Iterable
 from typing import Any
 
 from ..cache import Cache
+
+logger = logging.getLogger(__name__)
 
 RUNTIME_KEY = "collectors:runtime"
 
@@ -60,6 +64,87 @@ TELEGRAM_SEED_CHANNELS: list[str] = [
     "icospeakschannels",
     "wublockchainenglish",
 ]
+
+
+#: A handle containing either marker came from an invite link (`t.me/+AbCdEf`,
+#: `t.me/joinchat/AbCdEf`). Telegram only honours those through a join flow the
+#: provider deliberately does not perform, so the handle can never resolve: kept,
+#: it would be written off on every restart and shown to the operator as a broken
+#: channel, with nothing saying it could never have worked. Rejected at the door.
+_INVITE_MARKERS = ("+", "joinchat")
+
+_LINK_PREFIXES = ("https://t.me/", "http://t.me/", "t.me/", "@")
+
+
+def source_status_key(platform: str) -> str:
+    """Redis key a provider publishes its own health under.
+
+    Built here so the writer (a collector) and the reader (control-api, which
+    may not import a collector) cannot drift onto two different keys — a drift
+    that fails silently, as "no key" is a legal state meaning "never reported".
+    """
+    return f"collectors:status:{platform}"
+
+
+def normalize_channel(target: str) -> str:
+    """``@Name``, ``t.me/Name``, ``https://t.me/Name/``, ``Name`` -> ``name``.
+
+    Shared rather than owned by collector-social because control-api validates
+    operator input with these exact rules: what the terminal accepts has to be
+    byte-identical to what the poll loop resolves, or a saved channel silently
+    polls nothing.
+
+    Raises ``ValueError`` on a blank entry or an invite link. What that means is
+    the caller's call, and the two callers want opposite things — see
+    ``parse_channels``.
+    """
+    handle = target.strip().rstrip("/")
+    for prefix in _LINK_PREFIXES:
+        if handle.startswith(prefix):
+            handle = handle[len(prefix) :]
+            break
+    handle = handle.lower()
+    if not handle:
+        raise ValueError("empty channel name")
+    if any(marker in handle for marker in _INVITE_MARKERS):
+        raise ValueError(f"unsupported invite link: {target!r}")
+    return handle
+
+
+def dedupe_channels(handles: Iterable[str]) -> list[str]:
+    """First occurrence wins, order preserved — the same desk is routinely
+    listed under two mirrors, and polling it twice per cycle buys nothing."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for handle in handles:
+        if handle and handle not in seen:
+            seen.add(handle)
+            out.append(handle)
+    return out
+
+
+def parse_channels(raw: str | None) -> list[str]:
+    """Split a ``TELEGRAM_CHANNELS`` value into normalized handles.
+
+    This is a **bootstrap**, not a request: it runs once at startup to seed
+    ``collectors:runtime``, past which the operator owns the list and the env var
+    is ignored. So a bad entry is dropped with a warning rather than raised —
+    unlike the control-api validator, which must reject the whole request loudly
+    because there a human is watching and can retype it. Here nobody is, and
+    refusing to boot the collector over one malformed handle would cost us every
+    other channel on the list too.
+    """
+    if raw is None or not raw.strip():
+        return list(TELEGRAM_SEED_CHANNELS)
+    handles: list[str] = []
+    for part in raw.split(","):
+        if not part.strip():
+            continue
+        try:
+            handles.append(normalize_channel(part))
+        except ValueError as exc:
+            logger.warning("TELEGRAM_CHANNELS: skipping %r — %s", part, exc)
+    return dedupe_channels(handles)
 
 
 def default_runtime() -> dict[str, Any]:

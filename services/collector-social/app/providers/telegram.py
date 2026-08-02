@@ -16,15 +16,15 @@ from __future__ import annotations
 
 import inspect
 import logging
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from typing import Any
 
 from cmi_common.cache import Cache
 from cmi_common.sources import (
-    TELEGRAM_SEED_CHANNELS,
     RateLimitedError,
     RawItem,
     get_runtime,
+    source_status_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ MAX_TEXT = 4000
 #: AdaptivePollLoop turns every exception into a warning and a 120s backoff, so
 #: a revoked session or a written-off channel can run for weeks with nothing
 #: reaching the operator who could fix it.
-STATUS_KEY = "collectors:status:telegram"
+STATUS_KEY = source_status_key("telegram")
 #: Kept short enough to render in a table cell — the raw telethon message is a
 #: sentence that repeats the handle already shown in the same row.
 MAX_REASON = 80
@@ -274,36 +274,3 @@ async def _disconnect(client: Any) -> None:
     result = client.disconnect()
     if inspect.isawaitable(result):
         await result
-
-
-def parse_channels(raw: str | None) -> list[str]:
-    """Split a ``TELEGRAM_CHANNELS`` value into normalized handles.
-
-    Accepts ``@handle``, ``t.me/handle`` links and bare names, in any case, and
-    drops duplicates — the same desk is often listed under two mirrors.
-
-    This only seeds ``collectors:runtime`` on first boot; past that the operator
-    owns the list and the env var is ignored.
-    """
-    if raw is None or not raw.strip():
-        return list(TELEGRAM_SEED_CHANNELS)
-    return _dedupe(_normalize(part) for part in raw.split(",") if part.strip())
-
-
-def _normalize(target: str) -> str:
-    handle = target.strip().rstrip("/")
-    for prefix in ("https://t.me/", "http://t.me/", "t.me/", "@"):
-        if handle.startswith(prefix):
-            handle = handle[len(prefix) :]
-            break
-    return handle.lower()
-
-
-def _dedupe(handles: Iterable[str]) -> list[str]:
-    seen: set[str] = set()
-    out: list[str] = []
-    for handle in handles:
-        if handle and handle not in seen:
-            seen.add(handle)
-            out.append(handle)
-    return out

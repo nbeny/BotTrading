@@ -38,10 +38,14 @@ from .runtime import (
     KNOWN_PLATFORMS,
     RUNTIME_KEY,
     TELEGRAM_SEED_CHANNELS,
+    dedupe_channels,
     default_runtime,
     get_runtime,
     is_enabled,
+    normalize_channel,
+    parse_channels,
     set_runtime,
+    source_status_key,
 )
 
 __all__ = [
@@ -72,13 +76,17 @@ __all__ = [
     "SqlSentimentAggReader",
     "SymbolLexicon",
     "aggregate_buckets",
+    "dedupe_channels",
     "default_runtime",
     "get_runtime",
     "interval_delta",
     "is_closed",
     "is_enabled",
+    "normalize_channel",
+    "parse_channels",
     "parse_retry_after",
     "raw_item_to_row",
     "set_runtime",
+    "source_status_key",
     "window_delta",
 ]

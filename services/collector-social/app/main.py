@@ -19,6 +19,7 @@ from cmi_common.sources import (
     Provider,
     RawItem,
     SqlContentRepository,
+    parse_channels,
     set_runtime,
 )
 
@@ -28,7 +29,7 @@ from .providers.lens import LensProvider
 from .providers.mastodon import MastodonProvider
 from .providers.neynar import NeynarProvider
 from .providers.reddit import RedditProvider
-from .providers.telegram import TelegramProvider, parse_channels
+from .providers.telegram import TelegramProvider
 from .providers.youtube import YouTubeProvider
 
 logger = logging.getLogger(__name__)

@@ -21,7 +21,7 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     engine = DecisionEngine(producer, decision_threshold=DECISION_THRESHOLD)
     consumer = EventConsumer(
         settings.kafka,
-        [Topic.ANALYSIS, Topic.SENTIMENT],
+        [Topic.ANALYSIS],
         engine.handle,
         group_id="decision-engine",
     )

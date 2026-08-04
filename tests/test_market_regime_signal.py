@@ -14,9 +14,10 @@ from pathlib import Path
 
 from service_modules import load_service_module
 
-from cmi_common.events import AnalysisEvent, SentimentEvent
+from cmi_common.events import AnalysisEvent
 
 de = load_service_module("decision-engine", "engine")
+fm = load_service_module("decision-engine", "features_map")
 
 _spec = importlib.util.spec_from_file_location(
     "de_scoring_regime",
@@ -32,31 +33,12 @@ sys.modules[_spec.name] = scoring  # required for dataclass(slots=True)
 _spec.loader.exec_module(scoring)
 
 
-class Clock:
-    def __init__(self) -> None:
-        self.now = 0.0
-
-    def __call__(self) -> float:
-        return self.now
-
-
 class FakeProducer:
     def __init__(self) -> None:
         self.published: list[tuple] = []
 
     async def publish(self, topic, event) -> None:
         self.published.append((topic, event))
-
-
-def _market(score: float) -> SentimentEvent:
-    return SentimentEvent(
-        symbol="MARKET",
-        sentiment_score=score,
-        confidence=0.9,
-        model_name="test",
-        input_kind="news",
-        sample_size=1,
-    )
 
 
 # --- scoring -----------------------------------------------------------------
@@ -135,56 +117,49 @@ def test_weights_still_sum_to_one() -> None:
 
 
 # --- engine ------------------------------------------------------------------
+#
+# The engine used to retain the regime read itself (TTL-gated in-memory state,
+# fed by a SentimentEvent branch in handle()). That state is gone -- the
+# engine is now a pure function of the AnalysisEvent it receives, and
+# market_sentiment travels in event.meta["features"] like every other axis
+# (see tests/test_decision_engine_stateless.py, tests/test_haiku_market_sentiment.py
+# for where haiku stamps it in). What follows is the one end-to-end test that
+# behavior still deserves, moved to that entry point.
 
 
-async def test_market_events_are_retained_and_applied() -> None:
-    engine = de.DecisionEngine(FakeProducer(), clock=Clock())
-    await engine.handle(_market(0.6))
-    assert engine._market_sentiment() == 0.6
-
-
-async def test_a_per_symbol_sentiment_event_is_not_mistaken_for_the_regime() -> None:
-    engine = de.DecisionEngine(FakeProducer(), clock=Clock())
-    await engine.handle(
-        SentimentEvent(
-            symbol="BTC",
-            sentiment_score=0.9,
-            confidence=0.9,
-            model_name="test",
-            input_kind="news",
-            sample_size=1,
-        )
-    )
-    assert engine._market_sentiment() is None
-
-
-async def test_a_stale_regime_read_expires() -> None:
-    clock = Clock()
-    engine = de.DecisionEngine(FakeProducer(), market_ttl_seconds=3600.0, clock=clock)
-    await engine.handle(_market(0.6))
-    clock.now = 3599.0
-    assert engine._market_sentiment() == 0.6
-    clock.now = 3601.0
-    assert engine._market_sentiment() is None
-
-
-async def test_the_regime_changes_the_score_of_an_analysed_symbol() -> None:
-    """End to end: a MARKET event alters a later analysis with no sentiment."""
-    analysis = AnalysisEvent(
+def _analysis_with(features: dict) -> AnalysisEvent:
+    # price_change_pct_24h/volume_spike_ratio must also ride in the features
+    # dict: the engine reads features_from(event.meta["features"]) alone, and
+    # never these top-level AnalysisEvent fields (those mirror the dict only
+    # in production, at the one site ai-worker-haiku builds the event).
+    # Without this, market_trend/volume_growth would never clear
+    # _MIN_PRESENT_WEIGHT on their own, and both engines below would reject at
+    # score 0 regardless of the axis under test.
+    return AnalysisEvent(
         symbol="SOL",
         opportunity_score=50,
         confidence=0.5,
         reason="r",
         price_change_pct_24h=5.0,
         volume_spike_ratio=3.0,
+        meta={
+            "features": {
+                "price_change_pct_24h": 5.0,
+                "volume_spike_ratio": 3.0,
+                **features,
+            }
+        },
     )
 
-    plain = de.DecisionEngine(FakeProducer(), decision_threshold=101, clock=Clock())
-    await plain.handle(analysis)
 
-    biased = de.DecisionEngine(FakeProducer(), decision_threshold=101, clock=Clock())
-    await biased.handle(_market(-0.9))
-    await biased.handle(analysis)
+async def test_the_regime_changes_the_score_of_an_analysed_symbol() -> None:
+    """End to end: a market-wide reading alters an analysis with no sentiment
+    of its own."""
+    plain = de.DecisionEngine(FakeProducer(), decision_threshold=101)
+    await plain.handle(_analysis_with({}))
+
+    biased = de.DecisionEngine(FakeProducer(), decision_threshold=101)
+    await biased.handle(_analysis_with({"market_sentiment": -0.9}))
 
     plain_score = plain._producer.published[0][1].reason
     biased_score = biased._producer.published[0][1].reason
@@ -193,50 +168,42 @@ async def test_the_regime_changes_the_score_of_an_analysed_symbol() -> None:
 
 
 # --- liquidity proxy ---------------------------------------------------------
-
-
-def _analysis_with(features: dict) -> AnalysisEvent:
-    return AnalysisEvent(
-        symbol="SOL",
-        opportunity_score=50,
-        confidence=0.5,
-        reason="r",
-        price_change_pct_24h=5.0,
-        volume_spike_ratio=3.0,
-        meta={"features": features},
-    )
+#
+# _liquidity now lives only in features_map.py (engine.py builds Features via
+# features_from, which calls it) -- see tests/test_features_from_replay.py for
+# the mapping-level coverage this mirrors through the engine end to end.
 
 
 def test_dex_liquidity_is_used_when_present() -> None:
-    assert de._liquidity({"liquidity_usd": 2_000_000.0}) == 2_000_000.0
+    assert fm._liquidity({"liquidity_usd": 2_000_000.0}) == 2_000_000.0
 
 
 def test_volume_stands_in_when_there_is_no_dex_reading() -> None:
     # CEX-listed pairs never produce a DexEvent, so reading liquidity_usd alone
     # left liquidity_score at zero for essentially the whole flow: it was
     # populated in 0 of 12,183 production signals, killing 15% of the weight.
-    assert de._liquidity({"volume_24h_usd": 9_203_643.0}) == 9_203_643.0
+    assert fm._liquidity({"volume_24h_usd": 9_203_643.0}) == 9_203_643.0
 
 
 def test_a_zero_dex_reading_falls_through_to_the_proxy() -> None:
     # A dex pair with no liquidity arrives as 0.0, not None -- haiku's scorer
     # documents this exact shape. Zero is not a reading.
     assert (
-        de._liquidity({"liquidity_usd": 0.0, "volume_24h_usd": 500_000.0}) == 500_000.0
+        fm._liquidity({"liquidity_usd": 0.0, "volume_24h_usd": 500_000.0}) == 500_000.0
     )
 
 
 def test_neither_reading_stays_none_rather_than_inventing_a_number() -> None:
-    assert de._liquidity({}) is None
-    assert de._liquidity({"liquidity_usd": 0.0, "volume_24h_usd": 0.0}) is None
+    assert fm._liquidity({}) is None
+    assert fm._liquidity({"liquidity_usd": 0.0, "volume_24h_usd": 0.0}) is None
 
 
 async def test_the_proxy_reaches_the_score_through_the_engine() -> None:
-    engine = de.DecisionEngine(FakeProducer(), decision_threshold=101, clock=Clock())
+    engine = de.DecisionEngine(FakeProducer(), decision_threshold=101)
     await engine.handle(_analysis_with({"volume_24h_usd": 9_203_643.0}))
     with_proxy = engine._producer.published[0][1].reason
 
-    bare = de.DecisionEngine(FakeProducer(), decision_threshold=101, clock=Clock())
+    bare = de.DecisionEngine(FakeProducer(), decision_threshold=101)
     await bare.handle(_analysis_with({}))
     without = bare._producer.published[0][1].reason
 

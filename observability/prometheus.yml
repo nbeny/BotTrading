@@ -16,6 +16,10 @@ scrape_configs:
           - collector-dexscreener:8000
           - collector-social:8000
           - collector-news:8000
+          - collector-kraken:8000
+          - collector-binance-futures:8000
+          - collector-defillama:8000
+          - collector-github:8000
           - sentiment-service:8000
           - ai-worker-haiku:8000
           - ai-worker-sonnet:8000

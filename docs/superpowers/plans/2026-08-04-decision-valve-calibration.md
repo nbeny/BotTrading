@@ -2255,6 +2255,40 @@ git commit -m "docs: valeurs posees et mesures apres calibration"
 | Harnais live : présence, 503, `market_sentiment`, rejeu exact | 10 |
 | Séquence de déploiement, deux valeurs dans le même changement | 10 |
 
+## Constats de la revue finale, laissés ouverts
+
+Quatre trouvailles de la revue finale n'ont **pas** été corrigées dans cette branche. Elles
+sont réelles, aucune n'est bloquante pour la calibration, et les taire donnerait à croire que
+le périmètre est plus large qu'il ne l'est.
+
+**Les deux plus gros collecteurs échappent au registre de santé.** `collector-social` et
+`collector-news` n'utilisent pas `run_periodic` : chaque plateforme tourne dans un
+`AdaptivePollLoop.run()` dont le `except Exception` incrémente `UPSTREAM_REQUESTS` puis
+continue, sans jamais toucher `TASK_HEALTH`. Les onze plateformes peuvent donc échouer à 100 %
+pendant 28 heures avec un `/health` à 200 — la panne exacte que cette branche corrige reste
+reproductible sur les deux services qui alimentent `raw_content`. La promesse « un collector
+qui rate tous ses cycles cesse de se dire sain » ne vaut aujourd'hui que pour ceux qui passent
+par `run_periodic`. Attention en corrigeant : `is_enabled()` fait légitimement sauter un cycle
+et ne doit pas compter comme un échec.
+
+**Une tâche bloquée reste invisible.** `_record` n'est appelé qu'à la sortie d'un tick. Une
+tâche figée dans un `await` sans timeout — client HTTP sans `timeout=`, connexion Redis morte —
+garde `consecutive_failures == 0` indéfiniment. `last_success` est enregistré mais n'est jamais
+comparé à rien. Le remède naturel est de dégrader aussi quand `time.time() - last_success`
+dépasse quelques fois l'intervalle, ce qui couvrirait les deux modes avec le même registre.
+
+**La convention naïve survit dans `control-api`.** `routers/collectors.py` compare un
+`timestamptz` à `(now() at time zone 'utc')`, résolu dans le fuseau de session. Le garde-fou
+de la tâche 2 ne balaie que `services/api-gateway/app`. Le commit qui annonce le retrait de la
+convention l'a retirée d'**un** service.
+
+**`MIN_PRESENCE_PCT = 1.0` est un plancher provisoire et uniforme.** La couverture attendue
+diffère par axe : un token sans dépôt GitHub n'a légitimement aucune lecture
+`developer_activity`, un token sans perpétuel aucune lecture `positioning`. Le seul chiffre
+mesuré est `fundamentals` à 3,6 % — un axe qui fonctionne. Des planchers **par axe** ne
+pourront être posés qu'après la première fenêtre où les huit axes auront tourné ensemble,
+ce que cette branche rend justement possible.
+
 ## Deux écarts assumés par rapport au spec
 
 **La tâche 2 est plus large que le spec ne l'annonçait.** Le spec parlait de « `_naive_utc` et ses trois appels ». Il y a en réalité **cinq** sites de dépouillage du fuseau, répartis sur quatre fichiers, dont deux justifiés par des docstrings factuellement fausses. Les laisser en place transformerait l'erreur bruyante d'aujourd'hui en décalage silencieux, puisque asyncpg interprète un datetime naïf dans le fuseau local du conteneur. La correction n'est donc complète qu'à cinq.

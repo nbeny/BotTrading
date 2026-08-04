@@ -22,9 +22,7 @@ def _clean_registry():
     runner.TASK_HEALTH.clear()
 
 
-async def _run_ticks(
-    factory, *, name: str, ticks: int, critical: bool = True
-) -> None:
+async def _run_ticks(factory, *, name: str, ticks: int, critical: bool = True) -> None:
     """Laisse run_periodic executer au moins `ticks` fois, puis l'annule."""
     calls = 0
     done = asyncio.Event()

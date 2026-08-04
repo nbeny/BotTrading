@@ -50,7 +50,8 @@ def test_a_past_unlock_is_stale_not_imminent() -> None:
 
 
 def test_an_unparseable_unlock_date_does_not_raise() -> None:
-    assert features_from({"next_unlock_at": "pas une date"}, now=NOW).next_unlock_days is None
+    raw = {"next_unlock_at": "pas une date"}
+    assert features_from(raw, now=NOW).next_unlock_days is None
 
 
 def test_a_naive_unlock_date_is_read_as_utc() -> None:

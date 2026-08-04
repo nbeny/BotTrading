@@ -878,7 +878,22 @@ changement supprime."
 
 `features:MARKET` existe en production et est vivante, mais n'est jamais lue : `_ready()` refuse de scorer un symbole sans prix, ce qui est correct pour MARKET. La lecture de régime a besoin de sa propre clé **et de son propre TTL**.
 
-**Le TTL est le point délicat.** `FEATURE_TTL` vaut 900 s. Les mises à jour de l'agrégat MARKET arrivent, mesuré sur 12 h de production, **toutes les 10 à 30 minutes** (2 à 6 par heure). Un TTL plus court que la cadence d'alimentation rendrait la clé absente une bonne partie du temps et ferait disparaître l'axe `news_score` pour des lignes qui le gardent aujourd'hui. 3600 s reproduit la sémantique actuelle du moteur (`market_ttl_seconds=3600`) au lieu d'en hériter une par accident.
+**Le TTL est le point délicat, et pas pour la raison qu'on croit.** Mesuré sur 14 jours de
+production, 399 mises à jour de l'agrégat MARKET : écart médian **1 120 s** (~19 min), p95
+**4 241 s** (~71 min), maximum **144 845 s** (40,2 h), et **38 écarts sur 399 dépassent une
+heure** (9,5 %).
+
+Donc 3600 s ne « couvre » pas la cadence — il est franchi une fois sur dix. Ce n'est pas le
+critère. Le critère est que le decision-engine applique **déjà** `market_ttl_seconds=3600` à
+l'état qu'il tient en mémoire : sa lecture de régime est donc déjà absente pendant ces mêmes
+trous, aujourd'hui, en production. Reprendre 3600 s **reproduit ce comportement à l'identique,
+trous compris**, ce qu'exige la fidélité du rejeu.
+
+Deux erreurs symétriques à éviter. Hériter du `FEATURE_TTL` de 900 s **raccourcirait** la
+fenêtre d'un facteur quatre et ferait disparaître `news_score` pour des lignes qui le gardent
+aujourd'hui. Allonger le TTL pour combler les trous mesurés ci-dessus **modifierait le scoring**
+et fausserait la distribution qu'on s'apprête justement à calibrer. Dans les deux cas on
+calibrerait sur un modèle que la production n'exécute pas.
 
 - [ ] **Step 1: Écrire le test qui échoue**
 

@@ -9,7 +9,6 @@ survives a page reload.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.dialects.postgresql import insert
@@ -81,15 +80,6 @@ def table_for(event: BaseEvent) -> type | None:
     return SIGNAL
 
 
-def _naive_utc(dt: datetime) -> datetime:
-    """Naive UTC, matching persister._naive_utc. The columns are TIMESTAMPTZ and
-    the session runs in UTC, so this is the repo-wide convention rather than a
-    property of the column."""
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(UTC).replace(tzinfo=None)
-    return dt
-
-
 def event_type_of(event: BaseEvent) -> str:
     """The event type as a plain ``str``.
 
@@ -108,7 +98,7 @@ def to_row(event: BaseEvent, *, topic: str) -> dict[str, Any]:
     """Indexed columns are lifted out for querying; the whole event is kept in
     `payload` so nothing is lost to a schema that did not anticipate it."""
     return {
-        "time": _naive_utc(event.occurred_at),
+        "time": event.occurred_at,
         "event_id": event.event_id,
         "event_type": event_type_of(event),
         "topic": topic,

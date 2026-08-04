@@ -8,6 +8,8 @@ from .metrics import (
     EVENTS_PRODUCED_METRIC,
     INFLIGHT,
     LEXICON_COINS,
+    PERIODIC_TICKS,
+    PERIODIC_TICKS_METRIC,
     UNMEASURED,
     UPSTREAM_REQUESTS,
 )
@@ -23,6 +25,8 @@ __all__ = [
     "EVENT_PROCESSING_SECONDS",
     "INFLIGHT",
     "LEXICON_COINS",
+    "PERIODIC_TICKS",
+    "PERIODIC_TICKS_METRIC",
     "UNMEASURED",
     "UPSTREAM_REQUESTS",
     "setup_tracing",

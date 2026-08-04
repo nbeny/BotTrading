@@ -182,8 +182,14 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     app.state.poller = asyncio.create_task(
         run_periodic(cycle, POLL_INTERVAL, name="github-poll")
     )
+    # critical=False: a 168 h, un echec met des semaines a franchir meme le
+    # seuil derive de sa cadence (voir runner.threshold_for_interval). Une
+    # panne y merite une metrique, pas de faire repondre /health 503 alors
+    # que github-poll tourne bien.
     app.state.lists_poller = asyncio.create_task(
-        run_periodic(refresh_lists, LISTS_REFRESH_SECONDS, name="github-lists")
+        run_periodic(
+            refresh_lists, LISTS_REFRESH_SECONDS, name="github-lists", critical=False
+        )
     )
 
 

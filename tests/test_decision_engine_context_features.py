@@ -23,6 +23,13 @@ class FakeProducer:
 
 
 def _analysis(features: dict[str, Any]) -> AnalysisEvent:
+    # price_change_pct_24h must also ride in the features dict: the engine now
+    # reads features_from(event.meta["features"]) exclusively, never the
+    # top-level AnalysisEvent fields (those mirror the dict only in
+    # production, at the one site ai-worker-haiku builds the event). Without
+    # this, price_change_pct_24h=10.0 below would be invisible to the scorer
+    # and market_trend would never contribute weight, so a lone context axis
+    # like positioning could never clear _MIN_PRESENT_WEIGHT on its own.
     return AnalysisEvent(
         source=Source.AI_HAIKU,
         symbol="BTC",
@@ -31,7 +38,7 @@ def _analysis(features: dict[str, Any]) -> AnalysisEvent:
         reason="test",
         summary="",
         price_change_pct_24h=10.0,
-        meta={"features": features},
+        meta={"features": {"price_change_pct_24h": 10.0, **features}},
     )
 
 

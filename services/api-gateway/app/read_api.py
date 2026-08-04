@@ -119,21 +119,15 @@ def _iso(v: Any) -> str | None:
 
 
 def _utcnow() -> datetime:
-    """Aware UTC — for tz-aware columns (raw_content, service_health)."""
-    return datetime.now(tz=UTC)
+    """Instant courant, avec fuseau.
 
-
-def _utcnow_naive() -> datetime:
-    """Naive UTC — for the time-series columns (prices, signals, sentiments,
-    pipeline_rejections, decisions.created_at, trades.created_at).
-
-    Those columns are ``timestamptz``, not TIMESTAMP WITHOUT TIME ZONE as an
-    earlier version of this docstring claimed (the wrong description cost a
-    reviewer a false alarm). The naive comparison is still correct: PostgreSQL
-    reads a naive literal in the session timezone, which is UTC here, so it
-    resolves to the same instant an aware UTC value would.
+    Toutes les colonnes temporelles du schema sont ``timestamptz`` et les
+    modeles le declarent desormais. Une version anterieure rendait un naif
+    UTC pour certaines colonnes, qui ne resolvait au bon instant que parce
+    que la session Postgres tourne en UTC -- un reglage que personne n'avait
+    declare.
     """
-    return datetime.now(tz=UTC).replace(tzinfo=None)
+    return datetime.now(tz=UTC)
 
 
 # ── pure mappers (unit-tested) ────────────────────────────────────────────────
@@ -426,7 +420,7 @@ async def market_token_prices(
     range: str = Query("1d"),
     session: AsyncSession = Depends(get_session_dep),
 ) -> list[dict]:
-    since = _utcnow_naive() - _RANGE_TO_DELTA.get(range, timedelta(days=1))
+    since = _utcnow() - _RANGE_TO_DELTA.get(range, timedelta(days=1))
     stmt = (
         select(Price)
         .where(and_(Price.symbol == symbol.upper(), Price.time >= since))
@@ -972,10 +966,6 @@ async def _consuming_signal(
     sentiment events specifically — have no id-based path to the analysis they
     fed. Proximity on (symbol, time) is what is left, and it is bounded.
     """
-    if at.tzinfo is not None:
-        # signals.time is TIMESTAMP WITHOUT TIME ZONE holding naive UTC (the
-        # persister writes it that way); the archive columns are TIMESTAMPTZ.
-        at = at.astimezone(UTC).replace(tzinfo=None)
     return (
         (
             await session.execute(
@@ -1369,7 +1359,7 @@ async def _open_positions(
 
 
 async def _realized_24h(session: AsyncSession) -> tuple[float, float]:
-    since = _utcnow_naive() - timedelta(hours=24)
+    since = _utcnow() - timedelta(hours=24)
     closed = (
         (
             await session.execute(
@@ -1426,7 +1416,7 @@ async def portfolio_trades(
 async def portfolio_history(
     range: str = Query("30d"), session: AsyncSession = Depends(get_session_dep)
 ) -> list[dict]:
-    since = _utcnow_naive() - _RANGE_TO_DELTA.get(range, timedelta(days=30))
+    since = _utcnow() - _RANGE_TO_DELTA.get(range, timedelta(days=30))
     closed = (
         (
             await session.execute(
@@ -1707,8 +1697,7 @@ async def systems_overview(
     counts, stale = await stage_counts_cached(session, window)
     snap = assemble_systems_snapshot(rows, counts=counts, stale=stale, window=window)
 
-    hour = _utcnow_naive() - timedelta(hours=1)  # naive time-series columns
-    hour_aware = _utcnow() - timedelta(hours=1)  # raw_content.fetched_at is tz-aware
+    hour = _utcnow() - timedelta(hours=1)
 
     async def count(model, time_col, cutoff=hour) -> int:
         return int(
@@ -1722,7 +1711,7 @@ async def systems_overview(
     coll_rows = (
         await session.execute(
             select(RawContent.source, RawContent.kind, func.count())
-            .where(RawContent.fetched_at >= hour_aware)
+            .where(RawContent.fetched_at >= hour)
             .group_by(RawContent.source, RawContent.kind)
         )
     ).all()
@@ -1736,9 +1725,7 @@ async def systems_overview(
             # raw_content.scored_at, not the `sentiments` table: that table never
             # had a writer, so this panel reported a flat zero while
             # sentiment-service was scoring thousands of rows.
-            "sentiment.events": await count(
-                RawContent, RawContent.scored_at, hour_aware
-            ),
+            "sentiment.events": await count(RawContent, RawContent.scored_at, hour),
             "analysis.events": await count(Signal, Signal.time),
             "decision.events": await count(Decision, Decision.created_at),
             "risk.approved.events": await count(Trade, Trade.created_at),
@@ -1782,7 +1769,7 @@ async def systems_funnel(
     # must resolve a window to the same span, or the two disagree by
     # construction while both look right.
     hours = WINDOW_HOURS[window]
-    since = _utcnow_naive() - timedelta(hours=hours)
+    since = _utcnow() - timedelta(hours=hours)
 
     analyses = await session.scalar(
         select(func.count()).select_from(Signal).where(Signal.time >= since)

@@ -122,7 +122,9 @@ async def test_types_filter_is_split_and_trimmed() -> None:
 
 
 async def test_emitted_cursor_is_accepted_by_decode_even_from_a_naive_row() -> None:
-    """L'archiveur écrit du naïf-UTC ; `decode` refuse un curseur naïf. Sans
+    """Défense en profondeur : une ligne naïve ne devrait plus arriver (les
+    colonnes sont timestamptz et l'archiveur n'écrit plus de naïf-UTC), mais
+    `decode` refuse un curseur naïf si jamais une ligne l'était encore. Sans
     normalisation, la page 2 renverrait un 400 ressemblant à un bug client."""
     naive = T.replace(tzinfo=None)
     resp = await api.list_events(

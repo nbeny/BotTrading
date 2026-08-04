@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import MetaData, func
+from sqlalchemy import DateTime, MetaData, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # Explicit naming convention keeps Alembic autogenerate stable across runs.
@@ -22,6 +22,11 @@ class Base(DeclarativeBase):
 
 
 class TimestampMixin:
+    #: `timestamptz` en base, comme toutes les colonnes temporelles du schema.
+    #: Sans le type explicite, SQLAlchemy rend le parametre sans fuseau et toute
+    #: lecture filtrant sur un datetime aware leve asyncpg.DataError -- le meme
+    #: defaut qui a rendu l'axe positioning muet, ici pour Token, Decision et
+    #: Trade d'un seul coup.
     created_at: Mapped[datetime] = mapped_column(
-        server_default=func.now(), nullable=False
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )

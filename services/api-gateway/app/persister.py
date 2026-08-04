@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import update
@@ -45,15 +44,6 @@ from .archiver import event_type_of
 
 logger = logging.getLogger(__name__)
 SERVICE = "api-gateway"
-
-
-def _naive_utc(dt: datetime) -> datetime:
-    """Naive UTC for the tz-naive TIMESTAMP columns — asyncpg rejects inserting a
-    tz-aware value into `TIMESTAMP WITHOUT TIME ZONE` ("can't subtract offset-naive
-    and offset-aware datetimes"). Mirrors the read-side naive-UTC handling."""
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(UTC).replace(tzinfo=None)
-    return dt
 
 
 _STAGE_BY_SOURCE = {
@@ -132,7 +122,7 @@ class Persister:
             stmt = (
                 insert(Price)
                 .values(
-                    time=_naive_utc(e.occurred_at),
+                    time=e.occurred_at,
                     symbol=e.symbol,
                     price_usd=e.price_usd,
                     market_cap_usd=e.market_cap_usd,
@@ -177,7 +167,7 @@ class Persister:
             stmt = (
                 insert(Signal)
                 .values(
-                    time=_naive_utc(e.occurred_at),
+                    time=e.occurred_at,
                     symbol=e.symbol,
                     event_id=e.event_id,
                     opportunity_score=e.opportunity_score,
@@ -200,7 +190,7 @@ class Persister:
             mode="json",
             exclude={"event_type", "schema_version", "source", "occurred_at", "meta"},
         )
-        payload["time"] = _naive_utc(e.occurred_at)
+        payload["time"] = e.occurred_at
         async with self._db._sessionmaker() as s:
             await s.execute(
                 insert(DecisionJournal).values(**payload).on_conflict_do_nothing()
@@ -222,7 +212,7 @@ class Persister:
             stmt = (
                 insert(PipelineRejection)
                 .values(
-                    time=_naive_utc(e.occurred_at),
+                    time=e.occurred_at,
                     event_id=e.event_id,
                     stage=stage_for(e.source),
                     symbol=e.symbol,
@@ -312,7 +302,7 @@ class Persister:
                     equity_usd=e.equity_usd,
                     cash_usd=e.cash_usd,
                     balances=e.balances,
-                    fetched_at=_naive_utc(e.occurred_at),
+                    fetched_at=e.occurred_at,
                 )
                 .on_conflict_do_nothing(index_elements=["event_id"])
             )

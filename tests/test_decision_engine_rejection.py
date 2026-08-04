@@ -76,6 +76,15 @@ async def test_high_score_still_publishes_a_decision() -> None:
             price_change_pct_24h=14.0,
             volume_spike_ratio=4.0,
             sentiment_score=0.9,
+            # The engine reads only event.meta["features"] (features_from), so
+            # the scored fields must ride there too, not just top-level.
+            meta={
+                "features": {
+                    "price_change_pct_24h": 14.0,
+                    "volume_spike_ratio": 4.0,
+                    "sentiment_score": 0.9,
+                }
+            },
         )
     )
     assert len(producer.published) == 1

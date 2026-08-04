@@ -74,6 +74,7 @@ engine_mod = load_service_module("decision-engine", "engine")
 **Files:**
 - Create: `tests/test_timestamp_columns_are_tz_aware.py`
 - Modify: `libs/cmi_common/cmi_common/db/models.py:54,70,93,111`
+- Modify: `libs/cmi_common/cmi_common/db/base.py:25-27` (`TimestampMixin.created_at`)
 
 Quatre modèles déclarent `Mapped[datetime]` sans type explicite. SQLAlchemy le mappe alors sur `DateTime()` — `timezone=False` — et rend le paramètre `$1::TIMESTAMP WITHOUT TIME ZONE`. Les colonnes réelles sont `timestamptz`, vérifiées en production. Toute lecture filtrant sur un datetime *aware* lève `asyncpg.DataError` à l'encodage, avant d'atteindre la base.
 
@@ -135,11 +136,23 @@ def test_every_datetime_column_declares_a_timezone() -> None:
 python -m pytest tests/test_timestamp_columns_are_tz_aware.py -v
 ```
 
-Attendu : `test_the_sweep_actually_finds_columns` PASSE, `test_every_datetime_column_declares_a_timezone` **ÉCHOUE** en listant exactement `['decision_journal.time', 'pipeline_rejections.time', 'prices.time', 'signals.time']`.
+Attendu : `test_the_sweep_actually_finds_columns` PASSE, `test_every_datetime_column_declares_a_timezone` **ÉCHOUE** en listant exactement ces **sept** entrées :
+
+```
+['decision_journal.time', 'decisions.created_at', 'pipeline_rejections.time',
+ 'prices.time', 'signals.time', 'tokens.created_at', 'trades.created_at']
+```
 
 Si la liste contient autre chose, s'arrêter et le signaler : le périmètre du plan est faux.
 
-- [ ] **Step 3: Corriger les quatre déclarations**
+**Les trois `created_at` ne viennent pas de `models.py`** mais de `TimestampMixin`
+(`base.py:25-27`), dont `Token`, `Decision` et `Trade` héritent. C'est la même cause dans
+un second fichier, et les trois colonnes sont `timestamptz` en production — vérifié le
+2026-08-04. Elles ne sont pas facultatives : `read_api.py:128-137` filtre précisément sur
+`decisions.created_at` et `trades.created_at`, donc rendre son helper *aware* à la tâche 2
+introduirait la même `DataError` dans le plan de lecture si le mixin restait naïf.
+
+- [ ] **Step 3: Corriger les quatre déclarations et le mixin**
 
 `DateTime` est déjà importé (`models.py:15`). Quatre remplacements :
 
@@ -163,7 +176,22 @@ Si la liste contient autre chose, s'arrêter et le signaler : le périmètre du 
     time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
 ```
 
-**Aucune migration.** Les colonnes sont déjà `timestamptz` en production — vérifié table par table le 2026-08-04. On corrige la croyance de l'ORM, pas le schéma.
+Puis le mixin, dans `libs/cmi_common/cmi_common/db/base.py` — il faut y ajouter
+`DateTime` à l'import `from sqlalchemy import ...` :
+
+```python
+class TimestampMixin:
+    #: `timestamptz` en base, comme toutes les colonnes temporelles du schema.
+    #: Sans le type explicite, SQLAlchemy rend le parametre sans fuseau et toute
+    #: lecture filtrant sur un datetime aware leve asyncpg.DataError -- le meme
+    #: defaut qui a rendu l'axe positioning muet, ici pour Token, Decision et
+    #: Trade d'un seul coup.
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+```
+
+**Aucune migration.** Les colonnes sont déjà `timestamptz` en production — vérifié table par table le 2026-08-04, `time` comme `created_at`. On corrige la croyance de l'ORM, pas le schéma.
 
 - [ ] **Step 4: Relancer le test**
 
@@ -176,8 +204,8 @@ Attendu : 2 passed.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add tests/test_timestamp_columns_are_tz_aware.py libs/cmi_common/cmi_common/db/models.py
-git commit -m "fix(db): quatre colonnes temporelles se declaraient sans fuseau
+git add tests/test_timestamp_columns_are_tz_aware.py libs/cmi_common/cmi_common/db/
+git commit -m "fix(db): sept colonnes temporelles se declaraient sans fuseau
 
 Les colonnes sont timestamptz en base; les modeles disaient TIMESTAMP.
 SQLAlchemy rendait donc le parametre sans fuseau et toute lecture filtrant
@@ -185,8 +213,13 @@ sur un datetime aware levait asyncpg.DataError a l'encodage. C'est ce qui
 faisait echouer collector-binance-futures a 100% de ses cycles depuis son
 deploiement, sans que l'axe positioning ne produise une seule lecture.
 
+Trois des sept viennent de TimestampMixin plutot que d'une declaration
+locale, donc Token, Decision et Trade portaient le defaut sans qu'il soit
+visible dans models.py.
+
 Le garde-fou balaie toutes les colonnes: rien d'autre dans la suite ne
-confronte une declaration a sa colonne."
+confronte une declaration a sa colonne, et c'est exactement pourquoi la
+divergence a vecu dans deux fichiers a la fois."
 ```
 
 ---

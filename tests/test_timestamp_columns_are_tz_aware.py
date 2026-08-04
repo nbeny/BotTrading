@@ -38,7 +38,8 @@ def test_every_datetime_column_declares_a_timezone() -> None:
     naive = [name for name, type_ in _datetime_columns() if not type_.timezone]
     assert not naive, (
         f"colonnes temporelles declarees sans fuseau: {naive}. "
-        "La base les stocke en timestamptz; SQLAlchemy rendra le parametre en "
-        "TIMESTAMP WITHOUT TIME ZONE et toute lecture avec un datetime aware "
-        "levera asyncpg.DataError a l'encodage."
+        "La base les stocke en timestamptz; asyncpg accepte un datetime naif "
+        "sur ce type sans lever, mais l'interprete dans le fuseau local du "
+        "conteneur (TZ, pas PGTZ) -- un decalage muet, pas une erreur. "
+        "Corrige en declarant mapped_column(DateTime(timezone=True), ...)."
     )

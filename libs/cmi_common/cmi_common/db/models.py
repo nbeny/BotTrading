@@ -176,9 +176,10 @@ class _EventArchiveMixin:
     # timezone=True to match what migrations 0010/0011 actually create. Without
     # it the ORM believes the column is TIMESTAMP WITHOUT TIME ZONE, so the
     # create_all in tests/test_sentiment_reader_sql.py would build a table that
-    # disagrees with production. Several older models in this file still carry
-    # that mismatch; it is not fixed here because changing them is a separate
-    # change with its own blast radius.
+    # disagrees with production. Every other datetime column in this file used
+    # to carry that same mismatch; all of them are now declared timezone=True,
+    # and tests/test_timestamp_columns_are_tz_aware.py sweeps the whole file so
+    # a naive one can't creep back in unnoticed.
     time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
     event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     event_type: Mapped[str] = mapped_column(String(32))

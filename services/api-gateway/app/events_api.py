@@ -26,13 +26,15 @@ _COLUMNS = "time, event_id, event_type, topic, symbol, correlation_id, payload"
 def assume_utc(time: datetime) -> datetime:
     """Attach UTC to a naive timestamp before it is handed back as a cursor.
 
-    ``decode`` rejects a naive cursor time on purpose, so encoding one would
-    hand the client a token its own next request answers with a 400 --
-    pagination that dies on page 2 looking like a client bug. asyncpg normally
-    returns aware datetimes for TIMESTAMPTZ, but the archiver deliberately
-    *writes* naive UTC (archiver._naive_utc) and the whole repo treats a naive
-    timestamp as UTC, so assuming UTC here is the repo's convention, not a
-    guess.
+    ``decode`` rejects a naive cursor time on purpose (see events_cursor.py),
+    so encoding one would hand the client a token its own next request
+    answers with a 400 -- pagination that dies on page 2 looking like a
+    client bug. In normal operation ``time`` never arrives naive:
+    ``events_market.time`` / ``events_signal.time`` are ``timestamptz`` and
+    asyncpg decodes that type as timezone-aware regardless of how the row was
+    written. This is defense in depth against a legacy row, a future
+    regression, or a different driver -- the encode/decode contract, not a
+    write-side convention, is what this guards.
     """
     return time.replace(tzinfo=UTC) if time.tzinfo is None else time
 

@@ -10,6 +10,12 @@ decalage silencieux.
 Le test est syntaxique plutot que comportemental parce que le comportement
 qu'il protege ne se manifeste que contre un vrai Postgres dans un fuseau non
 UTC -- conditions qu'aucun test de cette suite ne reunit.
+
+Le balayage porte sur tout `services/api-gateway/app/*.py` plutot que sur une
+liste de fichiers nommes en dur. Une liste nommee ne protege que les fichiers
+auxquels on a deja pense -- c'est exactement ce qui a laisse passer un
+sixieme site (`events_api.py::assume_utc`) lors de la premiere version de ce
+test, qui n'en listait que quatre.
 """
 
 from __future__ import annotations
@@ -18,16 +24,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 GATEWAY = ROOT / "services/api-gateway/app"
-FILES = ["persister.py", "archiver.py", "read_api.py", "systems_pipeline.py"]
+
+
+def _module_files() -> list[Path]:
+    return sorted(p for p in GATEWAY.rglob("*.py") if "__pycache__" not in p.parts)
 
 
 def test_no_module_strips_tzinfo_before_a_query() -> None:
     offenders = [
-        f"{name}:{n}"
-        for name in FILES
-        for n, line in enumerate(
-            (GATEWAY / name).read_text(encoding="utf-8").splitlines(), 1
-        )
+        f"{p.relative_to(GATEWAY)}:{n}"
+        for p in _module_files()
+        for n, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
         if "replace(tzinfo=None)" in line
     ]
     assert not offenders, (
@@ -38,5 +45,13 @@ def test_no_module_strips_tzinfo_before_a_query() -> None:
 
 
 def test_the_helper_itself_is_gone() -> None:
-    for name in ("persister.py", "archiver.py"):
-        assert "_naive_utc" not in (GATEWAY / name).read_text(encoding="utf-8")
+    offenders = [
+        str(p.relative_to(GATEWAY))
+        for p in _module_files()
+        if "_naive_utc" in p.read_text(encoding="utf-8")
+    ]
+    assert not offenders, (
+        f"reference residuelle a une fonction supprimee: {offenders}. Un nom de "
+        "fonction disparue qui subsiste dans un commentaire ou une docstring est "
+        "une piste morte pour le prochain lecteur."
+    )

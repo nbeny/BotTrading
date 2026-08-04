@@ -125,7 +125,12 @@ def test_row_carries_the_full_payload_and_the_indexed_columns() -> None:
     # `price_usd` is a Decimal; Pydantic's JSON mode renders it as a string so
     # the payload stays valid JSONB without losing precision.
     assert float(row["payload"]["price_usd"]) == 100.0
-    assert row["time"].tzinfo is not None  # les colonnes sont timestamptz
+    # Comparaison de valeur, pas seulement de presence du fuseau : un naif
+    # n'echoue pas, il decale. Mesure contre la production, un naif ecrit
+    # sous TZ=America/New_York s'ecrit avec un offset de quatre heures --
+    # une egalite directe avec occurred_at attrape ce decalage la ou
+    # `tzinfo is not None` le laisserait passer.
+    assert row["time"] == ev.occurred_at
 
 
 def test_an_event_without_a_symbol_is_archived_with_a_null_symbol() -> None:

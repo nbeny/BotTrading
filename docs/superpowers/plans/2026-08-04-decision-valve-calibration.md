@@ -1848,7 +1848,8 @@ import argparse
 import asyncio
 import os
 import sys
-from collections import Counter, defaultdict
+from collections import Counter
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 # Le script touche un service qui embarque un package nomme `app`, comme tous
@@ -1884,7 +1885,30 @@ AXIS_PROBE = {
 }
 
 
-async def _load(days: int):
+@dataclass
+class Scan:
+    """Tout ce que le rejeu retient, et rien de plus.
+
+    La fenetre ne tient pas en memoire: 1 414 216 lignes sur 7 jours, 368 Mo de
+    JSONB compresse, contre 1 996 Mo disponibles sur le VPS. Une fois converties
+    en dicts Python, les features pesent plusieurs fois leur taille sur disque.
+    Le parcours est donc un flux, et l'on n'accumule que des agregats bornes.
+
+    `best_by_symbol_day` merite un mot: compter les symboles distincts par seuil
+    en gardant un ensemble par seuil couterait jusqu'a cent insertions par ligne,
+    soit ~141 millions. Retenir le meilleur score de chaque couple (symbole, jour)
+    donne la meme reponse pour tout seuil, dans ~10 000 entrees.
+    """
+
+    total: int = 0
+    no_evidence: int = 0
+    presence: Counter = field(default_factory=Counter)
+    score_counts: Counter = field(default_factory=Counter)
+    best_by_symbol_day: dict = field(default_factory=dict)
+    sonnet_scores: list = field(default_factory=list)
+
+
+async def _scan(days: int) -> Scan:
     db = Database(get_settings().db)
     since = datetime.now(tz=UTC) - timedelta(days=days)
     stmt = (
@@ -1897,46 +1921,37 @@ async def _load(days: int):
         .where(DecisionJournal.time > since)
         .execution_options(yield_per=5_000)
     )
+    scan = Scan()
     async with db.sessionmaker() as session:
-        rows = [tuple(r) for r in (await session.execute(stmt)).all()]
+        result = await session.stream(stmt)
+        async for time_, symbol, raw, sonnet in result:
+            scan.total += 1
+            raw = raw or {}
+            for axis, probe in AXIS_PROBE.items():
+                if probe in raw:
+                    scan.presence[axis] += 1
+            if sonnet is not None:
+                scan.sonnet_scores.append(sonnet)
+            outcome = score(features_from(raw, now=time_))
+            if outcome.confidence == 0.0:
+                # _MIN_PRESENT_WEIGHT a refuse de renormaliser: trop peu de
+                # preuve. Ces lignes n'auraient produit aucune decision, quel
+                # que soit le seuil; les compter tirerait la distribution vers
+                # le bas et donnerait un seuil trop permissif.
+                scan.no_evidence += 1
+                continue
+            value = outcome.opportunity_score
+            scan.score_counts[value] += 1
+            key = (symbol, time_.date().isoformat())
+            if value > scan.best_by_symbol_day.get(key, -1):
+                scan.best_by_symbol_day[key] = value
     await db.engine.dispose()
-    return rows
+    return scan
 
 
-def _presence(rows) -> dict[str, float]:
-    seen: Counter[str] = Counter()
-    for _time, _symbol, raw, _sonnet in rows:
-        for axis, probe in AXIS_PROBE.items():
-            if raw and probe in raw:
-                seen[axis] += 1
-    total = len(rows) or 1
-    return {axis: 100.0 * seen[axis] / total for axis in AXIS_PROBE}
-
-
-def _replay(rows):
-    """(scores, {seuil -> symboles-jours qui le franchissent}, lignes sans preuve)."""
-    scores: list[int] = []
-    by_threshold: dict[int, set[tuple[str, str]]] = defaultdict(set)
-    no_evidence = 0
-    for time_, symbol, raw, _sonnet in rows:
-        result = score(features_from(raw or {}, now=time_))
-        if result.confidence == 0.0:
-            # _MIN_PRESENT_WEIGHT a refuse de renormaliser: trop peu de preuve.
-            # Ces lignes n'auraient jamais produit de decision, quel que soit le
-            # seuil, donc les compter tirerait la distribution vers le bas.
-            no_evidence += 1
-            continue
-        scores.append(result.opportunity_score)
-        day = time_.date().isoformat()
-        for threshold in range(result.opportunity_score, -1, -1):
-            by_threshold[threshold].add((symbol, day))
-    return scores, by_threshold, no_evidence
-
-
-def _threshold_for(scores: list[int], target_per_day: int, days: int) -> int:
+def _threshold_for(counts: Counter, target_per_day: int, days: int) -> int:
     """Plus petit seuil entier dont le debit ne depasse pas la cible."""
     budget = target_per_day * days
-    counts = Counter(scores)
     running = 0
     for value in range(100, -1, -1):
         running += counts[value]
@@ -1945,17 +1960,28 @@ def _threshold_for(scores: list[int], target_per_day: int, days: int) -> int:
     return 0
 
 
-def _report(rows, args) -> int:
-    print(f"\n=== {len(rows)} lignes sur {args.days} jours ===\n")
+def _percentile(counts: Counter, pct: float) -> int:
+    """Percentile lu sur un histogramme, sans materialiser la serie."""
+    total = sum(counts.values())
+    target = total * pct / 100.0
+    running = 0
+    for value in range(0, 101):
+        running += counts[value]
+        if running >= target:
+            return value
+    return 100
+
+
+def _report(scan: Scan, args) -> int:
+    print(f"\n=== {scan.total} lignes sur {args.days} jours ===\n")
 
     print("Presence par axe (part des lignes ou la feature a ete lue) :")
-    presence = _presence(rows)
     for axis, weight in sorted(WEIGHTS.items(), key=lambda kv: -kv[1]):
-        pct = presence[axis]
-        flag = "  <-- MUET" if pct == 0.0 else ""
+        pct = 100.0 * scan.presence[axis] / scan.total
+        flag = "  <-- MUET" if scan.presence[axis] == 0 else ""
         print(f"  {axis:<20} poids {weight:<7.4f} {pct:6.2f} %{flag}")
 
-    dark = [axis for axis, pct in presence.items() if pct == 0.0]
+    dark = [axis for axis in AXIS_PROBE if scan.presence[axis] == 0]
     if dark:
         print(
             f"\nREFUS. Axes muets : {dark}.\n"
@@ -1966,29 +1992,27 @@ def _report(rows, args) -> int:
         )
         return 1
 
-    scores, by_threshold, no_evidence = _replay(rows)
-    if not scores:
+    scored = sum(scan.score_counts.values())
+    if not scored:
         print("\nAucune ligne scorable sur la fenetre.")
         return 1
     print(
-        f"\n{no_evidence} lignes sans preuve suffisante (_MIN_PRESENT_WEIGHT), exclues."
-        f"\n{len(scores)} lignes scorees."
+        f"\n{scan.no_evidence} lignes sans preuve suffisante "
+        f"(_MIN_PRESENT_WEIGHT), exclues.\n{scored} lignes scorees."
     )
 
-    ordered = sorted(scores)
     print("\nDistribution des scores recomputes :")
     for label, pct in (("p50", 50.0), ("p90", 90.0), ("p99", 99.0), ("p99.9", 99.9)):
-        index = min(len(ordered) - 1, int(len(ordered) * pct / 100))
-        print(f"  {label:<6} {ordered[index]}")
-    print(f"  max    {ordered[-1]}")
+        print(f"  {label:<6} {_percentile(scan.score_counts, pct)}")
+    print(f"  max    {max(scan.score_counts)}")
 
     if args.decisions_per_day is None:
         print("\nAucun debit cible donne (--decisions-per-day) : rapport seul.")
         return 0
 
-    threshold = _threshold_for(scores, args.decisions_per_day, args.days)
-    passing = sum(1 for s in scores if s >= threshold)
-    symbol_days = len(by_threshold.get(threshold, ()))
+    threshold = _threshold_for(scan.score_counts, args.decisions_per_day, args.days)
+    passing = sum(n for value, n in scan.score_counts.items() if value >= threshold)
+    symbol_days = sum(1 for best in scan.best_by_symbol_day.values() if best >= threshold)
     print(
         f"\n=== Pour {args.decisions_per_day} decisions/jour ===\n"
         f"  DECISION_THRESHOLD = {threshold}\n"
@@ -2003,10 +2027,11 @@ def _report(rows, args) -> int:
     for floor in (threshold - 10, threshold - 5, threshold, threshold + 5):
         if floor < 0:
             continue
-        kept = sum(1 for s in scores if s >= max(threshold, floor))
+        effective = max(threshold, floor)
+        kept = sum(n for value, n in scan.score_counts.items() if value >= effective)
         print(f"  RISK_MIN_SCORE={floor:<4} -> {kept / args.days:.1f}/jour")
 
-    sonnet = sorted(row[3] for row in rows if row[3] is not None)
+    sonnet = sorted(scan.sonnet_scores)
     if sonnet:
         print(
             f"\nSeconde population filtree par le meme plancher : {len(sonnet)} "
@@ -2029,11 +2054,11 @@ def main() -> int:
         help="debit cible en aval; sans lui, le script ne sort que le rapport",
     )
     args = parser.parse_args()
-    rows = asyncio.run(_load(args.days))
-    if not rows:
+    scan = asyncio.run(_scan(args.days))
+    if not scan.total:
         print("Aucune ligne sur la fenetre demandee.")
         return 1
-    return _report(rows, args)
+    return _report(scan, args)
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from .config import Settings, get_settings
 from .logging import setup_logging
 from .observability.tracing import setup_tracing
+from .runner import failing_tasks
 
 Lifespan = Callable[[FastAPI], AsyncIterator[None]]
 StartupHook = Callable[[FastAPI, Settings], Awaitable[None]]
@@ -50,13 +51,30 @@ def create_app(
     app = FastAPI(title=service_name, version="0.1.0", lifespan=lifespan)
 
     @app.get("/health", tags=["ops"])
-    async def health() -> dict[str, object]:
-        """Liveness + readiness probe."""
-        return {
+    async def health(response: Response) -> dict[str, object]:
+        """Liveness + readiness probe.
+
+        Repond 503 des qu'une tache periodique a echoue `UNHEALTHY_AFTER` fois
+        de suite. Sans cela un collector ratant tous ses cycles reste `healthy`
+        pour Docker, ce qui s'est produit pendant 28 heures.
+        """
+        failing = failing_tasks()
+        body: dict[str, object] = {
             "service": service_name,
-            "status": "ok",
+            "status": "degraded" if failing else "ok",
             "ready": bool(getattr(app.state, "ready", False)),
         }
+        if failing:
+            response.status_code = 503
+            body["failing_tasks"] = {
+                name: {
+                    "consecutive_failures": state.consecutive_failures,
+                    "last_error": state.last_error,
+                    "last_success": state.last_success,
+                }
+                for name, state in failing.items()
+            }
+        return body
 
     @app.get("/metrics", tags=["ops"])
     async def metrics() -> Response:

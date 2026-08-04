@@ -56,8 +56,13 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     app.state.worker_task = asyncio.create_task(
         run_periodic(_tick, WORKER_INTERVAL, name="sentiment-worker")
     )
+    # critical=False: une compaction ratee merite une metrique, pas de faire
+    # repondre /health 503 alors que sentiment-worker (10 s) scorerait
+    # parfaitement.
     app.state.compact_task = asyncio.create_task(
-        run_periodic(_compact, COMPACT_INTERVAL, name="sentiment-compaction")
+        run_periodic(
+            _compact, COMPACT_INTERVAL, name="sentiment-compaction", critical=False
+        )
     )
 
 

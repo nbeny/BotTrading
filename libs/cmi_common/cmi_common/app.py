@@ -54,9 +54,12 @@ def create_app(
     async def health(response: Response) -> dict[str, object]:
         """Liveness + readiness probe.
 
-        Repond 503 des qu'une tache periodique a echoue `UNHEALTHY_AFTER` fois
-        de suite. Sans cela un collector ratant tous ses cycles reste `healthy`
-        pour Docker, ce qui s'est produit pendant 28 heures.
+        Repond 503 des qu'une tache periodique *critique* a depasse son seuil
+        d'echecs consecutifs (derive de sa cadence, voir
+        `runner.threshold_for_interval`). Sans cela un collector ratant tous
+        ses cycles reste `healthy` pour Docker, ce qui s'est produit pendant
+        28 heures. Une tache `critical=False` (rafraichissement, maintenance)
+        peut depasser son seuil sans jamais faire basculer ce statut.
         """
         failing = failing_tasks()
         body: dict[str, object] = {

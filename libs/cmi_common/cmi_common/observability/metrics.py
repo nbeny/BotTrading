@@ -77,3 +77,15 @@ AI_MODEL_TIER_MISMATCH = Counter(
     "CLI served a different model family than requested",
     ["service", "requested_tier", "actual_tier"],
 )
+
+#: Ticks de tache periodique, par issue. Le nom est une constante parce qu'une
+#: seconde copie de ces chaines est ce qui avait casse le graphe du Command
+#: Center: le collecteur scrutait `events_consumed_total` quand le compteur
+#: s'appelle `cmi_events_consumed_total`, et servait « 0 » pour « non mesure ».
+PERIODIC_TICKS_METRIC = "cmi_periodic_ticks_total"
+
+PERIODIC_TICKS = Counter(
+    PERIODIC_TICKS_METRIC,
+    "Periodic task ticks by outcome",
+    ["service", "task", "status"],
+)

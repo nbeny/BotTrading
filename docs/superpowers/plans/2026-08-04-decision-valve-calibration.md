@@ -1902,6 +1902,9 @@ class Scan:
 
     total: int = 0
     no_evidence: int = 0
+    #: Lignes portant une lecture de regime. Zero signifie que la fenetre
+    #: precede le deploiement qui la journalise, pas qu'il n'y en avait pas.
+    regime_seen: int = 0
     presence: Counter = field(default_factory=Counter)
     score_counts: Counter = field(default_factory=Counter)
     best_by_symbol_day: dict = field(default_factory=dict)
@@ -1930,6 +1933,8 @@ async def _scan(days: int) -> Scan:
             for axis, probe in AXIS_PROBE.items():
                 if probe in raw:
                     scan.presence[axis] += 1
+            if "market_sentiment" in raw:
+                scan.regime_seen += 1
             if sonnet is not None:
                 scan.sonnet_scores.append(sonnet)
             outcome = score(features_from(raw, now=time_))
@@ -1989,6 +1994,23 @@ def _report(scan: Scan, args) -> int:
             "calibre ici vaudrait pour un modele ampute, et deviendrait faux des\n"
             "que ces axes se remettent a parler -- sans erreur ni test rouge.\n"
             "Reparer la collecte, laisser tourner 24 h, relancer."
+        )
+        return 1
+
+    # La lecture de regime n'est pas un axe -- elle alimente news_score -- mais
+    # son absence *totale* signifie que la fenetre precede le deploiement qui la
+    # fait voyager avec les features. Le rejeu de ces lignes-la ne reproduirait
+    # pas ce que la production avait calcule: le moteur, lui, avait la valeur en
+    # memoire. Une absence partielle est normale et attendue: mesure sur 14
+    # jours, 38 ecarts d'alimentation sur 399 depassent le TTL d'une heure.
+    if scan.regime_seen == 0:
+        print(
+            "\nREFUS. `market_sentiment` absent de toutes les lignes.\n"
+            "La fenetre precede le deploiement qui le journalise. Le moteur\n"
+            "avait pourtant cette valeur en memoire au moment de decider, donc\n"
+            "le rejeu de ces lignes serait faux d'un axe entier sur le tiers des\n"
+            "symboles qui n'ont pas de sentiment propre.\n"
+            "Attendre 24 h apres le deploiement, puis relancer avec --days 1."
         )
         return 1
 

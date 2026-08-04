@@ -91,6 +91,17 @@ async def test_a_market_sentiment_event_lands_in_the_regime_store() -> None:
     assert await features_mod.MarketRegimeStore(cache).get() == -0.4
 
 
+async def test_a_per_symbol_sentiment_never_becomes_the_regime() -> None:
+    """Sinon la derniere piece analysee deviendrait la « lecture de marche »
+    de toutes les autres: une valeur propre a un symbole rebaptisee mesure
+    globale, ce que la confiance du modele existe pour empecher -- elle ne
+    compte que les preuves specifiques au symbole."""
+    cache = FakeCache()
+    worker, _ = _build(cache)
+    await worker.handle(_sentiment("BTC", 0.8))
+    assert await features_mod.MarketRegimeStore(cache).get() is None
+
+
 async def test_market_never_becomes_a_pending_symbol() -> None:
     """_ready() refuse de scorer un symbole sans prix, donc MARKET n'est jamais
     analyse. L'inscrire au registre des symboles en attente ne ferait que le

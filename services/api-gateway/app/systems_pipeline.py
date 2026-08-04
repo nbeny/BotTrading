@@ -199,12 +199,14 @@ EXECUTED_STATUSES = ("submitted", "filled", "closed")
 FAILED_STATUSES = ("failed", "rejected")
 
 
-def _cutoffs(window: str) -> tuple[datetime, datetime]:
-    """(naive, aware) UTC cutoffs. `raw_content` is the one table with tz-aware
-    columns; mixing the two raises at query time, so both are computed once."""
-    hours = WINDOW_HOURS[window]
-    aware = datetime.now(tz=UTC) - timedelta(hours=hours)
-    return aware.replace(tzinfo=None), aware
+def _cutoff(window: str) -> datetime:
+    """Borne basse de la fenetre, avec fuseau.
+
+    Rendait auparavant un couple (naif, aware) parce que les modeles
+    declaraient TIMESTAMP la ou la colonne est timestamptz. Les deux formes
+    ont fusionne avec la correction des declarations.
+    """
+    return datetime.now(tz=UTC) - timedelta(hours=WINDOW_HOURS[window])
 
 
 async def _count(session, model, *where) -> int:
@@ -222,15 +224,15 @@ async def _latest(session, model, order_col, *where):
 async def fetch_stage_counts(session, window: str) -> dict[str, StageCounts]:
     """One StageCounts per stage over `window`. Raises on DB failure —
     `stage_counts_cached` decides what an operator should see."""
-    since, since_aware = _cutoffs(window)
+    since = _cutoff(window)
 
     prices = await _count(session, Price, Price.time >= since)
-    content = await _count(session, RawContent, RawContent.fetched_at >= since_aware)
+    content = await _count(session, RawContent, RawContent.fetched_at >= since)
     last_content = await _latest(
-        session, RawContent, RawContent.fetched_at, RawContent.fetched_at >= since_aware
+        session, RawContent, RawContent.fetched_at, RawContent.fetched_at >= since
     )
 
-    scored = await _count(session, RawContent, RawContent.scored_at >= since_aware)
+    scored = await _count(session, RawContent, RawContent.scored_at >= since)
     # Unwindowed on purpose: this is the unscored queue depth, not a rate.
     backlog = await _count(session, RawContent, RawContent.scored_at.is_(None))
     last_scored = await _latest(
@@ -583,7 +585,6 @@ class _DetailCtx:
 
     session: Any  # AsyncSession; typed loosely so this module stays import-light
     since: datetime
-    since_aware: datetime
     limit: int
     counts: StageCounts
 
@@ -599,10 +600,10 @@ class _DetailCtx:
 
 async def _detail_collect(ctx) -> tuple[list[dict], list[dict]]:
     rows = await ctx.rows(
-        RawContent, RawContent.fetched_at, RawContent.fetched_at >= ctx.since_aware
+        RawContent, RawContent.fetched_at, RawContent.fetched_at >= ctx.since
     )
     breakdown = await _grouped(
-        ctx.session, RawContent.source, RawContent.fetched_at >= ctx.since_aware
+        ctx.session, RawContent.source, RawContent.fetched_at >= ctx.since
     )
     prices = await _count(ctx.session, Price, Price.time >= ctx.since)
     breakdown.append({"key": "prices", "count": prices})
@@ -611,7 +612,7 @@ async def _detail_collect(ctx) -> tuple[list[dict], list[dict]]:
 
 async def _detail_sentiment(ctx) -> tuple[list[dict], list[dict]]:
     rows = await ctx.rows(
-        RawContent, RawContent.scored_at, RawContent.scored_at >= ctx.since_aware
+        RawContent, RawContent.scored_at, RawContent.scored_at >= ctx.since
     )
     return [scored_item(r) for r in rows], [
         {"key": "scoré", "count": ctx.counts.volume or 0},
@@ -689,11 +690,11 @@ DETAIL_BUILDERS = {
 async def fetch_stage_detail(session, stage_id: str, window: str, limit: int) -> dict:
     """Items + breakdown for one stage. `stage_id` is validated by the caller."""
     spec = STAGE_BY_ID[stage_id]
-    since, since_aware = _cutoffs(window)
+    since = _cutoff(window)
     counts = (await stage_counts_cached(session, window))[0].get(
         stage_id, StageCounts()
     )
-    ctx = _DetailCtx(session, since, since_aware, limit, counts)
+    ctx = _DetailCtx(session, since, limit, counts)
     items, breakdown = await DETAIL_BUILDERS[stage_id](ctx)
 
     return {

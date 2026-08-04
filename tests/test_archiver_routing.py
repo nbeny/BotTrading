@@ -125,7 +125,7 @@ def test_row_carries_the_full_payload_and_the_indexed_columns() -> None:
     # `price_usd` is a Decimal; Pydantic's JSON mode renders it as a string so
     # the payload stays valid JSONB without losing precision.
     assert float(row["payload"]["price_usd"]) == 100.0
-    assert row["time"].tzinfo is None  # naive UTC, convention du persister
+    assert row["time"].tzinfo is not None  # les colonnes sont timestamptz
 
 
 def test_an_event_without_a_symbol_is_archived_with_a_null_symbol() -> None:

@@ -51,7 +51,7 @@ class Price(Base):
 
     __tablename__ = "prices"
 
-    time: Mapped[datetime] = mapped_column(primary_key=True)
+    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
     symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
     price_usd: Mapped[Decimal] = mapped_column(Numeric(38, 12))
     market_cap_usd: Mapped[Decimal | None] = mapped_column(Numeric(38, 2))
@@ -67,7 +67,7 @@ class Signal(Base):
 
     __tablename__ = "signals"
 
-    time: Mapped[datetime] = mapped_column(primary_key=True)
+    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
     symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
     event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     opportunity_score: Mapped[int] = mapped_column(Integer)
@@ -90,7 +90,7 @@ class PipelineRejection(Base):
 
     __tablename__ = "pipeline_rejections"
 
-    time: Mapped[datetime] = mapped_column(primary_key=True)
+    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
     event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     stage: Mapped[str] = mapped_column(String(32))
     symbol: Mapped[str] = mapped_column(String(32))
@@ -108,7 +108,7 @@ class DecisionJournal(Base):
 
     __tablename__ = "decision_journal"
 
-    time: Mapped[datetime] = mapped_column(primary_key=True)
+    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
     event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     symbol: Mapped[str] = mapped_column(String(32))
     signal_event_id: Mapped[str] = mapped_column(String(64))

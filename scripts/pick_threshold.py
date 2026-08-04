@@ -129,6 +129,19 @@ _RISK_MIN_CONFIDENCE = float(os.getenv("RISK_MIN_CONFIDENCE", "0.3795"))
 #: garde ne se declenchait pas alors que l'operateur lisait "0.0%" et concluait
 #: a tort que l'axe avait ete valide. Le seuil est un pourcentage, pas une
 #: egalite stricte, precisement pour attraper ce cas.
+#:
+#: 1.0 est pose, pas mesure -- et surtout, un plancher UNIFORME sur les huit
+#: axes suppose a tort qu'ils devraient tous avoir la meme couverture. Un
+#: token sans depot GitHub n'a legitimement aucune lecture developer_activity;
+#: un token sans contrat perpetuel n'a legitimement aucune lecture
+#: positioning. Le seul chiffre mesure a ce jour est fundamentals a 3,6% de
+#: presence -- et c'est un axe qui fonctionne. Ce garde peut donc refuser sur
+#: un axe parfaitement sain: c'est pourquoi le message de refus (plus bas)
+#: enonce les deux lectures possibles au lieu de n'en offrir qu'une. Ce
+#: plancher uniforme est un garde-fou PROVISOIRE, en attendant des planchers
+#: PAR AXE mesures une fois que les huit axes auront tourne ensemble -- ce qui
+#: n'est jamais arrive a ce jour, puisque c'est precisement ce que cette
+#: branche rend possible.
 MIN_PRESENCE_PCT = 1.0
 
 
@@ -325,8 +338,27 @@ def _report(scan: Scan, args: argparse.Namespace) -> int:
             "Un axe absent est EXCLU du denominateur de renormalisation, pas note "
             "zero -- donc un seuil calibre ici vaudrait pour un modele ampute de "
             "ce poids, et deviendrait faux des que l'axe reparle, sans erreur ni "
-            "test rouge. Corrige la source (collecteur, health check) avant de "
-            "recalibrer."
+            "test rouge."
+        )
+        print(
+            "\nCe refus a deux lectures possibles, et le pourcentage seul ne "
+            "tranche pas entre elles :\n"
+            "  1. la collecte est cassee -- un collecteur echoue en silence "
+            "(ex. collector-binance-futures le 2026-08-04) ; verifie ses logs et "
+            "son /health, qui repond 503 apres plusieurs echecs consecutifs.\n"
+            "  2. l'axe est legitimement rare -- il ne s'applique qu'a un "
+            "sous-ensemble de tokens (positioning: pas de contrat perpetuel ; "
+            "developer_activity: pas de depot public), et sa couverture reelle "
+            "est simplement basse. Repere mesure : fundamentals tourne a 3,6% de "
+            "presence et fonctionne.\n"
+            "Ce qui distingue les deux : rapporte le compte brut affiche "
+            "ci-dessus au nombre de tokens de la fenetre auxquels l'axe peut "
+            "s'appliquer (pas au total des lignes, qui inclut les tokens hors "
+            "champ). Si tu conclus a la seconde lecture, ajuste "
+            "MIN_PRESENCE_PCT en connaissance de cause -- ne contourne pas ce "
+            "garde. MIN_PRESENCE_PCT reste un plancher provisoire, uniforme sur "
+            "les huit axes en l'absence de planchers mesures par axe (cf. le "
+            "commentaire de la constante)."
         )
         return 1
 

@@ -28,8 +28,9 @@ from cmi_common.events import (
 from cmi_common.events.base import Source
 from cmi_common.kafka import EventProducer, Topic
 from cmi_common.observability import EVENTS_CONSUMED, EVENTS_PRODUCED
+from cmi_common.sources import MARKET_SYMBOL
 
-from .features import FeatureStore
+from .features import FeatureStore, MarketRegimeStore
 from .scorer import ScorerConfig, local_opportunity
 
 logger = logging.getLogger(__name__)
@@ -63,11 +64,13 @@ class HaikuWorker:
         store: FeatureStore,
         producer: EventProducer,
         *,
+        regime: MarketRegimeStore | None = None,
         scorer_config: ScorerConfig | None = None,
         clock=None,
     ) -> None:
         self._store = store
         self._producer = producer
+        self._regime = regime
         self._cfg = scorer_config or ScorerConfig()
         self._clock = clock or time.monotonic
         # symbol -> (last event seen at, first event of this window seen at,
@@ -80,6 +83,16 @@ class HaikuWorker:
         if symbol is None:
             return
         EVENTS_CONSUMED.labels(SERVICE, topic, event.event_type).inc()
+        if symbol == MARKET_SYMBOL:
+            # Lecture a l'echelle du marche: elle informe le score de tous les
+            # symboles sans sentiment propre, mais n'est le sujet d'aucun. La
+            # faire entrer dans le registre des symboles en attente ne ferait
+            # que la balayer a chaque passage, puisque _ready() refuse de
+            # scorer un symbole sans prix.
+            value = fields.get("sentiment_score")
+            if self._regime is not None and value is not None:
+                await self._regime.set(float(value))
+            return
         # Unconditional: the event is folded into the symbol's state whether or
         # not it triggers an inference. Nothing arriving here is discarded.
         await self._store.update(symbol, fields)
@@ -100,12 +113,18 @@ class HaikuWorker:
             for symbol, (last, first, corr) in self._pending.items()
             if now - last >= SETTLE_S or now - first >= MAX_DELAY_S
         ]
+        regime = await self._regime.get() if self._regime is not None else None
         for symbol, correlation_id in due:
             del self._pending[symbol]
             features = await self._store.get(symbol)
             # Only score once we have at least a price/dex anchor plus one signal.
             if not self._ready(features):
                 continue
+            if regime is not None:
+                # Absente, la cle reste absente: `None` et un 0.0 mesure ne
+                # disent pas la meme chose au scoreur, qui exclut l'axe dans un
+                # cas et le score dans l'autre.
+                features = {**features, "market_sentiment": regime}
             analysis = self._score(symbol, features, correlation_id)
             await self._producer.publish(Topic.ANALYSIS, analysis)
             EVENTS_PRODUCED.labels(

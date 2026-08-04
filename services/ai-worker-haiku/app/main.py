@@ -11,7 +11,7 @@ from cmi_common import Settings, create_app
 from cmi_common.cache import Cache
 from cmi_common.kafka import EventConsumer, EventProducer, Topic
 
-from .features import FeatureStore
+from .features import FeatureStore, MarketRegimeStore
 from .scorer import ScorerConfig
 from .worker import HaikuWorker
 
@@ -34,7 +34,10 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     await producer.start()
     # Haiku triage is now a deterministic local scorer — no Claude, no quota.
     worker = HaikuWorker(
-        FeatureStore(cache), producer, scorer_config=scorer_config_from_env()
+        FeatureStore(cache),
+        producer,
+        regime=MarketRegimeStore(cache),
+        scorer_config=scorer_config_from_env(),
     )
     consumer = EventConsumer(
         settings.kafka,

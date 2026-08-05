@@ -149,11 +149,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Set up SSH
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
         run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+          # Des longueurs, jamais les valeurs : suffisant pour distinguer un
+          # secret absent d'un secret errone, sans rien divulguer dans les logs.
+          echo "VPS_HOST: ${#VPS_HOST} caracteres | cle: $(wc -l < ~/.ssh/id_ed25519) lignes"
+          ssh-keygen -y -f ~/.ssh/id_ed25519 > /dev/null && echo "cle privee lisible et valide"
+          # `2>/dev/null` sous `bash -e` transformait le moindre hoquet reseau en
+          # echec muet du deploiement. On garde stderr et on n'echoue pas ici :
+          # les appels ssh/scp suivants utilisent accept-new et diront pourquoi.
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts \
+            || echo "ssh-keyscan a echoue -- on poursuit via StrictHostKeyChecking=accept-new"
+          # Pose ici plutot que sur chaque appel : rsync passe par ssh sans que
+          # ce soit visible dans la commande, et se serait fait oublier.
+          printf 'Host *\n  StrictHostKeyChecking accept-new\n  ConnectTimeout 20\n' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
 
       # Le .env du VPS etait pose a la main : des secrets stockes dans GitHub y
       # restaient inertes. Il est desormais regenere a chaque deploiement depuis

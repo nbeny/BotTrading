@@ -177,6 +177,9 @@ jobs:
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
           TELEGRAM_SESSION: ${{ secrets.TELEGRAM_SESSION }}
           GH_COLLECTOR_TOKEN: ${{ secrets.GH_COLLECTOR_TOKEN }}
+          KRAKEN_READ_API_KEY: ${{ secrets.KRAKEN_READ_API_KEY }}
+          KRAKEN_READ_API_SECRET: ${{ secrets.KRAKEN_READ_API_SECRET }}
+          CMI_ACCOUNT_POLL_S: ${{ vars.CMI_ACCOUNT_POLL_S }}
           LOG_LEVEL: ${{ vars.LOG_LEVEL }}
           ENVIRONMENT: ${{ vars.ENVIRONMENT }}
           DB_USER: ${{ vars.DB_USER }}
@@ -210,12 +213,23 @@ jobs:
               : > /tmp/keys.old
             fi'
           scp .env.render "$HOST:/opt/bottrading/.env.new"
+          # Echec ferme : une cle presente sur la machine et absente du rendu
+          # est une configuration posee a la main que GitHub ignore. La laisser
+          # disparaitre desactive une source en silence -- c'est arrive des le
+          # premier rendu, qui a emporte la paire Kraken en lecture seule. On
+          # refuse d'ecraser, on garde le .env en place, et on nomme les cles.
           ssh "$HOST" 'set -e; cd /opt/bottrading
             grep -oE "^[A-Za-z_][A-Za-z0-9_]*" .env.new | sort -u > /tmp/keys.new
-            echo "== cles retirees par ce deploiement =="
-            comm -23 /tmp/keys.old /tmp/keys.new || true
+            lost=$(comm -23 /tmp/keys.old /tmp/keys.new)
             echo "== cles ajoutees par ce deploiement =="
             comm -13 /tmp/keys.old /tmp/keys.new || true
+            if [ -n "$lost" ]; then
+              echo "FATAL: le rendu perdrait des cles presentes sur le VPS :" >&2
+              echo "$lost" >&2
+              echo "Les ajouter dans environment production ET dans scripts/render_vps_env.py." >&2
+              rm -f .env.new /tmp/keys.old /tmp/keys.new
+              exit 1
+            fi
             mv .env.new .env
             chmod 600 .env
             rm -f /tmp/keys.old /tmp/keys.new'

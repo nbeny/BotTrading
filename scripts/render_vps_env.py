@@ -38,6 +38,13 @@ KEYS: list[tuple[str, str]] = [
     ("ANTHROPIC_CLI_CONCURRENCY", "ANTHROPIC_CLI_CONCURRENCY"),
     ("OTEL_TRACING_ENABLED", "OTEL_TRACING_ENABLED"),
     ("TRADING_MODE", "TRADING_MODE"),
+    # Paire Kraken en lecture seule ("Query Funds" uniquement) : elle sert a
+    # relever le solde reel du compte, ce qui est un appel authentifie meme en
+    # dry_run. Le compte est spot, pas Futures. Sans elle la venue se declare
+    # indisponible -- ce que le premier rendu a provoque en omettant ces cles.
+    ("KRAKEN_READ_API_KEY", "KRAKEN_READ_API_KEY"),
+    ("KRAKEN_READ_API_SECRET", "KRAKEN_READ_API_SECRET"),
+    ("CMI_ACCOUNT_POLL_S", "CMI_ACCOUNT_POLL_S"),
     ("NEWSDATA_API_KEY", "NEWSDATA_API_KEY"),
     ("NEYNAR_API_KEY", "NEYNAR_API_KEY"),
     ("YOUTUBE_API_KEY", "YOUTUBE_API_KEY"),

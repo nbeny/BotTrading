@@ -142,6 +142,7 @@ jobs:
     needs: images
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
     runs-on: ubuntu-latest
+    environment: production
     permissions:
       contents: read
       packages: read
@@ -153,6 +154,73 @@ jobs:
           echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      # Le .env du VPS etait pose a la main : des secrets stockes dans GitHub y
+      # restaient inertes. Il est desormais regenere a chaque deploiement depuis
+      # l'environment `production`. Le rendu passe par Python et os.environ, pas
+      # par une interpolation ${{ }} dans du shell : un guillemet ou un dollar
+      # dans une valeur y casserait le fichier ou s'echapperait dans les logs.
+      - name: Render VPS .env from the production environment
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          CONTROL_ADMIN_USER: ${{ secrets.CONTROL_ADMIN_USER }}
+          CONTROL_ADMIN_PASSWORD: ${{ secrets.CONTROL_ADMIN_PASSWORD }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
+          NEWSDATA_API_KEY: ${{ secrets.NEWSDATA_API_KEY }}
+          NEYNAR_API_KEY: ${{ secrets.NEYNAR_API_KEY }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          BLUESKY_IDENTIFIER: ${{ secrets.BLUESKY_IDENTIFIER }}
+          BLUESKY_APP_PASSWORD: ${{ secrets.BLUESKY_APP_PASSWORD }}
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          TELEGRAM_SESSION: ${{ secrets.TELEGRAM_SESSION }}
+          GH_COLLECTOR_TOKEN: ${{ secrets.GH_COLLECTOR_TOKEN }}
+          LOG_LEVEL: ${{ vars.LOG_LEVEL }}
+          ENVIRONMENT: ${{ vars.ENVIRONMENT }}
+          DB_USER: ${{ vars.DB_USER }}
+          DB_NAME: ${{ vars.DB_NAME }}
+          KAFKA_HEAP_OPTS: ${{ vars.KAFKA_HEAP_OPTS }}
+          HAIKU_REPLICAS: ${{ vars.HAIKU_REPLICAS }}
+          ANTHROPIC_CLI_CONCURRENCY: ${{ vars.ANTHROPIC_CLI_CONCURRENCY }}
+          OTEL_TRACING_ENABLED: ${{ vars.OTEL_TRACING_ENABLED }}
+          TRADING_MODE: ${{ vars.TRADING_MODE }}
+          GH_COLLECTOR_POLL_INTERVAL: ${{ vars.GH_COLLECTOR_POLL_INTERVAL }}
+          GH_COLLECTOR_MAX_REFRESH_PER_CYCLE: ${{ vars.GH_COLLECTOR_MAX_REFRESH_PER_CYCLE }}
+          GH_COLLECTOR_UNIVERSE_SIZE: ${{ vars.GH_COLLECTOR_UNIVERSE_SIZE }}
+          GH_COLLECTOR_LISTS_REFRESH_HOURS: ${{ vars.GH_COLLECTOR_LISTS_REFRESH_HOURS }}
+          REGISTRY: ${{ env.REGISTRY }}
+          TAG: ${{ github.sha }}
+        run: |
+          umask 077
+          python3 scripts/render_vps_env.py .env.render
+
+      - name: Back up and install the .env on the VPS
+        run: |
+          set -euo pipefail
+          HOST="${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}"
+          # Le .env courant du VPS a pu recevoir une cle a la main. On le garde,
+          # et on affiche le diff des NOMS de cles -- jamais des valeurs.
+          ssh "$HOST" 'set -e; cd /opt/bottrading
+            if [ -f .env ]; then
+              cp -p .env ".env.bak.${{ github.sha }}"
+              grep -oE "^[A-Za-z_][A-Za-z0-9_]*" .env | sort -u > /tmp/keys.old
+            else
+              : > /tmp/keys.old
+            fi'
+          scp .env.render "$HOST:/opt/bottrading/.env.new"
+          ssh "$HOST" 'set -e; cd /opt/bottrading
+            grep -oE "^[A-Za-z_][A-Za-z0-9_]*" .env.new | sort -u > /tmp/keys.new
+            echo "== cles retirees par ce deploiement =="
+            comm -23 /tmp/keys.old /tmp/keys.new || true
+            echo "== cles ajoutees par ce deploiement =="
+            comm -13 /tmp/keys.old /tmp/keys.new || true
+            mv .env.new .env
+            chmod 600 .env
+            rm -f /tmp/keys.old /tmp/keys.new'
+          rm -f .env.render
+
       - name: Sync deploy files to VPS
         run: |
           rsync -az --mkpath \

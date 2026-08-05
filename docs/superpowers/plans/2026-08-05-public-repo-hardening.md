@@ -348,7 +348,8 @@ SECRETS = {
     "TELEGRAM_API_ID": "TELEGRAM_API_ID",
     "TELEGRAM_API_HASH": "TELEGRAM_API_HASH",
     "TELEGRAM_SESSION": "TELEGRAM_SESSION",
-    # GitHub refuse tout secret prefixe GITHUB_ ; remappe au rendu du .env
+    # GitHub refuse tout secret ET toute variable prefixes GITHUB_ (HTTP 422).
+    # Remappe au rendu du .env.
     "GITHUB_TOKEN": "GH_COLLECTOR_TOKEN",
 }
 
@@ -367,10 +368,12 @@ if missing:
     sys.exit(1)
 
 for local, remote in SECRETS.items():
+    # `gh secret set` lit la valeur sur stdin quand --body est absent : elle ne
+    # passe jamais en argument, donc ni dans l'historique du shell ni dans la
+    # liste des processus. (Il n'existe pas de --body-file.)
     subprocess.run(
-        ["gh", "secret", "set", remote, "--env", "production",
-         "-R", "nbeny/BotTrading", "--body-file", "-"],
-        input=env[local].encode(), check=True,
+        ["gh", "secret", "set", remote, "--env", "production", "-R", "nbeny/BotTrading"],
+        input=env[local].encode(), check=True, stdout=subprocess.DEVNULL,
     )
     print(f"  set {remote}  ({len(env[local])} caracteres)")
 print(f"\n{len(SECRETS)} secrets pousses.")
@@ -388,12 +391,24 @@ passe de vrais ordres, elle doit rester lisible dans l'UI GitHub.
 python - <<'PY'
 import subprocess, pathlib, sys
 
-VARS = [
-    "LOG_LEVEL", "ENVIRONMENT", "DB_USER", "DB_NAME", "KAFKA_HEAP_OPTS",
-    "HAIKU_REPLICAS", "ANTHROPIC_CLI_CONCURRENCY", "OTEL_TRACING_ENABLED",
-    "TRADING_MODE", "GITHUB_POLL_INTERVAL", "GITHUB_MAX_REFRESH_PER_CYCLE",
-    "GITHUB_UNIVERSE_SIZE", "GITHUB_LISTS_REFRESH_HOURS",
-]
+# nom dans .env -> nom de la variable GitHub. Les quatre reglages du collector
+# sont renommes : GitHub refuse le prefixe GITHUB_ sur les variables comme sur
+# les secrets (HTTP 422 "Variable names must not start with GITHUB_").
+VARS = {
+    "LOG_LEVEL": "LOG_LEVEL",
+    "ENVIRONMENT": "ENVIRONMENT",
+    "DB_USER": "DB_USER",
+    "DB_NAME": "DB_NAME",
+    "KAFKA_HEAP_OPTS": "KAFKA_HEAP_OPTS",
+    "HAIKU_REPLICAS": "HAIKU_REPLICAS",
+    "ANTHROPIC_CLI_CONCURRENCY": "ANTHROPIC_CLI_CONCURRENCY",
+    "OTEL_TRACING_ENABLED": "OTEL_TRACING_ENABLED",
+    "TRADING_MODE": "TRADING_MODE",
+    "GITHUB_POLL_INTERVAL": "GH_COLLECTOR_POLL_INTERVAL",
+    "GITHUB_MAX_REFRESH_PER_CYCLE": "GH_COLLECTOR_MAX_REFRESH_PER_CYCLE",
+    "GITHUB_UNIVERSE_SIZE": "GH_COLLECTOR_UNIVERSE_SIZE",
+    "GITHUB_LISTS_REFRESH_HOURS": "GH_COLLECTOR_LISTS_REFRESH_HOURS",
+}
 
 env = {}
 for line in pathlib.Path(".env").read_text(encoding="utf-8", errors="ignore").splitlines():
@@ -412,13 +427,13 @@ if env["TRADING_MODE"] != "dry_run":
     print("Confirmer que c'est voulu avant de continuer.")
     sys.exit(1)
 
-for k in VARS:
+for local, remote in VARS.items():
+    # `gh variable set` lit la valeur sur stdin quand --body est absent.
     subprocess.run(
-        ["gh", "variable", "set", k, "--env", "production",
-         "-R", "nbeny/BotTrading", "--body-file", "-"],
-        input=env[k].encode(), check=True,
+        ["gh", "variable", "set", remote, "--env", "production", "-R", "nbeny/BotTrading"],
+        input=env[local].encode(), check=True, stdout=subprocess.DEVNULL,
     )
-    print(f"  set {k}={env[k]}")
+    print(f"  set {remote}={env[local]}")
 PY
 ```
 
@@ -495,10 +510,10 @@ KEYS: list[tuple[str, str]] = [
     ("TELEGRAM_API_HASH", "TELEGRAM_API_HASH"),
     ("TELEGRAM_SESSION", "TELEGRAM_SESSION"),
     ("GITHUB_TOKEN", "GH_COLLECTOR_TOKEN"),
-    ("GITHUB_POLL_INTERVAL", "GITHUB_POLL_INTERVAL"),
-    ("GITHUB_MAX_REFRESH_PER_CYCLE", "GITHUB_MAX_REFRESH_PER_CYCLE"),
-    ("GITHUB_UNIVERSE_SIZE", "GITHUB_UNIVERSE_SIZE"),
-    ("GITHUB_LISTS_REFRESH_HOURS", "GITHUB_LISTS_REFRESH_HOURS"),
+    ("GITHUB_POLL_INTERVAL", "GH_COLLECTOR_POLL_INTERVAL"),
+    ("GITHUB_MAX_REFRESH_PER_CYCLE", "GH_COLLECTOR_MAX_REFRESH_PER_CYCLE"),
+    ("GITHUB_UNIVERSE_SIZE", "GH_COLLECTOR_UNIVERSE_SIZE"),
+    ("GITHUB_LISTS_REFRESH_HOURS", "GH_COLLECTOR_LISTS_REFRESH_HOURS"),
 ]
 
 # Sans elles la stack demarre mais ne fait rien d'utile : mieux vaut echouer ici,
@@ -624,10 +639,10 @@ insérer :
           ANTHROPIC_CLI_CONCURRENCY: ${{ vars.ANTHROPIC_CLI_CONCURRENCY }}
           OTEL_TRACING_ENABLED: ${{ vars.OTEL_TRACING_ENABLED }}
           TRADING_MODE: ${{ vars.TRADING_MODE }}
-          GITHUB_POLL_INTERVAL: ${{ vars.GITHUB_POLL_INTERVAL }}
-          GITHUB_MAX_REFRESH_PER_CYCLE: ${{ vars.GITHUB_MAX_REFRESH_PER_CYCLE }}
-          GITHUB_UNIVERSE_SIZE: ${{ vars.GITHUB_UNIVERSE_SIZE }}
-          GITHUB_LISTS_REFRESH_HOURS: ${{ vars.GITHUB_LISTS_REFRESH_HOURS }}
+          GH_COLLECTOR_POLL_INTERVAL: ${{ vars.GH_COLLECTOR_POLL_INTERVAL }}
+          GH_COLLECTOR_MAX_REFRESH_PER_CYCLE: ${{ vars.GH_COLLECTOR_MAX_REFRESH_PER_CYCLE }}
+          GH_COLLECTOR_UNIVERSE_SIZE: ${{ vars.GH_COLLECTOR_UNIVERSE_SIZE }}
+          GH_COLLECTOR_LISTS_REFRESH_HOURS: ${{ vars.GH_COLLECTOR_LISTS_REFRESH_HOURS }}
           REGISTRY: ${{ env.REGISTRY }}
           TAG: ${{ github.sha }}
         run: |

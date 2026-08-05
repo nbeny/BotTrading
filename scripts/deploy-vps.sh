@@ -29,6 +29,23 @@ fi
 
 COMPOSE="docker compose -f docker-compose.vps.yml"
 
+# Le prune de fin de script arrive trop tard quand le disque est deja plein :
+# `compose pull` echoue avant de l'atteindre, et son message ne nomme pas le
+# disque ("failed to create prepare snapshot dir"), ce qui envoie chercher la
+# panne ailleurs. Un deploiement tire ~19 images taguees au SHA du commit, soit
+# une quinzaine de Go qui s'ajoutent aux precedentes avant que quoi que ce soit
+# ne soit liberé. On fait donc de la place d'abord.
+FREE_GB=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
+echo "==> disque: ${FREE_GB} Go libres avant pull"
+if [ "${FREE_GB:-0}" -lt 25 ]; then
+  echo "==> moins de 25 Go libres : nettoyage prealable"
+  docker builder prune -af >/dev/null 2>&1 || true
+  # `until=24h` et pas 48h : ici on est deja contraint, on garde moins de marge
+  # de rollback plutot que d'echouer le deploiement.
+  docker image prune -af --filter "until=24h" >/dev/null 2>&1 || true
+  df -h / | awk 'NR==2 {print "==> disque apres nettoyage: " $4 " libres (" $5 " utilises)"}'
+fi
+
 echo "==> pulling images @ ${TAG}"
 $COMPOSE pull
 

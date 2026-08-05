@@ -32,8 +32,11 @@ dans le bundle JS servi aux navigateurs.
 | Trouvaille | Emplacement | Nature |
 |---|---|---|
 | IP publique du VPS (en clair) | 9 fichiers `docs/superpowers/`, HEAD **et** historique | Divulgation d'infrastructure |
-| Nom d'admin réel `alesio` | `tests/test_api_gateway_auth.py:64` | Moitié d'un couple de login |
-| `CLAUDE_DIR=C:\Users\nbeny\.claude` | `.env.example` | Chemin personnel, cosmétique |
+| Nom d'admin réel, en dur | `tests/test_api_gateway_auth.py:64` | Moitié d'un couple de login |
+| Chemin Windows personnel dans `CLAUDE_DIR`/`CLAUDE_CONFIG` | `.env.example:117-118` | Cosmétique |
+
+Ces trois valeurs ne sont volontairement pas reproduites ici : ce document est suivi et
+deviendra public. Le plan d'exécution les dérive à l'exécution plutôt que de les écrire.
 
 Le domaine `crypto.nbeny.fr` (9 fichiers) est **conservé** : il est déjà public en DNS, et le
 retirer casserait `deploy.yml` ainsi que la documentation de déploiement.
@@ -85,8 +88,10 @@ Une étape `Render .env` dans le job `deploy`, avant la synchronisation des fich
   un script Python qui lit `os.environ`. **Aucune interpolation `${{ }}` dans du shell** : une
   valeur contenant `"`, `$`, une apostrophe ou un retour ligne casserait le fichier ou
   s'échapperait dans les logs.
-- Le rendu écrit exactement les 32 clés que porte le `.env` actuel — ni plus, ni moins. Les
-  ~53 autres variables référencées par `docker-compose.vps.yml` gardent leur défaut inline.
+- Le rendu écrit 30 clés. Le `.env` actuel en porte 31 : la seule écartée est
+  `TURNSTILE_SITE_KEY`, que `docker-compose.vps.yml` ne lit jamais — la moitié publique est
+  injectée au build par `deploy.yml`, pas au runtime. Les ~55 autres variables référencées
+  par le compose gardent leur défaut inline.
 - `umask 077` au rendu, transfert par `rsync`, `chmod 600` à l'arrivée, suppression du fichier
   temporaire du runner.
 - **Le `.env` existant sur le VPS est sauvegardé en `.env.bak.<sha>` avant écrasement**, et
@@ -96,9 +101,9 @@ Une étape `Render .env` dans le job `deploy`, avant la synchronisation des fich
 
 ### Nettoyage de contenu et réécriture d'historique
 
-Au niveau de HEAD : l'IP du VPS → `<VPS_HOST>` dans les 9 fichiers `docs/`, `alesio`
-remplacé par un nom de fixture neutre dans `test_api_gateway_auth.py`, `CLAUDE_DIR` rendu
-générique dans `.env.example`.
+Au niveau de HEAD : l'IP du VPS → `<VPS_HOST>` dans les 9 fichiers `docs/`, le nom d'admin
+remplacé par la fixture neutre `operator` dans `test_api_gateway_auth.py`, et le nom
+d'utilisateur Windows → `<you>` dans `.env.example`.
 
 Puis `git filter-repo --replace-text` sur les 562 commits. Deux contraintes vérifiées :
 

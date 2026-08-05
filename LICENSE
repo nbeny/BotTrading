@@ -1,0 +1,75 @@
+Copyright (c) 2026 nbeny. Tous droits réservés. / All rights reserved.
+
+================================================================================
+FRANÇAIS
+================================================================================
+
+LICENCE PROPRIÉTAIRE — AUCUN DROIT ACCORDÉ
+
+Ce dépôt est rendu consultable publiquement à des fins de transparence et de
+démonstration uniquement. Sa publication ne constitue en aucun cas une mise à
+disposition, une licence libre, une licence open source, ni une renonciation à
+un quelconque droit.
+
+Aucun droit n'est accordé. En particulier, et sans que cette liste soit
+limitative, il est INTERDIT, à titre commercial comme non commercial :
+
+  - d'utiliser, d'exécuter ou de déployer tout ou partie de ce logiciel ;
+  - de le copier, reproduire, télécharger ou stocker, hors de la mise en cache
+    technique strictement nécessaire à sa consultation ;
+  - de le modifier, l'adapter, le traduire ou d'en créer des œuvres dérivées ;
+  - de le distribuer, republier, sous-licencier, vendre, louer ou transférer ;
+  - de l'incorporer, en tout ou partie, dans un autre projet, produit ou
+    service, qu'il soit gratuit ou payant ;
+  - de l'utiliser comme donnée d'entraînement, de mise au point ou d'évaluation
+    d'un modèle d'apprentissage automatique ;
+  - d'exploiter les méthodes, architectures ou concepts qu'il décrit.
+
+Seule la consultation du code au moyen de l'interface de GitHub est tolérée.
+
+Toute autre utilisation requiert une autorisation écrite préalable et expresse
+du titulaire des droits. Aucune autorisation tacite ne peut être déduite de
+l'absence de réponse.
+
+ABSENCE DE GARANTIE. Le logiciel est fourni « en l'état », sans garantie
+d'aucune sorte, expresse ou implicite. Il met en œuvre des opérations de
+trading automatisé comportant un risque de perte financière. Le titulaire des
+droits ne saurait être tenu responsable d'un quelconque dommage, perte ou
+préjudice, direct ou indirect, résultant de sa consultation ou de son usage,
+autorisé ou non.
+
+================================================================================
+ENGLISH (courtesy translation — the French text prevails)
+================================================================================
+
+PROPRIETARY LICENSE — NO RIGHTS GRANTED
+
+This repository is made publicly viewable for transparency and demonstration
+purposes only. Its publication is not a grant of rights, not an open source or
+free software license, and not a waiver of any right whatsoever.
+
+No rights are granted. In particular, and without limitation, the following are
+PROHIBITED, for commercial and non-commercial purposes alike:
+
+  - using, running or deploying this software in whole or in part;
+  - copying, reproducing, downloading or storing it, beyond the technical
+    caching strictly required to view it;
+  - modifying, adapting, translating it or creating derivative works from it;
+  - distributing, republishing, sublicensing, selling, renting or transferring
+    it;
+  - incorporating it, in whole or in part, into any other project, product or
+    service, whether free or paid;
+  - using it as training, fine-tuning or evaluation data for any machine
+    learning model;
+  - exploiting the methods, architectures or concepts it describes.
+
+Only viewing the code through the GitHub interface is tolerated.
+
+Any other use requires the prior express written permission of the rights
+holder. No permission may be inferred from a lack of response.
+
+NO WARRANTY. The software is provided "as is", without warranty of any kind,
+express or implied. It performs automated trading operations carrying a risk of
+financial loss. The rights holder shall not be liable for any damage, loss or
+harm, direct or indirect, arising from viewing or using it, whether authorized
+or not.

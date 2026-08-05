@@ -15,6 +15,19 @@ est documentée dans [`CLAUDE.md`](CLAUDE.md).
 
 ---
 
+## ⚠️ Usage — tous droits réservés
+
+Ce dépôt est **consultable, pas utilisable**. Il est publié pour la transparence et
+la démonstration, sous une **licence propriétaire qui n'accorde aucun droit** :
+pas d'usage commercial, pas d'usage non commercial, pas de copie, pas de
+modification, pas de redistribution, pas d'œuvre dérivée, pas d'entraînement de
+modèle. Voir [`LICENSE`](LICENSE).
+
+Le fait que GitHub permette techniquement de forker ce dépôt ne vaut pas
+autorisation. Toute utilisation requiert un accord écrit préalable.
+
+---
+
 ## 1. Vue d'ensemble de l'architecture
 
 ```

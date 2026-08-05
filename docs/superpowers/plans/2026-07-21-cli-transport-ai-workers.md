@@ -950,8 +950,8 @@ ANTHROPIC_CLI_CONCURRENCY=4
 ## Host paths to your authenticated Claude CLI credentials, mounted read-only
 ## into the ai-worker containers. Must contain the OAuth credential file (run
 ## `claude` and log in on the host first). Windows/Docker Desktop example:
-CLAUDE_DIR=C:\Users\nbeny\.claude
-CLAUDE_CONFIG=C:\Users\nbeny\.claude.json
+CLAUDE_DIR=C:\Users\<you>\.claude
+CLAUDE_CONFIG=C:\Users\<you>\.claude.json
 ```
 
 - [ ] **Step 2: Commit**
@@ -971,7 +971,7 @@ git commit -m "docs: document Claude CLI transport env vars"
 
 - [ ] **Step 1: Confirm the host has OAuth credentials**
 
-Check `C:\Users\nbeny\.claude` for a credentials file (e.g. `.credentials.json`). If missing, run `claude` on the host and log in before continuing.
+Check `C:\Users\<you>\.claude` for a credentials file (e.g. `.credentials.json`). If missing, run `claude` on the host and log in before continuing.
 
 - [ ] **Step 2: Run an authenticated CLI call inside the worker image**
 

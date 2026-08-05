@@ -61,7 +61,7 @@ def test_read_route_accepts_a_properly_signed_token(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("JWT_SECRET", SECRET)
-    token = encode_token({"sub": "alesio", "role": "admin"}, secret=SECRET)
+    token = encode_token({"sub": "operator", "role": "admin"}, secret=SECRET)
     resp = client.get("/data/content", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
 

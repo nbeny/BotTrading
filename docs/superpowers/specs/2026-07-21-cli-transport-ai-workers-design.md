@@ -138,7 +138,7 @@ Le transport par défaut reste `api` → aucun changement de comportement tant q
 
 ### ⚠️ Prérequis de vérification (première étape du plan)
 
-Sur le host Windows, `C:\Users\nbeny\.claude` doit contenir le **fichier de credentials
+Sur le host Windows, `C:\Users\<you>\.claude` doit contenir le **fichier de credentials
 OAuth** (pas seulement un keychain OS), sinon le `claude` du conteneur Linux ne sera pas
 authentifié. Étape de validation : lancer `claude -p --output-format json` dans le conteneur
 avec les volumes montés et confirmer une réponse authentifiée avant tout le reste.

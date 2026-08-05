@@ -37,12 +37,19 @@ COMPOSE="docker compose -f docker-compose.vps.yml"
 # ne soit liberé. On fait donc de la place d'abord.
 FREE_GB=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
 echo "==> disque: ${FREE_GB} Go libres avant pull"
-if [ "${FREE_GB:-0}" -lt 25 ]; then
-  echo "==> moins de 25 Go libres : nettoyage prealable"
+if [ "${FREE_GB:-0}" -lt 30 ]; then
+  echo "==> moins de 30 Go libres : nettoyage prealable"
   docker builder prune -af >/dev/null 2>&1 || true
-  # `until=24h` et pas 48h : ici on est deja contraint, on garde moins de marge
-  # de rollback plutot que d'echouer le deploiement.
-  docker image prune -af --filter "until=24h" >/dev/null 2>&1 || true
+  # Pas de filtre `until` ici. Un deploiement qui echoue puis rejoue laisse deux
+  # generations d'images agees de quelques minutes : tout filtre temporel les
+  # epargne toutes les deux, ce qui est exactement le moment ou on a besoin de
+  # place. `-a` sans filtre ne retire que ce qu'aucun conteneur ne reference.
+  #
+  # Les conteneurs arretes d'abord : ils referencent leurs images et les
+  # protegent du prune. C'est ce qui immobilisait 23 Go sur 99 -- prune -af seul
+  # ne rendait que 4 Go tant que 19 conteneurs morts tenaient les anciennes.
+  docker container prune -f >/dev/null 2>&1 || true
+  docker image prune -af >/dev/null 2>&1 || true
   df -h / | awk 'NR==2 {print "==> disque apres nettoyage: " $4 " libres (" $5 " utilises)"}'
 fi
 
@@ -63,6 +70,10 @@ $COMPOSE up -d --remove-orphans || {
 }
 
 echo "==> pruning images no longer in use"
+# Les conteneurs arretes d'abord : tant qu'ils existent ils referencent leurs
+# images, que `image prune` epargne donc. Sans cette ligne le prune ci-dessous
+# ne rend qu'une fraction de ce qu'il annonce.
+docker container prune -f >/dev/null 2>&1 || true
 # `-a`, not just dangling. Every deploy pulls images tagged with the commit SHA,
 # so the previous deploy's images stay *tagged* and are therefore never
 # dangling: a dangling-only prune reclaimed nothing and 196 images had piled up

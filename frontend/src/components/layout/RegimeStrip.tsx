@@ -112,7 +112,11 @@ export function RegimeStrip() {
               {anchorDriver.detail}
             </Typography>
             <Typography variant="caption" sx={{ opacity: 0.6 }}>
-              {anchorDriver.as_of ? `mesuré ${fmtRelative(anchorDriver.as_of, Date.now())}` : 'non mesuré — exclu de l’agrégat'}
+              {anchorDriver.state === null
+                ? 'non mesuré — exclu de l’agrégat'
+                : anchorDriver.as_of
+                  ? `mesuré ${fmtRelative(anchorDriver.as_of, Date.now())}`
+                  : 'fraîcheur inconnue'}
             </Typography>
           </Box>
         )}

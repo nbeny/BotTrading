@@ -43,6 +43,20 @@ describe('RegimeStrip', () => {
     await screen.findByText('ACCUMULATION');
     fireEvent.click(screen.getByTestId('driver-funding'));
     expect(await screen.findByText(/Contrarien/)).toBeInTheDocument();
+    // funding est mesuré (state bearish) et porte un as_of dans le mock → « mesuré ».
+    expect(await screen.findByText(/mesuré/)).toBeInTheDocument();
+  });
+
+  it('affiche « fraîcheur inconnue » pour un driver mesuré (voté) sans as_of, jamais « non mesuré »', async () => {
+    const regime = getRegime();
+    regime.drivers = regime.drivers.map((d) => (d.key === 'funding' ? { ...d, as_of: null } : d));
+    regimeGet.mockResolvedValue(regime);
+    statusGet.mockResolvedValue({ mode: 'dry_run', trading_enabled: true, auto_trading_enabled: false });
+    renderStrip();
+    await screen.findByText('ACCUMULATION');
+    fireEvent.click(screen.getByTestId('driver-funding'));
+    expect(await screen.findByText(/fraîcheur inconnue/)).toBeInTheDocument();
+    expect(screen.queryByText(/non mesuré/)).not.toBeInTheDocument();
   });
 
   it('rend REGIME: — quand le régime est null', async () => {

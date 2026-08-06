@@ -108,23 +108,6 @@ async def main() -> int:
     cache = Cache(settings.redis)
     async with db._sessionmaker() as s:
         calls = [
-            ("market/regime", regime_api.market_regime(session=s, cache=cache)),
-            (
-                "systems/journal/decisions",
-                journal_api.journal_decisions(
-                    window="30d", limit=5, offset=0, session=s
-                ),
-            ),
-            (
-                "systems/journal/calibration",
-                journal_api.journal_calibration(
-                    window="30d", threshold=70, session=s
-                ),
-            ),
-            (
-                "systems/journal/attribution",
-                journal_api.journal_attribution(window="30d", session=s),
-            ),
             ("portfolio", read_api.portfolio(session=s)),
             ("portfolio/positions", read_api.portfolio_positions(session=s)),
             ("portfolio/trades", read_api.portfolio_trades(limit=50, session=s)),
@@ -175,6 +158,26 @@ async def main() -> int:
                     before=None,
                     session=s,
                 ),
+            ),
+            # Cockpit vague 1 — regime + journal. window/threshold values mirror
+            # the frontend defaults (30d / 70) so this exercises the same query
+            # shape the terminal actually issues.
+            ("market/regime", regime_api.market_regime(session=s, cache=cache)),
+            (
+                "systems/journal/decisions",
+                journal_api.journal_decisions(
+                    window="30d", limit=5, offset=0, session=s
+                ),
+            ),
+            (
+                "systems/journal/calibration",
+                journal_api.journal_calibration(
+                    window="30d", threshold=70, session=s
+                ),
+            ),
+            (
+                "systems/journal/attribution",
+                journal_api.journal_attribution(window="30d", session=s),
             ),
         ]
         for name, coro in calls:

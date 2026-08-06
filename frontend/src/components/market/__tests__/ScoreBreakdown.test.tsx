@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { ScoreBreakdown } from '../ScoreBreakdown';
-import type { TokenScore } from '@/lib/types/dossier';
+import { SCORE_AXES, type TokenScore } from '@/lib/types/dossier';
 
 const score: TokenScore = {
   value: 84,
@@ -27,7 +27,7 @@ describe('ScoreBreakdown', () => {
 
   it('annonce combien d’axes sont mesurés', () => {
     render(<ScoreBreakdown score={score} />);
-    expect(screen.getByText(/2 axes sur 7/)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(`2 axes sur ${SCORE_AXES.length}`))).toBeInTheDocument();
   });
 
   it('dit que les preuves étaient insuffisantes plutôt que d’afficher un score', () => {
@@ -60,7 +60,7 @@ describe('ScoreBreakdown', () => {
       />,
     );
     expect(screen.getByTestId('axis-volume_growth')).toHaveTextContent('—');
-    expect(screen.getByText(/0 axe sur 7/)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(`0 axe sur ${SCORE_AXES.length}`))).toBeInTheDocument();
     expect(screen.queryByText(/Preuves insuffisantes/)).not.toBeInTheDocument();
   });
 });

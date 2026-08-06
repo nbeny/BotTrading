@@ -52,7 +52,7 @@ Three backend surfaces sit in front of the frontend. **Keep the read vs. write s
 
 | Service | Traefik host / port | Role | Kafka in | Kafka out | State |
 |---|---|---|---|---|---|
-| **api-gateway** | `api.cmi.localhost` :8000 | **READ-ONLY** REST | analysis, decision, risk, execution | — | persists → Postgres (Signal/Decision/Trade) |
+| **api-gateway** | `api.cmi.localhost` :8000 | **READ-ONLY** REST | analysis, decision, risk, execution | — | persists → Postgres; lit Redis features:*/market:regime (RO) |
 | **control-api** | `control.cmi.localhost` :8000 | **WRITE / control plane** + `/auth/login` (JWT) | — | `control.commands` | reads Redis `trading:*` |
 | **trading-engine** | none (background) | **execution core**, trades **Kraken Futures** | `risk.approved.events`, `control.commands` | `execution.events` | RW Redis `trading:*` |
 | **websocket-gateway** | `ws.cmi.localhost` :8000, host :8080 | broadcast 10 market/decision/exec topics → WS `/ws?token=` | 10 topics | — | — |
@@ -105,7 +105,7 @@ Every frontend read path has a matching route; live mode is wired.
 never `autoHeight` — it once grew to ~124 rows and pushed every other panel six screens down), and
 everything token-specific lives in a right-hand drawer driven by `?token=SYMBOL` in the URL. One
 endpoint feeds it, `GET /market/tokens/{symbol}/dossier` (`app/dossier.py` holds its pure assembly):
-score breakdown over the seven axes, pipeline verdict, decisions, news+social, exposure. The drawer
+score breakdown over the eight axes, pipeline verdict, decisions, news+social, exposure. The drawer
 deliberately has **no** live feed — `LiveEventStream` belongs to `/command`, and duplicating it here
 is what made the page unreadable. See
 `memory/web-terminal-backend-gap.md` and `memory/control-api-owns-frontend-control.md`.
@@ -135,7 +135,7 @@ budget bounds downloads, not reporting. **Emission slugs are parent slugs** (`aa
 through `parentProtocol`, without which AAVE reports 0.76% of its real TVL. `/overview/fees` needs
 `excludeTotalDataChart*` or it is 24.6 MB, and carries no `gecko_id` at all.
 
-**Scoring is now seven axes renormalised over present weight** (`decision-engine/app/scoring.py`) —
+**Scoring is now eight axes renormalised over present weight** (`decision-engine/app/scoring.py`) —
 an absent axis is *excluded*, not scored 0.0. That was the `RISK_MIN_SCORE=70` / max-observed-68
 deadlock: absent data was priced as worst-case data. `confidence` is the share of weight backed by
 **symbol-specific** evidence (the market-wide regime read informs the score but not confidence,

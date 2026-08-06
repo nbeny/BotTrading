@@ -135,10 +135,10 @@ REGIME: ACCUMULATION ▲ | conf 72% | funding +0.018% crowded-long | OI 24h +6.2
 
 | Driver | Source (déjà collectée) | Exemple de règle |
 |---|---|---|
-| `funding` | agrégat funding (Kraken Futures, repli Binance) | > +0,02 %/8h → crowded-long (contrarien : bearish) |
+| `funding` | agrégat funding Binance (`features:*` Redis ; Kraken Futures quand le collecteur existera) | médiane > +0.0001 (fraction/8h, ≈2× la médiane mesurée) → crowded-long (contrarien : bearish) |
 | `oi_delta` | delta OI 24h agrégé | hausse + prix en hausse → bullish |
 | `market_sentiment` | lecture market-wide [-1, 1] du pipeline sentiment | > +0,2 → bullish |
-| `btc_dominance` | CoinGecko global | dérivée 7 j, hausse → risk-off des alts |
+| `btc_dominance` | dérivée de `prices.market_cap_usd` sur l'univers suivi (~200 tokens) — approximation nommée dans `detail` | dérive 7 j > +0.5 pt → risk-off des alts |
 | `breadth` | part des tokens suivis à `market_trend` positif | > 60 % → bullish |
 
 Le régime est l'agrégat des votes (majorité pondérée simple) ; `confidence` est la part de
@@ -207,15 +207,15 @@ Nouvelle entrée de navigation. Trois panneaux :
    actuel. Interface du travail déjà entamé par `pick_threshold.py`, avec les mêmes
    définitions.
 3. **Attribution par axe** — sur une fenêtre glissante (30 j par défaut) : corrélation
-   simple entre contribution d'un axe et résultat simulé, avec `n` affiché. Sous
+   simple entre chaque **facteur de triage Haiku** (`momentum`/`volume`/`sentiment`/`liquidity`, seuls présents pour toutes les décisions du journal) et le résultat simulé ; l'attribution par les 8 axes exige des décisions passées et viendra quand le seuil laissera passer un échantillon. Sous
    `n < 20` décisions jugées sur la fenêtre, le panneau affiche « — (échantillon
-   insuffisant) », pas une corrélation sur trois points.
+   insuffisant) ».
 
 ### Backend — quatre endpoints de lecture (api-gateway)
 
 Même style que `dossier.py` : module d'assemblage pur + route fine, cache TTL 30 s,
 réponses ajoutées au manifeste `read_contract.py`, routes miroir dans le mock BFF
-(`NEXT_PUBLIC_USE_MOCK=1`).
+(`NEXT_PUBLIC_USE_MOCK=1`). api-gateway gagne un accès Redis **en lecture seule** (`features:*`, `market:regime`) — précédent existant chez risk-engine et trading-engine.
 
 | Endpoint | Rôle |
 |---|---|

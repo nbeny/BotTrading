@@ -8,13 +8,14 @@ should see how much data backs a number before the number itself.
 from __future__ import annotations
 
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .journal_calibration import MIN_N, TRIAGE_FACTORS, attribution, calibrate
 from .journal_query import (
     MIN_SAMPLE,
     by_cohort,
@@ -37,6 +38,22 @@ _WINDOWS = {"7d": 7, "30d": 30, "90d": 90}
 # Cohorts are reported for one horizon only -- see the comment at their use.
 # Defaults to the middle horizon: a realistic short-term hold.
 PRIMARY_HORIZON = os.getenv("COUNTERFACTUAL_PRIMARY_HORIZON", "4h")
+
+_raw_threshold = os.getenv("RISK_MIN_SCORE")
+#: None when the env is unset in THIS container: display '-' rather than a
+#: default 70 that would lie about the threshold risk-engine actually applies
+#: (101 in prod at the time of writing).
+CURRENT_THRESHOLD: int | None = int(_raw_threshold) if _raw_threshold else None
+
+_PNL_FIELD = f"pnl_{PRIMARY_HORIZON}"
+_OUTCOME_FIELD = f"outcome_{PRIMARY_HORIZON}"
+
+_ROWS_SQL = (
+    "SELECT time, event_id, symbol, score, confidence, escalated, sonnet_called,"
+    " sonnet_validated, sonnet_direction, entry_price, stop_loss, take_profit,"
+    " factors, risk_verdict, decision_event_id, correlation_id"
+    " FROM decision_journal WHERE time >= :since ORDER BY time DESC"
+)
 
 
 def attach_outcome(
@@ -165,4 +182,118 @@ async def journal_summary(
             "by_symbol": by_cohort(rows, key="symbol", field=f"pnl_{PRIMARY_HORIZON}"),
         },
         "updated_at": utcnow().isoformat(),
+    }
+
+
+async def _judged_rows(
+    session: AsyncSession,
+    since: datetime,
+    *,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    if limit is not None:
+        stmt = text(_ROWS_SQL + " LIMIT :limit OFFSET :offset")
+        params: dict[str, Any] = {"since": since, "limit": limit, "offset": offset}
+    else:
+        stmt = text(_ROWS_SQL)
+        params = {"since": since}
+    result = await session.execute(stmt, params)
+    rows = [dict(r._mapping) for r in result.all()]
+    judged: list[dict[str, Any]] = []
+    for row in rows:
+        if (
+            row.get("entry_price")
+            and row.get("stop_loss") is not None
+            and row.get("take_profit") is not None
+        ):
+            path = await price_path(
+                session, row["symbol"], row["time"], PRIMARY_HORIZON
+            )
+            judged.append(attach_outcome(row, path=path, horizon=PRIMARY_HORIZON))
+        else:
+            judged.append({**row, _PNL_FIELD: None, _OUTCOME_FIELD: None})
+    return judged
+
+
+def _map_row(row: dict[str, Any]) -> dict[str, Any]:
+    t = row.get("time")
+    return {
+        "time": t.isoformat() if t else None,
+        "event_id": row["event_id"],
+        "symbol": row["symbol"],
+        "score": row["score"],
+        "confidence": row["confidence"],
+        "escalated": bool(row["escalated"]),
+        "sonnet_called": bool(row["sonnet_called"]),
+        "sonnet_validated": row["sonnet_validated"],
+        "direction": row["sonnet_direction"],
+        "passed": row["decision_event_id"] is not None,
+        "risk_verdict": row["risk_verdict"],
+        "pnl_pct": row[_PNL_FIELD],
+        "outcome": row[_OUTCOME_FIELD],
+        "correlation_id": row["correlation_id"],
+    }
+
+
+@router.get("/systems/journal/decisions")
+async def journal_decisions(
+    window: str = Query("30d", pattern="^(7d|30d|90d)$"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_session_dep),
+) -> dict[str, Any]:
+    since = utcnow() - timedelta(days=_WINDOWS[window])
+    total_result = await session.execute(
+        text("SELECT count(*) FROM decision_journal WHERE time >= :since"),
+        {"since": since},
+    )
+    total = int(total_result.scalar_one() or 0)
+    rows = await _judged_rows(session, since, limit=limit, offset=offset)
+    return {
+        "window": window,
+        "horizon": PRIMARY_HORIZON,
+        "current_threshold": CURRENT_THRESHOLD,
+        "total": total,
+        "rows": [_map_row(r) for r in rows],
+    }
+
+
+@router.get("/systems/journal/calibration")
+async def journal_calibration(
+    window: str = Query("30d", pattern="^(7d|30d|90d)$"),
+    threshold: int = Query(70, ge=0, le=100),
+    session: AsyncSession = Depends(get_session_dep),
+) -> dict[str, Any]:
+    since = utcnow() - timedelta(days=_WINDOWS[window])
+    rows = await _judged_rows(session, since)
+    current = (
+        calibrate(rows, threshold=CURRENT_THRESHOLD, field=_PNL_FIELD)
+        if CURRENT_THRESHOLD is not None
+        else None
+    )
+    return {
+        "window": window,
+        "horizon": PRIMARY_HORIZON,
+        "min_n": MIN_N,
+        "requested": calibrate(rows, threshold=threshold, field=_PNL_FIELD),
+        "current": current,
+    }
+
+
+@router.get("/systems/journal/attribution")
+async def journal_attribution(
+    window: str = Query("30d", pattern="^(7d|30d|90d)$"),
+    session: AsyncSession = Depends(get_session_dep),
+) -> dict[str, Any]:
+    since = utcnow() - timedelta(days=_WINDOWS[window])
+    rows = await _judged_rows(session, since)
+    n = sum(1 for r in rows if r.get(_PNL_FIELD) is not None)
+    return {
+        "window": window,
+        "horizon": PRIMARY_HORIZON,
+        "n": n,
+        "min_n": MIN_N,
+        "sufficient": n >= MIN_N,
+        "factors": attribution(rows, factor_keys=TRIAGE_FACTORS, field=_PNL_FIELD),
     }

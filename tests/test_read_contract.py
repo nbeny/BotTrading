@@ -417,6 +417,47 @@ async def test_decision_explain_contract() -> None:
     _assert_exact_keys("decisions/explain", resp)
 
 
+async def test_journal_decisions_contract() -> None:
+    resp = await journal_api.journal_decisions(
+        window="30d", limit=50, offset=0, session=_FakeSession(3)
+    )
+    _assert_exact_keys("systems/journal/decisions", resp)
+    sample = journal_api._map_row(
+        {
+            "time": None,
+            "event_id": "j-1",
+            "symbol": "BTC",
+            "score": 60,
+            "confidence": 0.5,
+            "escalated": True,
+            "sonnet_called": False,
+            "sonnet_validated": None,
+            "sonnet_direction": None,
+            "risk_verdict": None,
+            "decision_event_id": None,
+            "correlation_id": None,
+            f"pnl_{journal_api.PRIMARY_HORIZON}": None,
+            f"outcome_{journal_api.PRIMARY_HORIZON}": None,
+        }
+    )
+    _assert_exact_keys("systems/journal/decisions.rows[]", sample)
+
+
+async def test_journal_calibration_contract() -> None:
+    resp = await journal_api.journal_calibration(
+        window="30d", threshold=70, session=_FakeSession(2)
+    )
+    _assert_exact_keys("systems/journal/calibration", resp)
+    _assert_exact_keys("systems/journal/calibration.requested", resp["requested"])
+
+
+async def test_journal_attribution_contract() -> None:
+    resp = await journal_api.journal_attribution(window="30d", session=_FakeSession(2))
+    _assert_exact_keys("systems/journal/attribution", resp)
+    for f in resp["factors"]:
+        _assert_exact_keys("systems/journal/attribution.factors[]", f)
+
+
 # ── manifest coverage ─────────────────────────────────────────────────────────
 # Defined last on purpose: pytest runs a module's tests in definition order, so
 # every _assert_keys call above has already registered by the time this runs.

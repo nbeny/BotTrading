@@ -1,3 +1,4 @@
+import { SCORE_AXES } from '@/lib/types/dossier';
 import type {
   JournalAttribution,
   JournalCalibration,
@@ -9,10 +10,32 @@ import type { DecisionExplain } from '@/lib/types/explain';
 
 const SYMBOLS = ['BTC', 'ETH', 'SOL', 'DOGE', 'AVAX', 'LINK'];
 
+// `score` tops out at 94 (35 + up to 59), always below `current_threshold: 101`
+// below — every 'approved' row here is historical, judged back when the risk
+// floor let scores in the 70-94 range through. Don't wire a "passes the
+// current threshold" affordance off these rows: none of them would clear it.
 function row(i: number): JournalRow {
   const score = 35 + ((i * 7) % 60);
   const judged = i % 5 !== 0;
-  const pnl = judged ? Math.round(((i % 11) - 5) * 8) / 10 : null;
+  let pnl: number | null = null;
+  let outcome: string | null = null;
+  if (judged) {
+    if (i === 3) {
+      // journal_sim.py's `no_data`: levels were set but the price path was
+      // empty (collector outage) — pnl stays null even though the row is
+      // judged. Deliberately breaks the pnl<->outcome null coupling, as prod does.
+      outcome = 'no_data';
+    } else if (i % 7 === 0) {
+      // journal_sim.py's `horizon`: neither bound was touched, position marked
+      // at the horizon price — small pnl of either sign, not the strict
+      // win/loss split of stop_loss/take_profit.
+      pnl = Math.round((((i % 9) - 4) * 2)) / 10;
+      outcome = 'horizon';
+    } else {
+      pnl = Math.round(((i % 11) - 5) * 8) / 10;
+      outcome = pnl > 0 ? 'take_profit' : 'stop_loss';
+    }
+  }
   return {
     time: new Date(Date.now() - i * 3_600_000).toISOString(),
     event_id: `jr-${i}`,
@@ -26,7 +49,7 @@ function row(i: number): JournalRow {
     passed: score >= 70,
     risk_verdict: score >= 70 ? (i % 4 === 0 ? 'rejected' : 'approved') : null,
     pnl_pct: pnl,
-    outcome: pnl === null ? null : pnl > 0 ? 'take_profit' : 'stop_loss',
+    outcome,
     correlation_id: i % 3 === 0 ? `cid-${i}` : null,
   };
 }
@@ -88,7 +111,7 @@ export function getExplain(id: string): DecisionExplain {
       value: 64,
       confidence: 0.58,
       axes: { volume_growth: 0.8, market_trend: 0.65, positioning: 0.55, liquidity_score: 0.7, social_score: 0.5, news_score: 0.45 },
-      axes_total: 8,
+      axes_total: SCORE_AXES.length,
       insufficient_evidence: false,
       computed_at: new Date().toISOString(),
     },

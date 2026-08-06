@@ -1,7 +1,7 @@
 import type { NewsItem, Position, Trade, WorkerDecision } from './domain';
 
 /**
- * Les sept axes de decision-engine/app/scoring.py::WEIGHTS, dans l'ordre
+ * Les huit axes de decision-engine/app/scoring.py::WEIGHTS, dans l'ordre
  * d'affichage du drawer.
  *
  * Troisième copie indépendante de cette liste, avec

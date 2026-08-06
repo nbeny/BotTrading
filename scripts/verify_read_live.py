@@ -9,11 +9,13 @@ from __future__ import annotations
 import asyncio
 import sys
 
-from app import events_api, read_api
+from app import events_api, journal_api, read_api, regime_api
 from app.read_contract import CONTRACT
 from fastapi import HTTPException
+from sqlalchemy import text
 
 from cmi_common import Settings
+from cmi_common.cache import Cache
 from cmi_common.db import Database
 
 settings = Settings()
@@ -103,8 +105,26 @@ PLAUSIBILITY = {
 
 async def main() -> int:
     failures: list[str] = []
+    cache = Cache(settings.redis)
     async with db._sessionmaker() as s:
         calls = [
+            ("market/regime", regime_api.market_regime(session=s, cache=cache)),
+            (
+                "systems/journal/decisions",
+                journal_api.journal_decisions(
+                    window="30d", limit=5, offset=0, session=s
+                ),
+            ),
+            (
+                "systems/journal/calibration",
+                journal_api.journal_calibration(
+                    window="30d", threshold=70, session=s
+                ),
+            ),
+            (
+                "systems/journal/attribution",
+                journal_api.journal_attribution(window="30d", session=s),
+            ),
             ("portfolio", read_api.portfolio(session=s)),
             ("portfolio/positions", read_api.portfolio_positions(session=s)),
             ("portfolio/trades", read_api.portfolio_trades(limit=50, session=s)),
@@ -197,6 +217,31 @@ async def main() -> int:
         else:
             print(f"FAIL {name}  ->  unknown stage id did not raise")
             failures.append(name)
+
+        # decisions/explain needs a real event id -- there is no synthetic one
+        # that resolves through Decision/DecisionJournal, so pull the latest
+        # journal row instead of hand-coding a fixture that will rot.
+        name = "decisions/explain"
+        latest = await s.execute(
+            text("SELECT event_id FROM decision_journal ORDER BY time DESC LIMIT 1")
+        )
+        event_id = latest.scalar_one_or_none()
+        if event_id is None:
+            print("SKIP decisions/explain (journal vide)")
+        else:
+            try:
+                res = await read_api.decision_explain(event_id=event_id, session=s)
+            except Exception as e:
+                print(f"ERR  {name}  ->  {type(e).__name__}: {e}")
+                failures.append(name)
+            else:
+                missing = _check(name, res)
+                if missing:
+                    print(f"FAIL {name}  ->  missing {missing}")
+                    failures.append(name)
+                else:
+                    print(f"OK   {name}  ->  {str(res)[:120]}")
+    await cache.close()
     await db.dispose()
     if failures:
         print(f"\n{len(failures)} endpoint(s) failed: {failures}")

@@ -30,6 +30,7 @@ import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
 import BoltIcon from '@mui/icons-material/Bolt';
 import { NAV_ITEMS } from './navItems';
 import { RegimeStrip } from './RegimeStrip';
+import { DecisionInspector } from '@/components/inspector/DecisionInspector';
 import { useAuth } from '@/lib/auth/AuthProvider';
 import { useWebSocket } from '@/lib/ws/WebSocketProvider';
 import { ROLE_LABEL } from '@/lib/auth/rbac';
@@ -279,6 +280,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       >
         <RegimeStrip />
         {children}
+        <DecisionInspector />
       </Box>
     </Box>
   );

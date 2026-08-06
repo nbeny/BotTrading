@@ -249,7 +249,7 @@ export const regimeApi = {
 
 // ── Decision explain ──────────────────────────────────────────────────────────
 export const explainApi = {
-  get: (id: string) => api.get<DecisionExplain>(`/decisions/${id}/explain`).then((r) => r.data),
+  get: (id: string) => api.get<DecisionExplain>(`/decisions/${encodeURIComponent(id)}/explain`).then((r) => r.data),
 };
 
 // ── Journal ───────────────────────────────────────────────────────────────────

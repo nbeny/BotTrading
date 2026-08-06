@@ -11,11 +11,7 @@ import { explainApi } from '@/lib/api/endpoints';
 import { apiErrorMessage } from '@/lib/api/client';
 import { useDecisionParam } from '@/lib/hooks/useDecisionParam';
 import { AXIS_LABELS, SCORE_AXES, axisValue } from '@/lib/types/dossier';
-
-const KIND_LABEL: Record<string, string> = {
-  price: 'Prix', sentiment: 'Sentiment', analysis: 'Haiku',
-  decision: 'Sonnet', risk: 'Risque', order: 'Ordre',
-};
+import { KIND_LABEL } from '@/lib/types/trace';
 
 function InspectorContent() {
   const { decisionId, close } = useDecisionParam();

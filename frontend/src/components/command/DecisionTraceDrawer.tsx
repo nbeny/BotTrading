@@ -4,8 +4,7 @@ import { Box, CircularProgress, Drawer, Stack, Typography, IconButton, Chip } fr
 import CloseIcon from '@mui/icons-material/Close';
 import { traceApi } from '@/lib/api/endpoints';
 import { apiErrorMessage } from '@/lib/api/client';
-
-const KIND_LABEL: Record<string, string> = { price: 'Prix', sentiment: 'Sentiment', analysis: 'Haiku', decision: 'Sonnet', risk: 'Risque', order: 'Ordre' };
+import { KIND_LABEL } from '@/lib/types/trace';
 
 export function DecisionTraceDrawer({ correlationId, onClose }: { correlationId: string | null; onClose: () => void }) {
   const { data, isLoading, isError, error } = useQuery({

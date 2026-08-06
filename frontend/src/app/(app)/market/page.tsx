@@ -53,11 +53,23 @@ function MarketPageContent() {
     refetchInterval: 30_000,
   });
 
+  // Préserve les autres search params (notamment ?decision= de l'inspecteur
+  // global) au lieu de les écraser — même patron que useDecisionParam. Le
+  // pathname est en dur : cette page ne vit qu'à /market.
   const select = useCallback(
-    (symbol: string) => router.push(`/market?token=${symbol}`, { scroll: false }),
-    [router],
+    (symbol: string) => {
+      const next = new URLSearchParams(params);
+      next.set('token', symbol);
+      router.push(`/market?${next.toString()}`, { scroll: false });
+    },
+    [params, router],
   );
-  const close = useCallback(() => router.push('/market', { scroll: false }), [router]);
+  const close = useCallback(() => {
+    const next = new URLSearchParams(params);
+    next.delete('token');
+    const qs = next.toString();
+    router.push(qs ? `/market?${qs}` : '/market', { scroll: false });
+  }, [params, router]);
 
   const selectedToken = tokens.find((t) => t.symbol === selectedSymbol) ?? null;
 

@@ -57,4 +57,16 @@ describe('DecisionInspector', () => {
     setup('decision=unknown');
     expect(await screen.findByText(/introuvable|échoué/i)).toBeInTheDocument();
   });
+
+  it('journal-only (axes vides, insufficient_evidence false) retombe sur le message de fallback', async () => {
+    // Correction de contrat : « pas de ligne de décision » (insufficient_evidence)
+    // et « rejetée avant scoring » (axes: {}) sont deux cas distincts qui
+    // partagent le même fallback — ce test épingle la branche axes vides seule.
+    explainGet.mockResolvedValue({
+      ...getExplain('jr-2'),
+      score: { ...getExplain('jr-2').score, value: null, axes: {}, insufficient_evidence: false },
+    });
+    setup('decision=jr-2');
+    expect(await screen.findByText(/breakdown indisponible/)).toBeInTheDocument();
+  });
 });

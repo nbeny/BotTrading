@@ -224,6 +224,8 @@ CONTRACT: dict[str, set[str]] = {
         "block_reasons_truncated",
         "updated_at",
     },
+    "market/regime": {"regime", "confidence", "drivers", "computed_at"},
+    "market/regime.drivers[]": {"key", "value", "state", "detail", "as_of"},
     "systems/journal/summary": {
         "window",
         "horizons",

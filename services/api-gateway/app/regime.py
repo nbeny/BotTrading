@@ -6,6 +6,13 @@ show *why*. The project's axis rule applies unchanged: an unmeasured driver is
 value None / state None and is excluded — never scored neutral. Fewer than
 MIN_DRIVERS measured drivers means regime None: a guessed regime is worth less
 than no regime.
+
+`confidence` in `build_regime` counts VOTABLE drivers — those with a non-None
+`state` — not merely measured ones. A driver can have a value and still be
+unvotable (e.g. OI delta measured but BTC price direction unknown), in which
+case its `state` is None and it does not count towards confidence. This is
+deliberate: a measured-but-unvotable reading lowers confidence exactly like an
+absent one, because neither one contributes a vote to the regime label.
 """
 
 from __future__ import annotations

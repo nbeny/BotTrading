@@ -31,9 +31,12 @@ def _clear_pipeline_stage_cache():
         from service_modules import load_service_module
 
         cache = load_service_module("api-gateway", "systems_pipeline").STAGE_CACHE
+        regime_api = load_service_module("api-gateway", "regime_api")
     except Exception:  # pragma: no cover - the guard must never break collection
         yield
         return
     cache.clear()
+    regime_api.REGIME_CACHE.clear()
     yield
     cache.clear()
+    regime_api.REGIME_CACHE.clear()

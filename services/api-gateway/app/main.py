@@ -8,10 +8,11 @@ from fastapi import Depends, FastAPI
 
 from cmi_common import Settings, create_app
 from cmi_common.auth import require_principal
+from cmi_common.cache import Cache
 from cmi_common.db import Database
 from cmi_common.kafka import EventConsumer, Topic
 
-from . import events_api, journal_api, read_api, routers
+from . import events_api, journal_api, read_api, regime_api, routers
 from .archiver import EventArchiver
 from .health_collector import HealthCollector
 from .persister import Persister
@@ -19,6 +20,9 @@ from .persister import Persister
 
 async def _startup(app: FastAPI, settings: Settings) -> None:
     db = Database(settings.db)
+    # Read-only: api-gateway never writes to Redis, only reads the pipeline's
+    # own features:{SYM} / market:regime keys for /market/regime.
+    app.state.cache = Cache(settings.redis)
     persister = Persister(db)
     consumer = EventConsumer(
         settings.kafka,
@@ -111,6 +115,7 @@ async def _shutdown(app: FastAPI, settings: Settings) -> None:
         return_exceptions=True,
     )
     await app.state.db.dispose()
+    await app.state.cache.close()
 
 
 app = create_app("api-gateway", on_startup=_startup, on_shutdown=_shutdown)
@@ -129,3 +134,5 @@ app.include_router(read_api.router, dependencies=_authed)
 app.include_router(journal_api.router, dependencies=_authed)
 # Archived broadcast stream, so the Command Center feed survives a reload.
 app.include_router(events_api.router, dependencies=_authed)
+# Market regime strip: Redis (features/regime) + Postgres (dominance/breadth).
+app.include_router(regime_api.router, dependencies=_authed)

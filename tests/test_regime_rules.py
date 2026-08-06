@@ -34,6 +34,8 @@ def test_oi_needs_price_direction() -> None:
     assert regime.oi_delta_driver(8.0, -2.0)["state"] == "bearish"
     assert regime.oi_delta_driver(-8.0, 2.0)["state"] == "neutral"  # délevier
     assert regime.oi_delta_driver(1.0, 2.0)["state"] == "neutral"
+    # délevier vote neutre quelle que soit la direction du prix
+    assert regime.oi_delta_driver(-8.0, None)["state"] == "neutral"
 
 
 def test_min_drivers_gate() -> None:

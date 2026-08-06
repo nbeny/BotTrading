@@ -16,6 +16,7 @@ read_api = load_service_module("api-gateway", "read_api")
 journal_api = load_service_module("api-gateway", "journal_api")
 events_api = load_service_module("api-gateway", "events_api")
 systems_pipeline = load_service_module("api-gateway", "systems_pipeline")
+regime_api = load_service_module("api-gateway", "regime_api")
 
 compute_exposure = read_api.compute_exposure
 compute_portfolio = read_api.compute_portfolio
@@ -356,6 +357,28 @@ def test_an_absent_axis_never_reaches_the_wire_as_zero() -> None:
     score = read_api.build_score(_scored_decision())
     assert set(score["axes"]) == {"volume_growth", "positioning"}
     assert "fundamentals" not in score["axes"]
+
+
+class _FakeCacheClient:
+    async def mget(self, keys):
+        return [None] * len(keys)
+
+
+class _FakeCache:
+    client = _FakeCacheClient()
+
+    async def get_json(self, _key):
+        return None
+
+
+async def test_market_regime_contract() -> None:
+    regime_api.REGIME_CACHE.clear()
+    resp = await regime_api.market_regime(session=_FakeSession(8), cache=_FakeCache())
+    _assert_exact_keys("market/regime", resp)
+    assert len(resp["drivers"]) == 5
+    for d in resp["drivers"]:
+        _assert_exact_keys("market/regime.drivers[]", d)
+    assert resp["regime"] is None  # rien de mesuré → pas de régime deviné
 
 
 # ── manifest coverage ─────────────────────────────────────────────────────────

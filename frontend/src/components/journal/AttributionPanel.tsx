@@ -9,6 +9,7 @@ export function AttributionPanel({ window }: { window: JournalWindow }) {
   const { data } = useQuery({
     queryKey: ['journal', 'attribution', window],
     queryFn: () => journalApi.attribution(window),
+    placeholderData: (prev) => prev,
   });
 
   return (

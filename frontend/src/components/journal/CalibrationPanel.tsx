@@ -6,7 +6,7 @@ import { Box, Slider, Stack, Typography } from '@mui/material';
 import { journalApi } from '@/lib/api/endpoints';
 import type { CalibrationBucket, JournalWindow } from '@/lib/types/journal';
 
-function BucketStats({ title, bucket, minN }: { title: string; bucket: CalibrationBucket | null; minN: number }) {
+function BucketStats({ title, bucket, minN }: { title: string; bucket: CalibrationBucket | null; minN: number | null }) {
   if (!bucket) return <Typography variant="body2" sx={{ opacity: 0.6 }}>{title} : seuil inconnu de ce conteneur — « — »</Typography>;
   return (
     <Box>
@@ -15,7 +15,9 @@ function BucketStats({ title, bucket, minN }: { title: string; bucket: Calibrati
         {bucket.selected} sél. · {bucket.judged} jugées ·{' '}
         {bucket.sufficient
           ? `win ${Math.round((bucket.win_rate ?? 0) * 100)}% · PnL ${bucket.total_pnl_pct! > 0 ? '+' : ''}${bucket.total_pnl_pct}%`
-          : `— (échantillon insuffisant, n < ${minN})`}
+          : minN != null
+            ? `— (échantillon insuffisant, n < ${minN})`
+            : '— (échantillon insuffisant)'}
       </Typography>
     </Box>
   );
@@ -32,6 +34,7 @@ export function CalibrationPanel({ window }: { window: JournalWindow }) {
 
   return (
     <Stack spacing={1.5}>
+      <Typography variant="caption" sx={{ opacity: 0.6 }}>Seuil simulé : {threshold}</Typography>
       <Slider
         value={threshold}
         min={0}
@@ -41,8 +44,8 @@ export function CalibrationPanel({ window }: { window: JournalWindow }) {
         valueLabelDisplay="auto"
         size="small"
       />
-      <BucketStats title="Seuil simulé" bucket={data?.requested ?? null} minN={data?.min_n ?? 20} />
-      <BucketStats title="Seuil actuel" bucket={data?.current ?? null} minN={data?.min_n ?? 20} />
+      <BucketStats title="Seuil simulé" bucket={data?.requested ?? null} minN={data?.min_n ?? null} />
+      <BucketStats title="Seuil actuel" bucket={data?.current ?? null} minN={data?.min_n ?? null} />
     </Stack>
   );
 }

@@ -11,6 +11,17 @@ const ROW_HEIGHT = 44;
 const HEADER_HEIGHT = 48;
 const GRID_HEIGHT = HEADER_HEIGHT + VISIBLE_ROWS * ROW_HEIGHT;
 
+/** A flat mark at horizon is not a loss: 0 renders neutral, never the red of
+ *  a genuine drawdown — the house rule (null → '—' dimmed, never a confident
+ *  zero) has a sibling here: a measured zero must not read as a measured
+ *  negative either. */
+export function pnlTone(pnl: number | null): 'success.main' | 'error.main' | 'text.primary' | 'text.disabled' {
+  if (pnl === null) return 'text.disabled';
+  if (pnl > 0) return 'success.main';
+  if (pnl < 0) return 'error.main';
+  return 'text.primary';
+}
+
 const COLUMNS: GridColDef<JournalRow>[] = [
   { field: 'time', headerName: 'Date', width: 150, valueFormatter: (v: string | null) => (v ? fmtDateTime(v) : '—') },
   { field: 'symbol', headerName: 'Symbole', width: 90 },
@@ -25,7 +36,7 @@ const COLUMNS: GridColDef<JournalRow>[] = [
   {
     field: 'pnl_pct', headerName: 'PnL simulé', width: 110,
     renderCell: (p) => (
-      <Typography variant="body2" className="mono" color={p.row.pnl_pct === null ? 'text.disabled' : p.row.pnl_pct > 0 ? 'success.main' : 'error.main'}>
+      <Typography variant="body2" className="mono" color={pnlTone(p.row.pnl_pct)}>
         {p.row.pnl_pct === null ? '—' : `${p.row.pnl_pct > 0 ? '+' : ''}${p.row.pnl_pct}%`}
       </Typography>
     ),

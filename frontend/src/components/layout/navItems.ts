@@ -2,6 +2,7 @@ import HubIcon from '@mui/icons-material/Hub';
 import InsightsIcon from '@mui/icons-material/Insights';
 import DatabaseIcon from '@mui/icons-material/Storage';
 import CandlestickChartIcon from '@mui/icons-material/CandlestickChart';
+import FactCheckIcon from '@mui/icons-material/FactCheck';
 import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
 import SettingsIcon from '@mui/icons-material/Settings';
 import SpaceDashboardIcon from '@mui/icons-material/SpaceDashboard';
@@ -14,6 +15,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/data', label: 'Data Explorer', icon: DatabaseIcon, description: 'Contenu collecté & stats' },
   { href: '/market', label: 'Market Intelligence', icon: InsightsIcon, description: 'Tokens & IA' },
   { href: '/trading', label: 'Trading', icon: CandlestickChartIcon, description: 'Contrôle & ordres' },
+  { href: '/journal', label: 'Journal', icon: FactCheckIcon, description: 'Contrefactuel & calibration' },
   { href: '/capital', label: 'Capital & Risque', icon: AccountBalanceWalletIcon, description: 'PnL, positions & risque' },
   { href: '/settings', label: 'Paramètres', icon: SettingsIcon, description: 'Session & RBAC' },
 ];

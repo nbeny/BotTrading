@@ -7,7 +7,9 @@ should see how much data backs a number before the number itself.
 
 from __future__ import annotations
 
+import logging
 import os
+import time
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -27,6 +29,7 @@ from .journal_query import (
 from .journal_sim import simulate_path
 from .routers import get_session_dep
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["journal"])
 
 HORIZONS = tuple(
@@ -40,10 +43,15 @@ _WINDOWS = {"7d": 7, "30d": 30, "90d": 90}
 PRIMARY_HORIZON = os.getenv("COUNTERFACTUAL_PRIMARY_HORIZON", "4h")
 
 _raw_threshold = os.getenv("RISK_MIN_SCORE")
-#: None when the env is unset in THIS container: display '-' rather than a
-#: default 70 that would lie about the threshold risk-engine actually applies
-#: (101 in prod at the time of writing).
-CURRENT_THRESHOLD: int | None = int(_raw_threshold) if _raw_threshold else None
+#: None quand l'env n'est pas posee dans CE conteneur : afficher '-' plutot
+#: qu'un defaut qui mentirait sur le seuil reellement applique par
+#: risk-engine.
+CURRENT_THRESHOLD: int | None = None
+if _raw_threshold:
+    try:
+        CURRENT_THRESHOLD = int(_raw_threshold)
+    except ValueError:
+        logger.warning("RISK_MIN_SCORE=%r is not an int, ignoring", _raw_threshold)
 
 _PNL_FIELD = f"pnl_{PRIMARY_HORIZON}"
 _OUTCOME_FIELD = f"outcome_{PRIMARY_HORIZON}"
@@ -52,8 +60,37 @@ _ROWS_SQL = (
     "SELECT time, event_id, symbol, score, confidence, escalated, sonnet_called,"
     " sonnet_validated, sonnet_direction, entry_price, stop_loss, take_profit,"
     " factors, risk_verdict, decision_event_id, correlation_id"
-    " FROM decision_journal WHERE time >= :since ORDER BY time DESC"
+    " FROM decision_journal WHERE time >= :since ORDER BY time DESC, event_id"
 )
+
+CACHE_TTL_S = 30.0
+
+
+class _JudgedRowsCache:
+    """Window-keyed TTL cache: the calibration slider re-applies its threshold
+    in pure Python after loading, so every slider position for a given window
+    should hit the same cached row set rather than re-running one price_path
+    query per judged row on every request."""
+
+    def __init__(self, ttl_s: float = CACHE_TTL_S) -> None:
+        self._ttl = ttl_s
+        self._entries: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+
+    def fresh(self, window: str, now: float) -> list[dict[str, Any]] | None:
+        entry = self._entries.get(window)
+        if entry is None:
+            return None
+        at, rows = entry
+        return list(rows) if now - at < self._ttl else None
+
+    def put(self, window: str, now: float, rows: list[dict[str, Any]]) -> None:
+        self._entries[window] = (now, rows)
+
+    def clear(self) -> None:
+        self._entries.clear()
+
+
+JUDGED_CACHE = _JudgedRowsCache()
 
 
 def attach_outcome(
@@ -216,6 +253,24 @@ async def _judged_rows(
     return judged
 
 
+async def _cached_judged_rows(
+    session: AsyncSession, window: str, since: datetime
+) -> list[dict[str, Any]]:
+    """Full-window judged rows, shared by calibration and attribution.
+
+    Both endpoints load the whole window and apply their own pure-Python
+    aggregation on top (a threshold, a correlation) -- unlike `journal_decisions`,
+    which is bounded/paginated and reads current data on every page.
+    """
+    now = time.monotonic()
+    hit = JUDGED_CACHE.fresh(window, now)
+    if hit is not None:
+        return hit
+    rows = await _judged_rows(session, since)
+    JUDGED_CACHE.put(window, now, rows)
+    return list(rows)
+
+
 def _map_row(row: dict[str, Any]) -> dict[str, Any]:
     t = row.get("time")
     return {
@@ -266,7 +321,7 @@ async def journal_calibration(
     session: AsyncSession = Depends(get_session_dep),
 ) -> dict[str, Any]:
     since = utcnow() - timedelta(days=_WINDOWS[window])
-    rows = await _judged_rows(session, since)
+    rows = await _cached_judged_rows(session, window, since)
     current = (
         calibrate(rows, threshold=CURRENT_THRESHOLD, field=_PNL_FIELD)
         if CURRENT_THRESHOLD is not None
@@ -287,7 +342,7 @@ async def journal_attribution(
     session: AsyncSession = Depends(get_session_dep),
 ) -> dict[str, Any]:
     since = utcnow() - timedelta(days=_WINDOWS[window])
-    rows = await _judged_rows(session, since)
+    rows = await _cached_judged_rows(session, window, since)
     n = sum(1 for r in rows if r.get(_PNL_FIELD) is not None)
     return {
         "window": window,

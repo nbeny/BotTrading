@@ -436,6 +436,11 @@ services:
       # dev-mode when no secret is configured, so an unset value here would
       # silently reopen the whole read plane. `:?` fails the deploy instead.
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      # Kept in step with risk-engine's own RISK_MIN_SCORE below: the journal
+      # calibration panel needs the threshold risk-engine actually applies to
+      # label the "current" bucket, not a default that could silently drift
+      # from it.
+      RISK_MIN_SCORE: ${RISK_MIN_SCORE:-70}
     # Internal only — reached by the Next.js server over the `cmi` network,
     # but Next.js proxies /api/gateway/* straight through from the public
     # internet, so every router below still enforces a bearer token.

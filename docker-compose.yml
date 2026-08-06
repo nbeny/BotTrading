@@ -414,7 +414,13 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-    environment: *common-env
+    environment:
+      <<: *common-env
+      # Kept in step with risk-engine's own RISK_MIN_SCORE below: the journal
+      # calibration panel needs the threshold risk-engine actually applies to
+      # label the "current" bucket, not a default that could silently drift
+      # from it.
+      RISK_MIN_SCORE: ${RISK_MIN_SCORE:-70}
     labels:
       - traefik.enable=true
       - traefik.http.routers.api.rule=Host(`api.cmi.localhost`)

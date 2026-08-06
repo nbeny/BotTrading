@@ -163,7 +163,7 @@ Trois surfaces backend sont posées devant le frontend. **Ne pas mélanger lectu
 
 | Service              | Hôte Traefik / port          | Rôle                                   |
 | -------------------- | ---------------------------- | -------------------------------------- |
-| **api-gateway**      | `api.cmi.localhost`          | REST **lecture seule** ; persiste Kafka→Postgres (Signal/Decision/Trade). Endpoints `GET /api/v1/{opportunities,decisions,trades}` |
+| **api-gateway**      | `api.cmi.localhost`          | REST **lecture seule** ; persiste Kafka→Postgres (Signal/Decision/Trade) et lit Redis `features:*`/`market:regime` (RO). Sert tout le plan de lecture du terminal : `/portfolio*`, `/market/*` (dont `/market/regime`), `/decisions/{id}/explain`, `/systems/journal/{summary,decisions,calibration,attribution}`, `/trace/{cid}`, `/systems/*`, plus `GET /api/v1/{opportunities,decisions,trades}` |
 | **control-api**      | `control.cmi.localhost` (dev `:8001`) | **plan d'écriture/contrôle** + `/auth/login` (JWT). Publie `ControlCommandEvent` sur `control.commands`, lit Redis `trading:*` |
 | **trading-engine**   | *(background)*               | **cœur d'exécution**, trade Kraken Futures. Consomme `risk.approved.events` + `control.commands`, produit `execution.events`, RW Redis `trading:*` |
 | **websocket-gateway**| `ws.cmi.localhost` (dev `:8080`) | diffuse 10 topics marché/décision/exécution → WS `/ws?token=` |
@@ -234,6 +234,13 @@ Endpoints (via Traefik) :
 Le terminal web tourne aussi en **mode démo autonome** sans backend (`NEXT_PUBLIC_USE_MOCK=1`,
 défaut) : `cd frontend && npm install && npm run dev` → http://localhost:3000. Voir
 [`frontend/README.md`](frontend/README.md).
+
+Le terminal embarque le **cockpit quant (vague 1)** : bandeau de régime de marché permanent
+(5 drivers à règles transparentes, chaque terme cliquable jusqu'à la règle et aux valeurs
+brutes), **inspecteur de décision** global ouvrable par `?decision=<id>` depuis n'importe
+quelle page (axes de scoring, triage Haiku, verdict risque, contrefactuel, timeline), et
+page **`/journal`** (décisions jugées, calibration de seuil par simulation, attribution par
+facteur). Spec : `docs/superpowers/specs/2026-08-06-quant-cockpit-design.md`.
 
 Chaque service expose `/health` (liveness/readiness) et `/metrics` (Prometheus).
 

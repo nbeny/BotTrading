@@ -95,11 +95,31 @@ them through. Verification lives in `services/control-api/app/turnstile.py`.
 
 ✅ **Read plane — built & contract-verified.** api-gateway now also serves the full frontend read
 plane from `app/read_api.py` (mounted at root): `/portfolio*`, `/market/*`, `/risk/*`, `/data/*`,
-`/trace/{cid}`, `/systems/overview?window=`, `/systems/stage/{id}` (plus the original
-`/api/v1/{opportunities,decisions,trades}`).
+`/trace/{cid}`, `/systems/overview?window=`, `/systems/stage/{id}`, plus the cockpit wave-1 routes —
+`/market/regime` (`app/regime_api.py`), `/decisions/{id}/explain`, and
+`/systems/journal/{summary,decisions,calibration,attribution}` (`app/journal_api.py`) — and the
+original `/api/v1/{opportunities,decisions,trades}`.
 Response shapes are locked to the TS contract by a manifest (`app/read_contract.py`) enforced by an
 offline parity test (`tests/test_read_contract.py`) and a live harness (`scripts/verify_read_live.py`).
 Every frontend read path has a matching route; live mode is wired.
+
+**Quant cockpit — vague 1 (regime strip, decision inspector, /journal).** The market regime is a
+**transparent rules engine**, not a model (`app/regime.py`, pure; gathering in `app/regime_api.py`):
+five drivers (funding, ΔOI, market sentiment, BTC dominance approximated over the tracked universe,
+breadth) each vote or abstain, regime is `null` under 3 voting drivers, and every threshold is
+restituted in the driver's `detail` so the strip's popover can show *why*. Funding/OI live only in
+Redis `features:{SYM}` (no SQL table, no timestamp — a measured driver without `as_of` shows
+« fraîcheur inconnue », never « non mesuré »). The strip (`RegimeStrip.tsx`) is mounted in
+`AppShell`; the **Decision Inspector** is a global drawer driven by `?decision=<event_id>`
+(`useDecisionParam` preserves other params bilaterally — `/market`'s own token navigation was fixed
+to preserve `?decision=` too). It accepts any id the terminal holds (Decision.event_id or the
+journal's event/decision/signal ids) via the explain route's `or_` lookup. **`/journal`** turns the
+counterfactual journal into a calibration tool: judged-decisions table (bounded DataGrid), threshold
+simulation (slider queries on commit only; the full-window row load sits behind a 30 s window-keyed
+cache in `journal_api.py` since the threshold is applied in pure Python), and attribution over the
+**four Haiku triage factors** (the 8-axis breakdown only exists for decisions that passed the gate —
+nearly none at threshold 101). `RISK_MIN_SCORE` is now passed to api-gateway in both compose files so
+the "current threshold" bucket can render; unset → `null` → « — », never a silent default.
 
 **`/market` is a scan surface, not a stream.** The token table is bounded (15 rows, search + sort,
 never `autoHeight` — it once grew to ~124 rows and pushed every other panel six screens down), and

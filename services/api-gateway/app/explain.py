@@ -4,6 +4,10 @@ Reuses dossier.build_score / build_pipeline so the inspector can never drift
 from the /market drawer. The Haiku triage factors are a DISJOINT namespace
 from the eight scoring axes (see CLAUDE.md) — they are surfaced under
 `triage`, never merged into `score`.
+
+Direction contract: the top-level `direction` comes only from a committed
+Decision row; Sonnet's opinion lives at `triage.sonnet_direction` and must
+never be promoted to top-level `direction`.
 """
 
 from __future__ import annotations

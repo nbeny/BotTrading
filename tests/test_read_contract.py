@@ -381,6 +381,38 @@ async def test_market_regime_contract() -> None:
     assert resp["regime"] is None  # rien de mesuré → pas de régime deviné
 
 
+class _SeqSession:
+    """File de résultats préparés : un execute = un résultat, puis vide."""
+
+    def __init__(self, results):
+        self._results = list(results)
+
+    async def execute(self, _stmt, _params=None):
+        return self._results.pop(0) if self._results else _Result()
+
+    async def scalar(self, _stmt):
+        return 0
+
+
+async def test_decision_explain_contract() -> None:
+    from types import SimpleNamespace
+
+    decision = SimpleNamespace(
+        event_id="d-1",
+        symbol="BTC",
+        direction="long",
+        opportunity_score=72,
+        confidence=0.6,
+        payload={},
+        correlation_id=None,
+        created_at=None,
+        rationale="",
+    )
+    session = _SeqSession([_Result(rows=[decision]), _Result(), _Result()])
+    resp = await read_api.decision_explain(event_id="d-1", session=session)
+    _assert_exact_keys("decisions/explain", resp)
+
+
 # ── manifest coverage ─────────────────────────────────────────────────────────
 # Defined last on purpose: pytest runs a module's tests in definition order, so
 # every _assert_keys call above has already registered by the time this runs.

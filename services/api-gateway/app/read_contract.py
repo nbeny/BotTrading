@@ -236,4 +236,16 @@ CONTRACT: dict[str, set[str]] = {
         "cohorts",
         "updated_at",
     },
+    "decisions/explain": {
+        "id",
+        "symbol",
+        "direction",
+        "score",
+        "triage",
+        "risk",
+        "pipeline",
+        "counterfactual",
+        "trace",
+        "correlation_id",
+    },
 }

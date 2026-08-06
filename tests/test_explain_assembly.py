@@ -59,7 +59,9 @@ def test_full_row_assembly() -> None:
     )
     assert out["id"] == "d-1"
     assert out["symbol"] == "SOL"
+    assert out["direction"] == "long"
     assert out["score"]["value"] == 64.0  # échelle brute 0-100, jamais /100
+    assert out["score"]["axes"] == {"volume_growth": 0.8}
     assert out["triage"]["factors"] == {"momentum": 0.7, "volume": 0.5}
     assert out["risk"] == {"verdict": "rejected", "reason": "score 64 < floor 70"}
     assert out["counterfactual"]["pnl_pct"] == 2.1

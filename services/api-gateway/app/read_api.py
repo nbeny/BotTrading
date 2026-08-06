@@ -1004,6 +1004,108 @@ async def trace(cid: str, session: AsyncSession = Depends(get_session_dep)) -> d
     return assemble_trace(cid, sig, dec, trd, origin=origin)
 
 
+@router.get("/decisions/{event_id}/explain")
+async def decision_explain(
+    event_id: str,
+    session: AsyncSession = Depends(get_session_dep),
+) -> dict:
+    """Aggregate one decision's whole story: score, triage, verdicts, trace.
+
+    The id accepted is any of the ids the terminal actually holds:
+    Decision.event_id (feeds, dossier), DecisionJournal.event_id (journal
+    rows) or the journal's decision_event_id / signal_event_id links.
+    """
+    # Local imports: read_api is imported by journal_api-adjacent test helpers,
+    # and a module-level cross-import read_api <-> journal_api would create a
+    # cycle if journal_api later imports a mapper from read_api.
+    from .explain import build_explain
+    from .journal_api import PRIMARY_HORIZON, attach_outcome
+    from .journal_query import price_path
+
+    decision = (
+        (await session.execute(select(Decision).where(Decision.event_id == event_id)))
+        .scalars()
+        .first()
+    )
+    journal = (
+        (
+            await session.execute(
+                select(DecisionJournal)
+                .where(
+                    or_(
+                        DecisionJournal.event_id == event_id,
+                        DecisionJournal.decision_event_id == event_id,
+                        DecisionJournal.signal_event_id == event_id,
+                    )
+                )
+                .order_by(DecisionJournal.time.desc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if decision is None and journal is None:
+        raise HTTPException(status_code=404, detail=f"unknown decision {event_id!r}")
+
+    symbol = getattr(decision, "symbol", None) or journal.symbol
+    rejection = (
+        (
+            await session.execute(
+                select(PipelineRejection)
+                .where(PipelineRejection.symbol == symbol)
+                .order_by(PipelineRejection.time.desc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
+
+    cid = getattr(decision, "correlation_id", None) or getattr(
+        journal, "correlation_id", None
+    )
+    trace_data = None
+    if cid:
+        try:
+            trace_data = await trace(cid=cid, session=session)
+        except HTTPException:
+            trace_data = None
+
+    counterfactual = None
+    if (
+        journal is not None
+        and journal.entry_price
+        and journal.stop_loss is not None
+        and journal.take_profit is not None
+    ):
+        path = await price_path(session, journal.symbol, journal.time, PRIMARY_HORIZON)
+        judged = attach_outcome(
+            {
+                "entry_price": journal.entry_price,
+                "stop_loss": journal.stop_loss,
+                "take_profit": journal.take_profit,
+                "sonnet_direction": journal.sonnet_direction,
+            },
+            path=path,
+            horizon=PRIMARY_HORIZON,
+        )
+        counterfactual = {
+            "horizon": PRIMARY_HORIZON,
+            "pnl_pct": judged[f"pnl_{PRIMARY_HORIZON}"],
+            "outcome": judged[f"outcome_{PRIMARY_HORIZON}"],
+        }
+
+    return build_explain(
+        event_id,
+        decision=decision,
+        journal=journal,
+        rejection=rejection,
+        trace=trace_data,
+        counterfactual=counterfactual,
+    )
+
+
 @router.get("/data/stats")
 async def data_stats(session: AsyncSession = Depends(get_session_dep)) -> dict:
     since = datetime.now(tz=UTC) - timedelta(hours=24)

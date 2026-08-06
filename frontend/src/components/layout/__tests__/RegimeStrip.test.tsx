@@ -51,4 +51,18 @@ describe('RegimeStrip', () => {
     renderStrip();
     expect(await screen.findByTestId('regime-label')).toHaveTextContent('—');
   });
+
+  it('affiche kill:on quand trading_enabled est false', async () => {
+    regimeGet.mockResolvedValue(getRegime());
+    statusGet.mockResolvedValue({ mode: 'dry_run', trading_enabled: false, auto_trading_enabled: false });
+    renderStrip();
+    expect(await screen.findByText('kill:on')).toBeInTheDocument();
+  });
+
+  it('affiche kill:— tant que le statut n’a pas encore répondu', async () => {
+    statusGet.mockReturnValue(new Promise(() => {}));
+    regimeGet.mockResolvedValue(getRegime());
+    renderStrip();
+    expect(await screen.findByText('kill:—')).toBeInTheDocument();
+  });
 });

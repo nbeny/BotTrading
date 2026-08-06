@@ -1,5 +1,13 @@
 import { api, control } from './client';
 import type { ContentPage, DataStats, DecisionTrace, ContentQuery } from '@/lib/types/content';
+import type { DecisionExplain } from '@/lib/types/explain';
+import type {
+  JournalAttribution,
+  JournalCalibration,
+  JournalDecisionsPage,
+  JournalWindow,
+} from '@/lib/types/journal';
+import type { MarketRegime } from '@/lib/types/regime';
 import type {
   EngineCaps,
   MarketToken,
@@ -232,4 +240,30 @@ export const riskApi = {
   limits: () => api.get<RiskLimit[]>('/risk/limits').then((r) => r.data),
   alerts: (limit = 30) =>
     api.get<RiskAlert[]>('/risk/alerts', { params: { limit } }).then((r) => r.data),
+};
+
+// ── Market regime ─────────────────────────────────────────────────────────────
+export const regimeApi = {
+  get: () => api.get<MarketRegime>('/market/regime').then((r) => r.data),
+};
+
+// ── Decision explain ──────────────────────────────────────────────────────────
+export const explainApi = {
+  get: (id: string) => api.get<DecisionExplain>(`/decisions/${id}/explain`).then((r) => r.data),
+};
+
+// ── Journal ───────────────────────────────────────────────────────────────────
+export const journalApi = {
+  decisions: (window: JournalWindow = '30d', limit = 50, offset = 0) =>
+    api
+      .get<JournalDecisionsPage>('/systems/journal/decisions', { params: { window, limit, offset } })
+      .then((r) => r.data),
+  calibration: (threshold: number, window: JournalWindow = '30d') =>
+    api
+      .get<JournalCalibration>('/systems/journal/calibration', { params: { window, threshold } })
+      .then((r) => r.data),
+  attribution: (window: JournalWindow = '30d') =>
+    api
+      .get<JournalAttribution>('/systems/journal/attribution', { params: { window } })
+      .then((r) => r.data),
 };

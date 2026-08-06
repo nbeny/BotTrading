@@ -155,7 +155,7 @@ an eighth axis added to the scorer would simply never appear in the drawer, with
 failing test. All three move together, or the new axis is invisible.
 
 Two false friends around the same values, both of which cost a debugging round here.
-`DecisionJournal.factors` is **not** the seven axes — it carries the Haiku four-factor triage
+`DecisionJournal.factors` is **not** the eight axes — it carries the Haiku four-factor triage
 (`momentum`/`volume`/`sentiment`/`liquidity`), a disjoint namespace; the v2 breakdown lives in
 `Decision.payload["meta"]["breakdown"]`. And `PipelineRejection.stage` holds the event *source*
 (`decision_engine`/`risk_engine`, via `persister.stage_for`), not a `systems_pipeline::STAGE_SPECS`

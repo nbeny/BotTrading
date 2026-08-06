@@ -1024,17 +1024,22 @@ a confident number computed on three points.
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, TypeGuard
 
 MIN_N = 20
 
 TRIAGE_FACTORS: tuple[str, ...] = ("momentum", "volume", "sentiment", "liquidity")
 
 
+def _is_num(v: object) -> TypeGuard[int | float]:
+    """`bool` is an `int` subclass — exclude it, or `True` parses as 1.0."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
 def calibrate(rows: list[dict[str, Any]], *, threshold: int, field: str) -> dict[str, Any]:
     eligible = [r for r in rows if r.get("score") is not None]
     selected = [r for r in eligible if r["score"] >= threshold]
-    judged = [r for r in selected if r.get(field) is not None]
+    judged = [r for r in selected if _is_num(r.get(field))]
     n = len(judged)
     out: dict[str, Any] = {
         "threshold": threshold,
@@ -1076,8 +1081,7 @@ def attribution(
         pairs = [
             (float((r.get("factors") or {})[key]), float(r[field]))
             for r in rows
-            if isinstance((r.get("factors") or {}).get(key), (int, float))
-            and r.get(field) is not None
+            if _is_num((r.get("factors") or {}).get(key)) and _is_num(r.get(field))
         ]
         r_val = (
             pearson([p[0] for p in pairs], [p[1] for p in pairs])

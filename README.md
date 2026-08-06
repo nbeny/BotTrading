@@ -32,8 +32,12 @@ autorisation. Toute utilisation requiert un accord écrit préalable.
 
 ```
  ┌─────────────────────── INGESTION ───────────────────────┐
- CoinGecko   ─► collector-coingecko  ─► market.price/volume.events ─┐
- DexScreener ─► collector-dexscreener ─► market.dex.events ─────────┤ (Kafka)
+ CoinGecko    ─► collector-coingecko       ─► market.price/volume.events ─┐
+ DexScreener  ─► collector-dexscreener     ─► market.dex.events ──────────┤ (Kafka)
+ Binance Fut. ─► collector-binance-futures ─► market.derivatives.events ──┤
+ DefiLlama    ─► collector-defillama       ─► market.fundamentals.events ─┤
+ GitHub       ─► collector-github          ─► market.developer.events ────┤
+ Kraken       ─► collector-kraken          ─► Postgres candles/depth (pas de Kafka)
                                                                     │
  Bluesky/Reddit/Mastodon/4chan/                                     │
  Farcaster/YouTube/Lens  ─► collector-social ─┐                     │
@@ -66,8 +70,8 @@ autorisation. Toute utilisation requiert un accord écrit préalable.
  │        ▲                              dry_run/demo/live)     │              │
  │        │ REST /trading/*                     │ Redis trading:*│             │
  │   web-terminal (Next.js)  ◄── WS ── websocket-gateway ◄──────┴─ 10 topics   │
- │        │ REST /portfolio,/market (lecture)                                  │
- │        └──────────────────────► api-gateway (READ-ONLY, Kafka→Postgres)     │
+ │        │ REST /portfolio,/market,/journal (lecture)                         │
+ │        └──────────► api-gateway (READ-ONLY, Kafka→Postgres, Redis RO)       │
  └────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -144,11 +148,15 @@ Le framework partagé est dans [`libs/cmi_common/cmi_common/sources/`](libs/cmi_
 | `market.volume.events`    | collector-coingecko               | decision-engine, ai-worker-haiku         |
 | `market.dex.events`       | collector-dexscreener             | decision-engine, ai-worker-haiku         |
 | `market.sentiment.events` | sentiment-service                 | decision-engine, ai-worker-haiku         |
+| `market.derivatives.events` | collector-binance-futures       | ai-worker-haiku (FeatureStore)           |
+| `market.fundamentals.events` | collector-defillama            | ai-worker-haiku (FeatureStore)           |
+| `market.developer.events` | collector-github                  | ai-worker-haiku (FeatureStore)           |
 | `market.analysis.events`  | ai-worker-haiku                   | ai-worker-sonnet, decision-engine, api-gateway |
 | `decision.events`         | ai-worker-sonnet, decision-engine | risk-engine, api-gateway                 |
 | `risk.approved.events`    | risk-engine                       | trading-engine                           |
 | `execution.events`        | trading-engine                    | api-gateway, websocket-gateway           |
 | `control.commands`        | control-api                       | trading-engine                           |
+| `journal.entries`         | ai-worker-sonnet                  | api-gateway (→ `decision_journal`)       |
 | `market.news.events` / `market.social.events` | *(réservés)*  | *legacy — l'ingestion sociale/news passe désormais par Postgres `raw_content`* |
 
 Tous les événements sont typés avec des schémas **Pydantic v2** dans
@@ -195,6 +203,8 @@ BotTrading/
 ├── libs/cmi_common/              # lib partagée (events, kafka, db, cache, ai, sources, auth, state)
 ├── services/
 │   ├── collector-coingecko/ · collector-dexscreener/
+│   ├── collector-binance-futures/ · collector-defillama/ · collector-github/  # dérivés, TVL/unlocks, dev
+│   ├── collector-kraken/                          # OHLC + carnet → Postgres (pas de Kafka)
 │   ├── collector-social/ · collector-news/       # ingestion DB-sourced → raw_content
 │   ├── sentiment-service/                         # score raw_content, publie SentimentEvent
 │   ├── ai-worker-haiku/ · ai-worker-sonnet/       # transport CLI Claude

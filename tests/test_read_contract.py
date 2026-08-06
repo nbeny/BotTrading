@@ -408,7 +408,11 @@ async def test_decision_explain_contract() -> None:
         created_at=None,
         rationale="",
     )
-    session = _SeqSession([_Result(rows=[decision]), _Result(), _Result()])
+    # Query order: decision, then journal. With no cid and no created_at on
+    # this fixture, decision_explain now skips the rejection lookup entirely
+    # (an unbound guess is worse than none) and cid is None so trace() is
+    # never called either — only two executes happen, not three.
+    session = _SeqSession([_Result(rows=[decision]), _Result()])
     resp = await read_api.decision_explain(event_id="d-1", session=session)
     _assert_exact_keys("decisions/explain", resp)
 

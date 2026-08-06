@@ -1049,22 +1049,45 @@ async def decision_explain(
         raise HTTPException(status_code=404, detail=f"unknown decision {event_id!r}")
 
     symbol = getattr(decision, "symbol", None) or journal.symbol
-    rejection = (
-        (
-            await session.execute(
-                select(PipelineRejection)
-                .where(PipelineRejection.symbol == symbol)
-                .order_by(PipelineRejection.time.desc())
-                .limit(1)
-            )
-        )
-        .scalars()
-        .first()
-    )
-
     cid = getattr(decision, "correlation_id", None) or getattr(
         journal, "correlation_id", None
     )
+
+    # build_explain -> build_pipeline only ever consults `rejection` when
+    # `journal is None`, so skip the query entirely when a journal exists —
+    # it would be discarded. When it IS consulted, the dossier's usual
+    # symbol-latest lookup is symbol-scoped, not decision-scoped: without a
+    # binding to *this* decision, it can hand back a newer, unrelated
+    # rejection for the same symbol and the inspector would render that
+    # rejection's blocked_at/block_reason as this decision's story. Bind by
+    # correlation id when we have one; otherwise fall back to a time window
+    # around the decision's own timestamp. An unbound guess is worse than
+    # none, so if we have neither a cid nor a decision timestamp, skip it.
+    rejection = None
+    if journal is None:
+        anchor = getattr(decision, "created_at", None)
+        rejection_stmt = None
+        if cid:
+            rejection_stmt = (
+                select(PipelineRejection)
+                .where(PipelineRejection.correlation_id == cid)
+                .order_by(PipelineRejection.time.desc())
+                .limit(1)
+            )
+        elif anchor is not None:
+            rejection_stmt = (
+                select(PipelineRejection)
+                .where(
+                    PipelineRejection.symbol == symbol,
+                    PipelineRejection.time >= anchor - timedelta(hours=1),
+                    PipelineRejection.time <= anchor + timedelta(hours=1),
+                )
+                .order_by(PipelineRejection.time.desc())
+                .limit(1)
+            )
+        if rejection_stmt is not None:
+            rejection = (await session.execute(rejection_stmt)).scalars().first()
+
     trace_data = None
     if cid:
         try:

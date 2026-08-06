@@ -141,8 +141,9 @@ REGIME: ACCUMULATION ▲ | conf 72% | funding +0.018% crowded-long | OI 24h +6.2
 | `btc_dominance` | dérivée de `prices.market_cap_usd` sur l'univers suivi (~200 tokens) — approximation nommée dans `detail` | dérive 7 j > +0.5 pt → risk-off des alts |
 | `breadth` | part des tokens suivis à `market_trend` positif | > 60 % → bullish |
 
-Le régime est l'agrégat des votes (majorité pondérée simple) ; `confidence` est la part de
-poids des drivers effectivement mesurés — le même principe que la confidence du scoring.
+Le régime est l'agrégat des votes (majorité pondérée simple) ; « confidence » est la part des
+drivers **votants** (état non nul) : une lecture mesurée mais non votable (OI en hausse sans
+direction prix) réduit la confidence, à dessein.
 **Si moins de trois drivers sont présents, `regime` est `null`** et le bandeau affiche
 `REGIME: —` : un régime deviné vaut moins que pas de régime.
 
@@ -164,7 +165,8 @@ interface RegimeDriver {
 }
 ```
 
-Chaque terme du bandeau ouvre un popover : règle (`detail`), valeur brute, fraîcheur. Les
+Chaque terme du bandeau ouvre un popover : règle (`detail`), valeur brute, fraîcheur ; un driver
+mesuré sans horodatage amont affiche « fraîcheur inconnue », jamais « non mesuré ». Les
 badges `[dry_run] [kill:off]` réutilisent le status trading déjà consommé par `KpiTicker`.
 Le jour où un classificateur validé existe, il remplit le même contrat derrière le même
 endpoint — le frontend ne change pas. Poll 30 s, aligné sur le cache serveur.
@@ -172,9 +174,10 @@ endpoint — le frontend ne change pas. Poll 30 s, aligné sur le cache serveur.
 ### Decision Inspector — drawer global d'explicabilité
 
 Promotion du `DecisionTraceDrawer` en **drawer global URL-adressable** (`?decision=<id>`),
-même patron que `?token=` sur `/market`, monté dans le layout `(app)`. Ouvrable depuis :
-`LiveEventStream`, `AiDecisionFeed`, le drawer `/market`, les opportunités `/trading`, les
-lignes `/journal`.
+même patron que `?token=` sur `/market`, monté dans le layout `(app)`. Ouvrable depuis
+`AiDecisionFeed` et les lignes `/journal` (vague 1) ; le drawer `/market` et les opportunités
+`/trading` suivent en vague 2 ; `LiveEventStream` garde la trace par correlation id (ses lignes
+ne portent pas d'id de décision).
 
 Contenu, de haut en bas :
 
@@ -192,6 +195,8 @@ Contenu, de haut en bas :
 4. **Timeline des événements** — par correlation id quand il existe ; sinon repli
    `(symbol, fenêtre temporelle)` avec mention explicite « lien par symbole/temps » —
    ~95 % du flux n'a pas de lineage par id et l'inspecteur le dit plutôt que de le masquer.
+   (vague 1 : le repli affiche le message explicatif seul, sans reconstruction par
+   symbole/temps — à construire quand le besoin sera avéré)
 5. **Résultat contrefactuel** — si le journal a jugé la décision : résultat simulé,
    horizon, verdict.
 
@@ -200,7 +205,8 @@ Contenu, de haut en bas :
 Nouvelle entrée de navigation. Trois panneaux :
 
 1. **Décisions jugées** — table bornée (hauteur fixe, scroll interne) : date, symbole,
-   action, score, seuil au moment de la décision, passé/rejeté, résultat simulé à
+   action, score, seuil actuel (le seuil au moment de la décision n'est stocké nulle part —
+   affiché en légende de page, pas par ligne), passé/rejeté, résultat simulé à
    l'horizon. Résultat pendant : « — ». Clic sur une ligne → Decision Inspector.
 2. **Calibration de seuil** — slider de seuil simulé : rejoue le journal au seuil choisi et
    affiche nombre de trades, win-rate, PnL simulé, à côté des mêmes chiffres pour le seuil
@@ -234,8 +240,9 @@ un champ `null` (donc « — ») ou un statut stale — jamais un zéro confiant
 - **Id de décision introuvable** : le drawer affiche l'erreur et un lien pour fermer ;
   l'URL reste partageable sans casser la page hôte.
 - **Journal vide ou jeune** : les trois panneaux de `/journal` affichent leur état vide en
-  toutes lettres (« aucune décision jugée sur la fenêtre »), le slider de calibration est
-  désactivé sous `n < 20`.
+  toutes lettres (« aucune décision jugée sur la fenêtre ») ; sous `n < 20`, les statistiques
+  du panneau affichent « — (échantillon insuffisant) » ; le slider reste actif pour permettre
+  de chercher un seuil à échantillon suffisant.
 - **Drivers de régime absents** (collecteur en panne, cache expiré) : driver `state: null`
   rendu « — » ; sous trois drivers mesurés, régime `null`.
 - **Propagation du null** : chaque champ des quatre contrats est nullable et le rendu

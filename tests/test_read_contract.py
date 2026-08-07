@@ -373,7 +373,10 @@ class _FakeCache:
 
 async def test_market_regime_contract() -> None:
     regime_api.REGIME_CACHE.clear()
-    resp = await regime_api.market_regime(session=_FakeSession(8), cache=_FakeCache())
+    # 9 queries: sentiment as_of, dominance now + 7d, breadth, derivatives as_of
+    # (the count is documentation — _FakeSession keeps returning empty results
+    # past its budget rather than raising).
+    resp = await regime_api.market_regime(session=_FakeSession(9), cache=_FakeCache())
     _assert_exact_keys("market/regime", resp)
     assert len(resp["drivers"]) == 5
     for d in resp["drivers"]:

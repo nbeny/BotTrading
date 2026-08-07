@@ -365,11 +365,20 @@ async def journal_threshold(
 ) -> dict[str, Any]:
     """Dernier rapport de calibration, et si un scan tourne.
 
+    Deux requêtes, pas une : la ligne la plus récente (tout statut, pour les
+    métadonnées de la dernière tentative -- `status`/`error`/`computed_at`/
+    `window_days`/`target_per_day`/`duration_s`) et la plus récente ligne
+    `status="ok"` séparément (pour `report`/`report_computed_at`). Un scan
+    planté ne doit jamais effacer le dernier rapport valide affiché -- cf.
+    spec §Erreurs et cas limites, « le dernier rapport valide reste affiché
+    avec son âge ». Quand la ligne la plus récente EST la ligne ok, les deux
+    dates coïncident.
+
     `running` est lu depuis l'existence du verrou Redis plutôt que depuis un
     état persisté : le verrou est la seule source de vérité sur ce point, et
     un second état dériverait du premier au premier processus tué.
     """
-    row = (
+    latest = (
         (
             await session.execute(
                 select(ThresholdReport).order_by(ThresholdReport.time.desc()).limit(1)
@@ -378,22 +387,36 @@ async def journal_threshold(
         .scalars()
         .first()
     )
+    latest_ok = (
+        (
+            await session.execute(
+                select(ThresholdReport)
+                .where(ThresholdReport.status == "ok")
+                .order_by(ThresholdReport.time.desc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
     running = False
     try:
-        # threshold_job.py acquires `lock:{LOCK_NAME}` via cache.client.lock(...)
-        # (redis-py's raw API, not the Cache facade) — same "lock:" prefix here.
+        # threshold_job.py acquires the lock via the shared Cache facade
+        # (`Cache.lock`, libs/cmi_common/cmi_common/cache/redis.py), which
+        # prefixes every name with `lock:` -- same prefix probed here.
         running = bool(await cache.client.exists("lock:threshold-scan"))
     except Exception:
         # A probe failure must not 500 the panel: report "not running" and log,
         # rather than take the whole endpoint down over a Redis hiccup.
         logger.exception("threshold lock probe failed")
     return {
-        "report": (row.payload or None) if row and row.status == "ok" else None,
-        "status": row.status if row else None,
-        "error": row.error if row else None,
-        "computed_at": row.time.isoformat() if row else None,
-        "window_days": row.window_days if row else None,
-        "target_per_day": row.target_per_day if row else None,
-        "duration_s": row.duration_s if row else None,
+        "report": latest_ok.payload if latest_ok else None,
+        "report_computed_at": latest_ok.time.isoformat() if latest_ok else None,
+        "status": latest.status if latest else None,
+        "error": latest.error if latest else None,
+        "computed_at": latest.time.isoformat() if latest else None,
+        "window_days": latest.window_days if latest else None,
+        "target_per_day": latest.target_per_day if latest else None,
+        "duration_s": latest.duration_s if latest else None,
         "running": running,
     }

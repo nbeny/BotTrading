@@ -88,11 +88,26 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
         # a command that arrives while one is in flight just finds the lock
         # held and `run_once()` returns False. Do not "simplify" this back
         # to an inline await.
+        #
+        # `app.state.scan_tasks` holds a strong reference to every in-flight
+        # scan task, not just the latest one: asyncio only keeps a weak
+        # reference to a task with no other referrer, so a second
+        # RUN_THRESHOLD_SCAN arriving while the first is still running must
+        # not evict the first task's only strong ref -- that used to happen
+        # here (a single `app.state.scan_task` slot got overwritten), and the
+        # abandoned task could be GC'd mid-scan ("Task was destroyed but it
+        # is pending!"), leaving the Redis lock held for its full 30-minute
+        # TTL with no row ever written, not even a `status="error"` one.
+        # `add_done_callback` discards each task from the set once it
+        # finishes, so the set only ever grows while a scan is actually
+        # running.
         if (
             isinstance(event, ControlCommandEvent)
             and event.command == ControlCommand.RUN_THRESHOLD_SCAN
         ):
-            app.state.scan_task = asyncio.create_task(_run_scan_detached())
+            task = asyncio.create_task(_run_scan_detached())
+            app.state.scan_tasks.add(task)
+            task.add_done_callback(app.state.scan_tasks.discard)
 
     # Each replica must apply every command -> unique group per instance, same
     # pattern as trading-engine's control consumer. The Redis lock (not the
@@ -119,12 +134,11 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
         if THRESHOLD_SCAN_INTERVAL_H > 0
         else None
     )
-    # Set by _control_handle the first time RUN_THRESHOLD_SCAN arrives; kept
-    # on app.state (not just a local closure variable) so _shutdown can
-    # cancel/await it and so the task isn't a candidate for garbage
-    # collection while in flight -- asyncio only holds a weak reference to a
-    # task with no other referrer.
-    app.state.scan_task = None
+    # Populated by _control_handle each time RUN_THRESHOLD_SCAN arrives, and
+    # drained back to empty as each scan finishes (see the comment there).
+    # Kept on app.state (not a local closure variable) so _shutdown can
+    # cancel/await whatever is still in flight.
+    app.state.scan_tasks = set()
 
 
 async def _shutdown(app: FastAPI, settings: Settings) -> None:
@@ -132,13 +146,14 @@ async def _shutdown(app: FastAPI, settings: Settings) -> None:
     await app.state.commands.stop()
     if app.state.threshold_loop_task is not None:
         app.state.threshold_loop_task.cancel()
-    if app.state.scan_task is not None and not app.state.scan_task.done():
-        app.state.scan_task.cancel()
+    for scan_task in app.state.scan_tasks:
+        if not scan_task.done():
+            scan_task.cancel()
     tasks = [
         app.state.consumer_task,
         app.state.commands_task,
         app.state.threshold_loop_task,
-        app.state.scan_task,
+        *app.state.scan_tasks,
     ]
     await asyncio.gather(*[t for t in tasks if t is not None], return_exceptions=True)
     await app.state.producer.stop()

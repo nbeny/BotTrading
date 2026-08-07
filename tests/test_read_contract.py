@@ -17,6 +17,7 @@ journal_api = load_service_module("api-gateway", "journal_api")
 events_api = load_service_module("api-gateway", "events_api")
 systems_pipeline = load_service_module("api-gateway", "systems_pipeline")
 regime_api = load_service_module("api-gateway", "regime_api")
+threshold_job = load_service_module("decision-engine", "threshold_job")
 
 compute_exposure = read_api.compute_exposure
 compute_portfolio = read_api.compute_portfolio
@@ -360,10 +361,18 @@ def test_an_absent_axis_never_reaches_the_wire_as_zero() -> None:
 
 
 class _FakeCacheClient:
+    def __init__(self) -> None:
+        #: Records every key probed via `exists`, so the threshold contract
+        #: test can pin the cross-service lock key (`journal_api.py` <->
+        #: `threshold_job.py`, two independent literals) instead of letting a
+        #: fake that discards the key hide a drift between them.
+        self.exists_keys: list[str] = []
+
     async def mget(self, keys):
         return [None] * len(keys)
 
-    async def exists(self, _key):
+    async def exists(self, key):
+        self.exists_keys.append(key)
         return 0
 
 
@@ -465,14 +474,19 @@ async def test_journal_attribution_contract() -> None:
 
 
 async def test_journal_threshold_contract() -> None:
-    resp = await journal_api.journal_threshold(
-        session=_FakeSession(1), cache=_FakeCache()
-    )
+    cache = _FakeCache()
+    resp = await journal_api.journal_threshold(session=_FakeSession(1), cache=cache)
     _assert_exact_keys("systems/journal/threshold", resp)
     # Aucun rapport en base : tout est null, jamais un rapport vide qui
     # passerait pour un scan réussi.
     assert resp["report"] is None and resp["computed_at"] is None
+    assert resp["report_computed_at"] is None
     assert resp["running"] is False
+    # Pin la clé cross-service : rien n'empêche le préfixe "lock:" de la
+    # façade Cache ou le littéral d'api-gateway de dériver sans l'autre, ce
+    # qui rendrait `running` silencieusement et durablement faux -- cf.
+    # threshold_job.py::LOCK_NAME.
+    assert cache.client.exists_keys[-1] == f"lock:{threshold_job.LOCK_NAME}"
 
 
 # ── manifest coverage ─────────────────────────────────────────────────────────

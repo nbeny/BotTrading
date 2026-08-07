@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from collections import Counter
+from datetime import UTC, datetime
 from pathlib import Path
 
 from service_modules import load_service_module
@@ -111,3 +113,41 @@ def test_un_jour_vide_est_flague_dans_le_rendu_par_jour(capsys) -> None:
     _print_report(_canned_report())
     out = capsys.readouterr().out
     assert "<-- VIDE" in out
+
+
+def test_parite_cli_service_meme_verdict_sur_meme_scan(capsys) -> None:
+    """Parite CLI/service exigee par le spec (§Tests) : le CLI et le rapport
+    structure doivent decrire le meme verdict sur le meme `Scan`. Aucun test
+    ne le verifiait -- `_canned_report()` a `refusal=None`, si bien que la
+    branche de refus de `_print_report` ET son code de sortie documente (1,
+    cf. le docstring de `scripts/pick_threshold.py`) n'avaient jamais tourne.
+
+    Construit un `Scan` synthetique avec un axe muet (`positioning` absent de
+    la fenetre, les sept autres a 100%), le fait passer par `analyze()` --
+    la meme fonction que `threshold_job.py` appelle pour le rapport persiste
+    -- puis verifie que `_print_report` sur ce meme rapport rend le meme
+    verdict : code de sortie 1, et le detail du refus verbatim dans la
+    sortie."""
+    scan = ts.Scan(
+        total=1_000,
+        no_evidence=0,
+        regime_seen=1_000,
+        presence=Counter(
+            {axis: 1_000 for axis in ts.AXIS_PROBE if axis != "positioning"}
+        ),
+        since=datetime(2026, 8, 1, tzinfo=UTC),
+        min_time=datetime(2026, 8, 1, tzinfo=UTC),
+        min_time_with_regime=datetime(2026, 8, 1, tzinfo=UTC),
+        by_day=Counter({"2026-08-01": 1_000}),
+    )
+    report = ts.analyze(
+        scan, days=1, target_per_day=200, now=datetime(2026, 8, 1, tzinfo=UTC)
+    )
+    assert report.refusal is not None
+    assert report.refusal["code"] == "MUTE_AXES"
+
+    exit_code = _print_report(report)
+    out = capsys.readouterr().out
+
+    assert exit_code == 1
+    assert report.refusal["detail"] in out

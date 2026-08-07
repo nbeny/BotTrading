@@ -109,7 +109,21 @@ const FILTERS: Filter[] = [
   {
     key: 'market',
     label: 'Marché',
-    types: ['PriceEvent', 'VolumeEvent', 'DexEvent', 'SentimentEvent', 'NewsEvent', 'SocialEvent'],
+    // Les trois derniers sont des signaux de collecteur au même titre que
+    // SentimentEvent : ils alimentent des axes de scoring, pas l'IA ni
+    // l'exécution. Les laisser hors de cet onglet les rendrait invisibles à
+    // qui filtre pour surveiller la santé des collecteurs.
+    types: [
+      'PriceEvent',
+      'VolumeEvent',
+      'DexEvent',
+      'SentimentEvent',
+      'NewsEvent',
+      'SocialEvent',
+      'DerivativesEvent',
+      'FundamentalsEvent',
+      'DeveloperEvent',
+    ],
   },
 ];
 

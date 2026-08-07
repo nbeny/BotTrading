@@ -10,6 +10,8 @@ from decimal import Decimal
 
 from service_modules import load_service_module
 
+from cmi_common.kafka import Topic
+
 pairs = load_service_module("collector-kraken", "domain.pairs")
 sweeper_mod = load_service_module("collector-kraken", "application.sweeper")
 CandleSweeper = sweeper_mod.CandleSweeper
@@ -43,7 +45,6 @@ class FakeStore:
     def __init__(self, universe, majors) -> None:
         self._universe = universe
         self._majors = majors
-        self.saved: list = []
         self.depths: list = []
         self.health: list = []
         self.epoch_calls: list = []
@@ -55,16 +56,20 @@ class FakeStore:
         self.epoch_calls.append((symbol, interval))
         return 1689990000
 
-    async def save_candles(self, candles):
-        self.saved.extend(candles)
-        return len(candles)
-
     async def save_depth(self, snapshot):
         self.depths.append(snapshot)
         return 1
 
     async def report_health(self, *, interval, candles):
         self.health.append((interval, candles))
+
+
+class FakeProducer:
+    def __init__(self) -> None:
+        self.published: list = []
+
+    async def publish(self, topic, event) -> None:
+        self.published.append((topic, event))
 
 
 class StubClient:
@@ -102,7 +107,7 @@ async def _run(sweeper) -> None:
         pass
 
 
-def _sweeper(store, client, sleeps, **kw):
+def _sweeper(store, client, sleeps, producer=None, **kw):
     params = dict(
         interval="1h",
         cadence=900.0,
@@ -111,14 +116,18 @@ def _sweeper(store, client, sleeps, **kw):
         min_mentions=10,
     )
     params.update(kw)
-    return CandleSweeper(client, store, FakeCache(), sleep=sleeps, **params)
+    return CandleSweeper(
+        client, store, FakeCache(), producer or FakeProducer(), sleep=sleeps, **params
+    )
 
 
 async def test_a_cycle_stores_candles_for_every_universe_symbol():
     store = FakeStore([_spec("BTC"), _spec("ETH")], [_spec("BTC")])
     client = StubClient()
-    await _run(_sweeper(store, client, Sleeps(1)))
-    assert [c.symbol for c in store.saved] == ["BTC", "ETH"]
+    producer = FakeProducer()
+    await _run(_sweeper(store, client, Sleeps(1), producer))
+    assert [e.symbol for _, e in producer.published] == ["BTC", "ETH"]
+    assert {t for t, _ in producer.published} == {Topic.CANDLES}
     assert store.health == [("1h", 2)]
 
 
@@ -132,8 +141,11 @@ async def test_a_cycle_sleeps_its_cadence():
 async def test_majors_only_sweeps_only_the_majors():
     store = FakeStore([_spec("BTC"), _spec("DEXE")], [_spec("BTC")])
     client = StubClient()
-    await _run(_sweeper(store, client, Sleeps(1), majors_only=True, interval="15m"))
-    assert [c.symbol for c in store.saved] == ["BTC"]
+    producer = FakeProducer()
+    await _run(
+        _sweeper(store, client, Sleeps(1), producer, majors_only=True, interval="15m")
+    )
+    assert [e.symbol for _, e in producer.published] == ["BTC"]
     assert client.ohlc_calls == [("BTCUSD", 15, 1689990000)]
 
 

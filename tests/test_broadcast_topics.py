@@ -15,3 +15,4 @@ def test_derived_market_topics_are_broadcast() -> None:
     assert Topic.DERIVATIVES in topics
     assert Topic.FUNDAMENTALS in topics
     assert Topic.DEVELOPER in topics
+    assert Topic.CANDLES in topics

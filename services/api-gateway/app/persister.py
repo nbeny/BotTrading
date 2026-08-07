@@ -12,6 +12,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from cmi_common.db import (
     AccountSnapshot,
+    Candle,
     Database,
     Decision,
     DecisionJournal,
@@ -36,6 +37,7 @@ from cmi_common.events.base import Source
 from cmi_common.events.execution import ExecutionEvent
 from cmi_common.events.journal import JournalEntryEvent
 from cmi_common.events.market import (
+    CandleEvent,
     DerivativesEvent,
     DeveloperEvent,
     FundamentalsEvent,
@@ -129,6 +131,8 @@ class Persister:
             await self._save_fundamentals(event)
         elif isinstance(event, DeveloperEvent):
             await self._save_developer(event)
+        elif isinstance(event, CandleEvent):
+            await self._save_candle(event)
 
     async def _save_price(self, e: PriceEvent) -> None:
         EVENTS_CONSUMED.labels(SERVICE, Topic.PRICE.value, event_type_of(e)).inc()
@@ -393,6 +397,43 @@ class Persister:
                 )
                 .on_conflict_do_nothing()
             )
+            await s.commit()
+
+    async def _save_candle(self, e: CandleEvent) -> None:
+        EVENTS_CONSUMED.labels(SERVICE, Topic.CANDLES.value, event_type_of(e)).inc()
+        async with self._db._sessionmaker() as s:
+            stmt = insert(Candle).values(
+                time=e.occurred_at,
+                symbol=e.symbol,
+                interval=e.interval,
+                open=e.open,
+                high=e.high,
+                low=e.low,
+                close=e.close,
+                vwap=e.vwap,
+                volume=e.volume,
+                trades=e.trades or 0,
+                source=e.venue,
+            )
+            # DO UPDATE, not DO NOTHING: the newest candle is still forming and
+            # is rewritten with new high/low/close/volume on every sweep until
+            # it closes -- the candles table's writer contract.
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["time", "symbol", "interval"],
+                set_={
+                    c: getattr(stmt.excluded, c)
+                    for c in (
+                        "open",
+                        "high",
+                        "low",
+                        "close",
+                        "vwap",
+                        "volume",
+                        "trades",
+                    )
+                },
+            )
+            await s.execute(stmt)
             await s.commit()
 
     async def _save_developer(self, e: DeveloperEvent) -> None:

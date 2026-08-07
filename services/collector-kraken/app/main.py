@@ -1,4 +1,5 @@
-"""collector-kraken: OHLC candles + order-book depth -> Postgres. No Kafka."""
+"""collector-kraken: OHLC candles on Kafka (market.candle.events), order-book
+depth -> Postgres direct (documented non-objective, see repository.py)."""
 
 from __future__ import annotations
 
@@ -10,6 +11,7 @@ from fastapi import FastAPI
 from cmi_common import Settings, create_app
 from cmi_common.cache import Cache
 from cmi_common.db.session import Database
+from cmi_common.kafka import EventProducer
 
 from .application.store import KrakenStore
 from .application.sweeper import CandleSweeper
@@ -24,6 +26,8 @@ MIN_MENTIONS = int(os.getenv("KRAKEN_MAJOR_MIN_MENTIONS_7D", str(DEFAULT_MIN_MEN
 async def _startup(app: FastAPI, settings: Settings) -> None:
     cache = Cache(settings.redis)
     db = Database(settings.db)
+    producer = EventProducer(settings.kafka)
+    await producer.start()
     client = KrakenPublicClient()
     store = KrakenStore(db)
     sweepers = [
@@ -31,6 +35,7 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
             client,
             store,
             cache,
+            producer,
             interval="1h",
             cadence=BROAD_CADENCE,
             majors_only=False,
@@ -41,6 +46,7 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
             client,
             store,
             cache,
+            producer,
             interval="15m",
             cadence=MAJORS_CADENCE,
             majors_only=True,
@@ -50,6 +56,7 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     ]
     app.state.cache = cache
     app.state.db = db
+    app.state.producer = producer
     app.state.client = client
     app.state.tasks = [asyncio.create_task(s.run()) for s in sweepers]
 
@@ -59,6 +66,7 @@ async def _shutdown(app: FastAPI, settings: Settings) -> None:
         task.cancel()
     await asyncio.gather(*app.state.tasks, return_exceptions=True)
     await app.state.client.close()
+    await app.state.producer.stop()
     await app.state.db.dispose()
     await app.state.cache.close()
 

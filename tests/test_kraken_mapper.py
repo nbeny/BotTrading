@@ -14,6 +14,8 @@ from cmi_common.sources import RateLimitedError
 mapper = load_service_module("collector-kraken", "domain.mapper")
 parse_depth = mapper.parse_depth
 parse_ohlc = mapper.parse_ohlc
+candle_event = mapper.candle_event
+OhlcCandle = mapper.OhlcCandle
 
 
 OHLC_ROW = [
@@ -58,6 +60,49 @@ def test_parse_ohlc_returns_empty_on_missing_result():
 def test_parse_ohlc_skips_malformed_rows():
     payload = {"error": [], "result": {"X": [OHLC_ROW, [1, "2"]]}}
     assert len(parse_ohlc(payload, symbol="BTC", interval="1h")) == 1
+
+
+def _ohlc_candle(**overrides) -> OhlcCandle:
+    fields = dict(
+        time=datetime(2023, 7, 22, 4, 26, 40, tzinfo=UTC),
+        symbol="BTC",
+        interval="1h",
+        open=Decimal("29000.0"),
+        high=Decimal("29100.0"),
+        low=Decimal("28900.0"),
+        close=Decimal("29050.0"),
+        vwap=Decimal("29010.0"),
+        volume=Decimal("123.45"),
+        trades=42,
+    )
+    fields.update(overrides)
+    return OhlcCandle(**fields)
+
+
+def test_candle_event_maps_every_field():
+    c = _ohlc_candle()
+    e = candle_event(c)
+    assert e.source == "kraken"
+    assert e.occurred_at == c.time
+    assert e.symbol == "BTC"
+    assert e.interval == "1h"
+    assert e.open == Decimal("29000.0")
+    assert e.high == Decimal("29100.0")
+    assert e.low == Decimal("28900.0")
+    assert e.close == Decimal("29050.0")
+    assert e.vwap == Decimal("29010.0")
+    assert e.volume == Decimal("123.45")
+    assert e.trades == 42
+    assert e.venue == "kraken"
+
+
+def test_candle_event_maps_zero_vwap_to_none():
+    """Kraken returns vwap=0 for a window with no trades (open/high/low/close
+    still carry the previous close) -- a price cannot legitimately be zero, so
+    that reading is unmeasured, not a measured zero."""
+    c = _ohlc_candle(vwap=Decimal("0"), volume=Decimal("0"))
+    e = candle_event(c)
+    assert e.vwap is None
 
 
 DEPTH = {

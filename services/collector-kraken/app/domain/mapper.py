@@ -11,6 +11,9 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from cmi_common.events.base import Source
+from cmi_common.events.market import CandleEvent
+
 #: `result` carries the series under the pair id plus this scalar cursor.
 _CURSOR_KEY = "last"
 
@@ -82,6 +85,30 @@ def parse_ohlc(
             # bad candle must not cost the other 719.
             continue
     return out
+
+
+def candle_event(c: OhlcCandle) -> CandleEvent:
+    """One OhlcCandle -> the event published on ``market.candle.events``.
+
+    ``occurred_at`` carries the candle's start, already tz-aware from
+    ``parse_ohlc``. Kraken returns ``vwap=0`` for a window with no trades
+    (open/high/low/close then still carry the previous close) -- a price
+    cannot legitimately be zero, so that reading is unmeasured and maps to
+    ``None`` rather than leaking in as a confident zero-price tick.
+    """
+    return CandleEvent(
+        source=Source.KRAKEN,
+        occurred_at=c.time,
+        symbol=c.symbol,
+        interval=c.interval,
+        open=c.open,
+        high=c.high,
+        low=c.low,
+        close=c.close,
+        vwap=c.vwap or None,
+        volume=c.volume,
+        trades=c.trades,
+    )
 
 
 def parse_depth(

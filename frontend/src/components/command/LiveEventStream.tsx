@@ -53,6 +53,7 @@ const TYPE_META: Record<string, { label: string; color: ChipColor }> = {
   DerivativesEvent: { label: 'Dérivés', color: 'info' },
   FundamentalsEvent: { label: 'Fondamentaux', color: 'default' },
   DeveloperEvent: { label: 'Dev', color: 'default' },
+  CandleEvent: { label: 'Bougie', color: 'default' },
   NewsEvent: { label: 'NEWS', color: 'default' },
   SocialEvent: { label: 'SOCIAL', color: 'default' },
   SentimentEvent: { label: 'SENTIMENT', color: 'secondary' },
@@ -75,7 +76,9 @@ const TYPE_META: Record<string, { label: string; color: ChipColor }> = {
  * `DerivativesEvent` / `FundamentalsEvent` / `DeveloperEvent` are likewise
  * untraceable: they feed the positioning/fundamentals scoring axes through
  * Redis `features:{SYM}`, but are not archived in `events_market`, so a trace
- * click on them would find nothing.
+ * click on them would find nothing. `CandleEvent` is the same shape of gap:
+ * it upserts into `candles`, not `events_market`, and carries no
+ * `correlation_id` (there is no decision lineage for a raw OHLC tick).
  *
  * Everything else in the feed resolves: raw market and sentiment events are
  * linked to the analysis that consumed them by `/trace/{cid}`.
@@ -85,6 +88,7 @@ const UNTRACEABLE_TYPES = new Set([
   'DerivativesEvent',
   'FundamentalsEvent',
   'DeveloperEvent',
+  'CandleEvent',
 ]);
 
 interface Filter {
@@ -123,6 +127,7 @@ const FILTERS: Filter[] = [
       'DerivativesEvent',
       'FundamentalsEvent',
       'DeveloperEvent',
+      'CandleEvent',
     ],
   },
 ];
@@ -175,6 +180,15 @@ function summarize(e: ArchivedEvent): string {
     case 'DeveloperEvent': {
       const commitRatio = num(p.commit_ratio_4w);
       return `commits ×${commitRatio != null ? commitRatio : '—'}`;
+    }
+    case 'CandleEvent': {
+      const close = num(p.close);
+      const vwap = num(p.vwap);
+      return join([
+        text(p.interval),
+        close != null ? `clôture ${close.toLocaleString('en-US')}` : null,
+        vwap != null ? `vwap ${vwap.toLocaleString('en-US')}` : null,
+      ]);
     }
     case 'NewsEvent':
       return clip(text(p.title) ?? '');

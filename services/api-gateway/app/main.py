@@ -36,6 +36,7 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
             Topic.DERIVATIVES,
             Topic.FUNDAMENTALS,
             Topic.DEVELOPER,
+            Topic.CANDLES,
         ],
         persister.handle,
         group_id="api-gateway-persister",

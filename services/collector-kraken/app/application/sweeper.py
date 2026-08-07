@@ -4,8 +4,10 @@ Both share one Kraken quota through Cache.allow(), the same token bucket the
 content collectors use. Depth is measured on the broad loop only — the book is
 about tradability, which does not need a 5-minute refresh.
 
-The loop owns no database session: everything persistent goes through the store,
-which is what lets this be tested against a fake.
+The loop owns no database session: universe/pair/depth persistence still goes
+through the store, which is what lets this be tested against a fake. Candles
+are the one exception — they are published on Kafka (``Topic.CANDLES``) for
+api-gateway's persister to upsert, not written here.
 """
 
 from __future__ import annotations
@@ -13,9 +15,10 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from cmi_common.observability import UPSTREAM_REQUESTS
+from cmi_common.kafka import EventProducer, Topic
+from cmi_common.observability import EVENTS_PRODUCED, UPSTREAM_REQUESTS
 
-from ..domain.mapper import parse_depth, parse_ohlc
+from ..domain.mapper import candle_event, parse_depth, parse_ohlc
 
 logger = logging.getLogger(__name__)
 SERVICE = "collector-kraken"
@@ -30,6 +33,7 @@ class CandleSweeper:
         client,
         store,
         cache,
+        producer: EventProducer,
         *,
         interval: str,
         cadence: float,
@@ -41,6 +45,7 @@ class CandleSweeper:
         self._client = client
         self._store = store
         self._cache = cache
+        self._producer = producer
         self._interval = interval
         self._cadence = cadence
         self._majors_only = majors_only
@@ -63,9 +68,14 @@ class CandleSweeper:
             payload = await self._client.ohlc(
                 spec.pair, interval_minutes=minutes, since=since
             )
-            stored += await self._store.save_candles(
-                parse_ohlc(payload, symbol=spec.symbol, interval=self._interval)
-            )
+            candles = parse_ohlc(payload, symbol=spec.symbol, interval=self._interval)
+            for candle in candles:
+                event = candle_event(candle)
+                await self._producer.publish(Topic.CANDLES, event)
+                EVENTS_PRODUCED.labels(
+                    SERVICE, Topic.CANDLES.value, event.event_type
+                ).inc()
+            stored += len(candles)
             if self._with_depth:
                 snapshot = parse_depth(
                     await self._client.depth(spec.pair), symbol=spec.symbol

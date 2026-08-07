@@ -45,6 +45,7 @@ BROADCAST_TOPICS: tuple[Topic, ...] = (
     Topic.DERIVATIVES,
     Topic.FUNDAMENTALS,
     Topic.DEVELOPER,
+    Topic.CANDLES,
 )
 
 

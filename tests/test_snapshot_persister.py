@@ -9,6 +9,7 @@ from service_modules import load_service_module
 
 from cmi_common.events.base import Source
 from cmi_common.events.market import (
+    CandleEvent,
     DerivativesEvent,
     DeveloperEvent,
     FundamentalsEvent,
@@ -94,3 +95,23 @@ async def test_developer_event_persists() -> None:
     values = session.executed[0].compile().params
     assert values["repo_count"] == 3
     assert values["days_since_push"] is None
+
+
+async def test_candle_event_upserts() -> None:
+    session = FakeSession()
+    p = persister_mod.Persister(FakeDb(session))
+    await p.handle(
+        CandleEvent(
+            source=Source.KRAKEN,
+            symbol="BTC",
+            interval="1h",
+            open=Decimal("1"),
+            high=Decimal("2"),
+            low=Decimal("1"),
+            close=Decimal("2"),
+            volume=Decimal("3"),
+        )
+    )
+    assert session.committed and len(session.executed) == 1
+    sql = str(session.executed[0])
+    assert "ON CONFLICT" in sql and "DO UPDATE" in sql  # bougie en formation réécrite

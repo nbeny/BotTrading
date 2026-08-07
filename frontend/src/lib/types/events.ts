@@ -23,6 +23,7 @@ export type EventType =
   | 'DerivativesEvent'
   | 'FundamentalsEvent'
   | 'DeveloperEvent'
+  | 'CandleEvent'
   | 'NewsEvent'
   | 'SocialEvent'
   | 'SentimentEvent'
@@ -100,6 +101,24 @@ export interface DeveloperEvent extends EventBase {
   days_since_push: number | null;
   star_growth_pct_7d: number | null;
   all_repos_archived: boolean;
+}
+
+/**
+ * market.candle.events — one OHLC candle from the execution venue (Kraken).
+ * The forming candle is republished on every sweep with the same
+ * (occurred_at, symbol, interval) key; consumers upsert, never insert.
+ */
+export interface CandleEvent extends EventBase {
+  event_type: 'CandleEvent';
+  venue: string;
+  interval: string;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  vwap: string | null;
+  volume: string;
+  trades: number | null;
 }
 
 /** market.news.events */
@@ -204,6 +223,7 @@ export type CmiEvent =
   | DerivativesEvent
   | FundamentalsEvent
   | DeveloperEvent
+  | CandleEvent
   | NewsEvent
   | SocialEvent
   | SentimentEvent

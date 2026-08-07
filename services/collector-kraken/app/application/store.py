@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from cmi_common.db.session import Database
 
-from ..domain.mapper import DepthSnapshot, OhlcCandle
+from ..domain.mapper import DepthSnapshot
 from ..domain.pairs import VenuePairSpec, parse_asset_pairs
 from ..infrastructure.repository import KrakenRepository
 from .universe import (
@@ -50,10 +50,6 @@ class KrakenStore:
     async def last_candle_epoch(self, symbol: str, interval: str) -> int | None:
         async with self._db.sessionmaker() as session:
             return await KrakenRepository(session).last_candle_epoch(symbol, interval)
-
-    async def save_candles(self, candles: list[OhlcCandle]) -> int:
-        async with self._db.sessionmaker() as session:
-            return await KrakenRepository(session).upsert_candles(candles)
 
     async def save_depth(self, snapshot: DepthSnapshot) -> int:
         async with self._db.sessionmaker() as session:

@@ -1,4 +1,6 @@
-"""Upserts for candles, depth snapshots and the venue pair reference."""
+"""Upserts for depth snapshots and the venue pair reference, plus the
+``last_candle_epoch`` cursor read (candles themselves are now published on
+Kafka and upserted by api-gateway's persister -- see ``application/sweeper.py``)."""
 
 from __future__ import annotations
 
@@ -10,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from cmi_common.db.models import Candle, MarketDepth, ServiceHealth, VenuePair
 
-from ..domain.mapper import DepthSnapshot, OhlcCandle
+from ..domain.mapper import DepthSnapshot
 from ..domain.pairs import VenuePairSpec
 
 VENUE = "kraken"
@@ -20,44 +22,6 @@ SERVICE = "collector-kraken"
 class KrakenRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
-
-    async def upsert_candles(self, candles: list[OhlcCandle]) -> int:
-        if not candles:
-            return 0
-        rows = [
-            {
-                "time": c.time,
-                "symbol": c.symbol,
-                "interval": c.interval,
-                "open": c.open,
-                "high": c.high,
-                "low": c.low,
-                "close": c.close,
-                "vwap": c.vwap,
-                "volume": c.volume,
-                "trades": c.trades,
-                "source": VENUE,
-            }
-            for c in candles
-        ]
-        stmt = insert(Candle).values(rows)
-        # DO UPDATE, not DO NOTHING: the newest candle is still forming and is
-        # refetched with new high/low/close/volume on every sweep until it closes.
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["time", "symbol", "interval"],
-            set_={
-                "open": stmt.excluded.open,
-                "high": stmt.excluded.high,
-                "low": stmt.excluded.low,
-                "close": stmt.excluded.close,
-                "vwap": stmt.excluded.vwap,
-                "volume": stmt.excluded.volume,
-                "trades": stmt.excluded.trades,
-            },
-        )
-        await self._session.execute(stmt)
-        await self._session.commit()
-        return len(rows)
 
     async def insert_depth(self, snapshots: list[DepthSnapshot]) -> int:
         if not snapshots:

@@ -1,4 +1,5 @@
 """Control commands issued by control-api and applied by the trading-engine."""
+
 from __future__ import annotations
 
 from enum import StrEnum
@@ -19,6 +20,10 @@ class ControlCommand(StrEnum):
     MANUAL_ORDER = "manual_order"
     APPROVE_OPPORTUNITY = "approve_opportunity"
     REJECT_OPPORTUNITY = "reject_opportunity"
+    #: decision-engine only (Task 4 adds the control-api route that publishes
+    #: this). The job itself is idempotent under its Redis lock, so a command
+    #: received while a scan is already running is dropped, not queued.
+    RUN_THRESHOLD_SCAN = "run_threshold_scan"
 
 
 class ControlCommandEvent(BaseEvent):

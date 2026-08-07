@@ -43,6 +43,7 @@ class EventType(StrEnum):
     JOURNAL_ENTRY = "JournalEntryEvent"
     CONTROL_COMMAND = "ControlCommandEvent"
     ACCOUNT_SNAPSHOT = "AccountSnapshotEvent"
+    CANDLE = "CandleEvent"
 
 
 class Source(StrEnum):
@@ -50,6 +51,7 @@ class Source(StrEnum):
     DEXSCREENER = "dexscreener"
     DEFILLAMA = "defillama"
     BINANCE_FUTURES = "binance-futures"
+    KRAKEN = "kraken"
     GITHUB = "github"
     CRYPTOCOMPARE = "cryptocompare"
     REDDIT = "reddit"

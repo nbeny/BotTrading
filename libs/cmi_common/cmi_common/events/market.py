@@ -145,6 +145,30 @@ class FundamentalsEvent(BaseEvent):
         return self.symbol
 
 
+class CandleEvent(BaseEvent):
+    """One OHLC candle from the execution venue, on ``market.candle.events``.
+
+    The forming candle is republished on every sweep with the same
+    (occurred_at, symbol, interval) key — consumers must upsert, not insert
+    (the ``candles`` table's writer contract, see its model docstring).
+    """
+
+    event_type: Literal[EventType.CANDLE] = EventType.CANDLE
+    symbol: str
+    venue: str = "kraken"
+    interval: str
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    vwap: Decimal | None = None
+    volume: Decimal = Decimal(0)
+    trades: int | None = Field(default=None, ge=0)
+
+    def partition_key(self) -> str:
+        return self.symbol
+
+
 class DeveloperEvent(BaseEvent):
     """Activité de développement agrégée par token, sur ``market.developer.events``.
 

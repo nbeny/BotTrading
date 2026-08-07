@@ -20,6 +20,7 @@ from .decision import DecisionEvent, Direction
 from .execution import ExecutionEvent, ExecutionKind
 from .journal import JournalEntryEvent
 from .market import (
+    CandleEvent,
     DerivativesEvent,
     DeveloperEvent,
     DexEvent,
@@ -58,6 +59,7 @@ AnyEvent = Annotated[
         | ControlCommandEvent
         | JournalEntryEvent
         | AccountSnapshotEvent
+        | CandleEvent
     ),
     Field(discriminator="event_type"),
 ]
@@ -79,6 +81,7 @@ __all__ = [
     "AnalysisEvent",
     "AnyEvent",
     "BaseEvent",
+    "CandleEvent",
     "ControlCommand",
     "ControlCommandEvent",
     "DecisionEvent",

@@ -11,6 +11,7 @@ from ..events.decision import DecisionEvent
 from ..events.execution import ExecutionEvent
 from ..events.journal import JournalEntryEvent
 from ..events.market import (
+    CandleEvent,
     DerivativesEvent,
     DeveloperEvent,
     DexEvent,
@@ -41,6 +42,7 @@ class Topic(StrEnum):
     CONTROL = "control.commands"
     JOURNAL = "journal.entries"
     ACCOUNT_SNAPSHOT = "account.snapshot.events"
+    CANDLES = "market.candle.events"
 
 
 # Which event type is expected on each topic (for validation / documentation).
@@ -61,6 +63,7 @@ TOPIC_EVENT = {
     Topic.CONTROL: ControlCommandEvent,
     Topic.JOURNAL: JournalEntryEvent,
     Topic.ACCOUNT_SNAPSHOT: AccountSnapshotEvent,
+    Topic.CANDLES: CandleEvent,
 }
 
 # Recommended partition counts (see docs/scaling.md). High-fan-in topics get
@@ -88,4 +91,7 @@ TOPIC_PARTITIONS = {
     Topic.JOURNAL: 6,
     # One venue, one snapshot a minute: the lowest-volume topic on the bus.
     Topic.ACCOUNT_SNAPSHOT: 1,
+    # The forming candle republishes every sweep across the tracked universe,
+    # same cadence class as DERIVATIVES.
+    Topic.CANDLES: 6,
 }

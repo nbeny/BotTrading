@@ -4,7 +4,7 @@
 
 **Goal:** Persister et diffuser les topics `derivatives`/`fundamentals`/`developer` (chantier B), puis faire publier les bougies de collector-kraken sur Kafka (chantier A), pour que chaque événement de marché soit persisté en hypertable et poussé au front.
 
-**Architecture:** Le persister existant de l'api-gateway gagne 3 handlers + 3 topics (puis un 4ᵉ pour les bougies, en upsert) ; une migration 0011 crée 3 hypertables d'instantanés ; `BROADCAST_TOPICS` du websocket-gateway passe de 11 à 14 ; le front étend l'union `CmiEvent`, le `LiveEventStream` et le mock, et le `RegimeStrip` invalide sa query sur événement dérivés (débounce, poll conservé).
+**Architecture:** Le persister existant de l'api-gateway gagne 3 handlers + 3 topics (puis un 4ᵉ pour les bougies, en upsert) ; une migration 0019 crée 3 hypertables d'instantanés ; `BROADCAST_TOPICS` du websocket-gateway passe de 11 à 14 ; le front étend l'union `CmiEvent`, le `LiveEventStream` et le mock, et le `RegimeStrip` invalide sa query sur événement dérivés (débounce, poll conservé).
 
 **Tech Stack:** SQLAlchemy 2 async + Alembic + TimescaleDB, aiokafka, Pydantic v2, Next 15 + TanStack Query 5 + vitest.
 
@@ -27,12 +27,12 @@
 
 ---
 
-### Task 1 (B) : Modèles + migration 0011
+### Task 1 (B) : Modèles + migration 0019 (renumérotée : 0011-0018 existaient déjà)
 
 **Files:**
 - Modify: `libs/cmi_common/cmi_common/db/models.py` (après `MarketDepth`)
 - Modify: `libs/cmi_common/cmi_common/db/__init__.py` (exports)
-- Create: `migrations/alembic/versions/0011_market_snapshots.py`
+- Create: `migrations/alembic/versions/0019_market_snapshots.py`
 
 - [ ] **Step 1 : Modèles** — ajouter à `models.py` (mêmes conventions que `Candle`/`MarketDepth`) :
 
@@ -102,14 +102,14 @@ class DeveloperSnapshot(Base):
 
 Vérifier que `Boolean`/`Float`/`Integer`/`Numeric` sont déjà importés dans models.py (ils le sont pour les modèles existants). Ajouter les trois classes à `db/__init__.py` (même liste d'export que `Candle`).
 
-- [ ] **Step 2 : Migration** — `0011_market_snapshots.py`, miroir exact du patron 0010 pour CHAQUE table : `op.create_table` avec PK `(time, symbol)`, index `ix_<table>_symbol` sur `["symbol", "time"]`, `create_hypertable(..., if_not_exists => TRUE, migrate_data => TRUE)`, `add_retention_policy('<table>', INTERVAL '90 days', if_not_exists => TRUE)`. `revision = "0011"`, `down_revision = "0010"`. Downgrade : `remove_retention_policy(..., if_exists => TRUE)` puis `drop_table`, pour les trois.
+- [ ] **Step 2 : Migration** — `0019_market_snapshots.py`, miroir exact du patron 0010 pour CHAQUE table : `op.create_table` avec PK `(time, symbol)`, index `ix_<table>_symbol` sur `["symbol", "time"]`, `create_hypertable(..., if_not_exists => TRUE, migrate_data => TRUE)`, `add_retention_policy('<table>', INTERVAL '90 days', if_not_exists => TRUE)`. `revision = "0019"`, `down_revision = "0018"` (head réel — le plan initial visait 0011, déjà pris). Downgrade : `remove_retention_policy(..., if_exists => TRUE)` puis `drop_table`, pour les trois.
 
-- [ ] **Step 3 : Vérifier statiquement** — `python -c "from cmi_common.db import DerivativesSnapshot, FundamentalsSnapshot, DeveloperSnapshot; print('ok')"` (depuis la racine, PYTHONPATH libs si besoin : `python -c "import sys; sys.path.insert(0,'libs/cmi_common'); ..."`) ; `python -m py_compile migrations/alembic/versions/0011_market_snapshots.py` ; ruff/black/mypy sur models.py. `pytest -q` → pas de régression.
+- [ ] **Step 3 : Vérifier statiquement** — `python -c "from cmi_common.db import DerivativesSnapshot, FundamentalsSnapshot, DeveloperSnapshot; print('ok')"` (depuis la racine, PYTHONPATH libs si besoin : `python -c "import sys; sys.path.insert(0,'libs/cmi_common'); ..."`) ; `python -m py_compile migrations/alembic/versions/0019_market_snapshots.py` ; ruff/black/mypy sur models.py. `pytest -q` → pas de régression.
 
 - [ ] **Step 4 : Commit**
 
 ```bash
-git add libs/cmi_common/cmi_common/db/models.py libs/cmi_common/cmi_common/db/__init__.py migrations/alembic/versions/0011_market_snapshots.py
+git add libs/cmi_common/cmi_common/db/models.py libs/cmi_common/cmi_common/db/__init__.py migrations/alembic/versions/0019_market_snapshots.py
 git commit -m "feat(db): hypertables derivatives/fundamentals/developer snapshots"
 ```
 
@@ -606,4 +606,4 @@ git commit -m "feat(collector-kraken): publier les bougies sur kafka, persistanc
 
 - [ ] **Step 3 : Docs** — README : table des topics §4 (+ `market.candle.events` | collector-kraken | api-gateway persister, websocket-gateway) ; ligne du graph §1 `collector-kraken` (remplacer « Postgres candles/depth (pas de Kafka) » par « market.candle.events (carnet : Postgres direct) ») ; §5 ligne websocket-gateway « 14 topics ». CLAUDE.md : mettre à jour la ligne du bandeau (« pipeline » : ai-worker-haiku consomme…) si besoin et la mention websocket-gateway « broadcast 10 topics » → 14. Commit `docs: refleter la market data unifiee sur kafka`.
 
-- [ ] **Step 4 : Récap final** — rappeler l'ordre de déploiement : `make migrate` (0011) AVANT le déploiement du persister ; `scripts/create-topics.sh` (ou équivalent) pour `market.candle.events` avant le déploiement du collector.
+- [ ] **Step 4 : Récap final** — rappeler l'ordre de déploiement : `make migrate` (0019) AVANT le déploiement du persister ; `scripts/create-topics.sh` (ou équivalent) pour `market.candle.events` avant le déploiement du collector.

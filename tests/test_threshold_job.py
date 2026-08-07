@@ -1,15 +1,12 @@
-"""Le job de scan : un seul à la fois, un échec s'écrit plutôt que de se taire.
-
-`Cache.lock` (la façade partagée) ne lève pas quand `acquire(blocking=False)`
-échoue -- elle `yield`rait quand même le verrou (cf. threshold_job.py). Le job
-acquiert donc son verrou via `cache.client.lock(...)`, l'API redis-py brute :
-la fausse `_Cache` ci-dessous imite cette surface (un `.client` dont `.lock()`
-rend un objet à `acquire()`/`release()` asynchrones), pas la façade `.lock()`.
-"""
+"""Le job de scan : un seul à la fois, un échec s'écrit plutôt que de se taire."""
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from service_modules import load_service_module
+
+from cmi_common.cache import LockNotAcquiredError
 
 job_mod = load_service_module("decision-engine", "threshold_job")
 
@@ -40,38 +37,32 @@ class _Db:
         return self._session
 
 
-class _FakeLock:
-    """Imite `redis.asyncio.lock.Lock` : `acquire()` rend False si tenu."""
-
-    def __init__(self, cache: _Cache) -> None:
-        self._cache = cache
-
-    async def acquire(self) -> bool:
-        if self._cache.held:
-            return False
-        self._cache.held = True
-        self._cache.acquired += 1
-        return True
-
-    async def release(self) -> None:
-        self._cache.held = False
-
-
-class _FakeRedisClient:
-    def __init__(self, cache: _Cache) -> None:
-        self._cache = cache
-
-    def lock(self, name, timeout=30.0, blocking=True):
-        return _FakeLock(self._cache)
-
-
 class _Cache:
-    """Verrou Redis factice : `held` dit si quelqu'un le tient déjà."""
+    """Même contrat que la façade réelle : `lock(blocking=False)` lève
+    `LockNotAcquiredError` plutôt que de céder le passage quand `held`."""
 
     def __init__(self, *, held: bool = False) -> None:
         self.held = held
         self.acquired = 0
-        self.client = _FakeRedisClient(self)
+        #: (name, timeout, blocking) de chaque appel -- pin la clé exacte que
+        # `job.run_once` demande : c'est elle que api-gateway sonde en dur
+        # (`lock:threshold-scan`, autre service, ne peut pas importer
+        # `LOCK_NAME`) pour `running`. Une clé qui dérive ici rendrait
+        # `running` silencieusement et durablement faux.
+        self.calls: list[tuple[str, float, bool]] = []
+
+    # Mirrors Cache.lock's real (name, timeout, blocking) signature.
+    @asynccontextmanager
+    async def lock(self, name, timeout=30.0, blocking=True):  # noqa: ASYNC109
+        self.calls.append((name, timeout, blocking))
+        if self.held:
+            raise LockNotAcquiredError(name)
+        self.held = True
+        self.acquired += 1
+        try:
+            yield object()
+        finally:
+            self.held = False
 
 
 async def test_successful_scan_persists_an_ok_row() -> None:
@@ -98,6 +89,8 @@ async def test_successful_scan_persists_an_ok_row() -> None:
     assert len(session.added) == 1
     assert session.added[0].status == "ok"
     assert session.added[0].payload == {"axes": []}
+    # Clé exacte demandée à la façade, cf. commentaire de `_Cache.calls`.
+    assert cache.calls == [("threshold-scan", job_mod.LOCK_TIMEOUT_S, False)]
 
 
 async def test_failed_scan_persists_an_error_row_rather_than_nothing() -> None:

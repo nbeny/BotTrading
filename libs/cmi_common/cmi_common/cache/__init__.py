@@ -1,3 +1,3 @@
-from .redis import Cache
+from .redis import Cache, LockNotAcquiredError
 
-__all__ = ["Cache"]
+__all__ = ["Cache", "LockNotAcquiredError"]

@@ -65,12 +65,34 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
         target_per_day=THRESHOLD_SCAN_TARGET_PER_DAY,
     )
 
+    async def _run_scan_detached() -> None:
+        try:
+            await job.run_once()
+        except Exception:
+            logger.exception("threshold scan (control-triggered) failed")
+
     async def _control_handle(event: object) -> None:
+        # Detached, never awaited inline: EventConsumer.run() calls this
+        # handler between Kafka getmany() polls and only commits offsets
+        # after it returns. A full scan streams up to ~1.28M rows and takes
+        # minutes -- well past aiokafka's max_poll_interval_ms (default
+        # 300_000ms, cmi_common/config.py). Past that the client's heartbeat
+        # routine leaves the consumer group mid-handler, and the unguarded
+        # `await self._consumer.commit()` in EventConsumer.run() then raises
+        # CommitFailedError, which propagates out of run() and kills this
+        # whole commands task -- every RUN_THRESHOLD_SCAN command published
+        # after that point is consumed and silently dropped until the
+        # container restarts. Same failure shape as the one documented at
+        # trading-engine/app/main.py:80-92. The Redis lock inside
+        # ThresholdScanJob already makes running the scan out-of-band safe:
+        # a command that arrives while one is in flight just finds the lock
+        # held and `run_once()` returns False. Do not "simplify" this back
+        # to an inline await.
         if (
             isinstance(event, ControlCommandEvent)
             and event.command == ControlCommand.RUN_THRESHOLD_SCAN
         ):
-            await job.run_once()
+            app.state.scan_task = asyncio.create_task(_run_scan_detached())
 
     # Each replica must apply every command -> unique group per instance, same
     # pattern as trading-engine's control consumer. The Redis lock (not the
@@ -97,6 +119,12 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
         if THRESHOLD_SCAN_INTERVAL_H > 0
         else None
     )
+    # Set by _control_handle the first time RUN_THRESHOLD_SCAN arrives; kept
+    # on app.state (not just a local closure variable) so _shutdown can
+    # cancel/await it and so the task isn't a candidate for garbage
+    # collection while in flight -- asyncio only holds a weak reference to a
+    # task with no other referrer.
+    app.state.scan_task = None
 
 
 async def _shutdown(app: FastAPI, settings: Settings) -> None:
@@ -104,10 +132,13 @@ async def _shutdown(app: FastAPI, settings: Settings) -> None:
     await app.state.commands.stop()
     if app.state.threshold_loop_task is not None:
         app.state.threshold_loop_task.cancel()
+    if app.state.scan_task is not None and not app.state.scan_task.done():
+        app.state.scan_task.cancel()
     tasks = [
         app.state.consumer_task,
         app.state.commands_task,
         app.state.threshold_loop_task,
+        app.state.scan_task,
     ]
     await asyncio.gather(*[t for t in tasks if t is not None], return_exceptions=True)
     await app.state.producer.stop()

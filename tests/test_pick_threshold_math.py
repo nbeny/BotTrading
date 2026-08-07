@@ -1,46 +1,34 @@
-"""Tests des deux fonctions pures de scripts/pick_threshold.py.
+"""Tests des fonctions pures de decision-engine/app/threshold_scan.py.
 
-Le script fait des `sys.path.insert` et charge des modules de service a
-l'import (`load_service_module("decision-engine", ...)`). On le charge donc
-ici via `importlib.util.spec_from_file_location`, exactement comme
-`tests/service_modules.py` charge les packages `app` des services -- ce
-chargement execute le module une seule fois (import Python normal), donc les
-imports lourds de scoring/features_map ne se reproduisent pas a chaque test.
+Historiquement ces fonctions vivaient dans `scripts/pick_threshold.py` et ce
+fichier les testait via `_report(scan, args)` + `capsys` (le script imprimait
+directement). Le refactor qui a extrait l'analyse en module pur
+(`threshold_scan.py::analyze`) les a deplacees ; ce fichier suit le meme
+mouvement et teste desormais la structure retournee par `analyze()` plutot que
+du texte imprime -- `scripts/pick_threshold.py` n'est plus qu'un formateur
+au-dessus des memes fonctions, verifie separement par
+`tests/test_threshold_scan.py`.
 """
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 from collections import Counter
 from datetime import UTC, datetime
-from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
+from service_modules import load_service_module
 
-_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "pick_threshold.py"
+ts = load_service_module("decision-engine", "threshold_scan")
 
-
-def _load_pick_threshold():
-    spec = importlib.util.spec_from_file_location("pick_threshold_script", _SCRIPT_PATH)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-_pick_threshold = _load_pick_threshold()
-_threshold_for = _pick_threshold._threshold_for
-_percentile = _pick_threshold._percentile
-_counts_ge = _pick_threshold._counts_ge
-_bounded_passing = _pick_threshold._bounded_passing
-_check_axis_probe_matches_weights = _pick_threshold._check_axis_probe_matches_weights
-Scan = _pick_threshold.Scan
-AXIS_PROBE = _pick_threshold.AXIS_PROBE
-WEIGHTS = _pick_threshold.WEIGHTS
-_report = _pick_threshold._report
+_threshold_for = ts._threshold_for
+_percentile = ts._percentile
+_counts_ge = ts._counts_ge
+_bounded_passing = ts._bounded_passing
+_check_axis_probe_matches_weights = ts._check_axis_probe_matches_weights
+Scan = ts.Scan
+AXIS_PROBE = ts.AXIS_PROBE
+WEIGHTS = ts.WEIGHTS
+analyze = ts.analyze
 
 
 def _full_scan(total: int, *, regime_seen: int | None = None) -> Scan:
@@ -99,51 +87,49 @@ def test_percentile_p90_et_max():
 # --- DEFAUT 1 : une ligne sur un million ne doit pas passer pour zero -----
 
 
-def test_une_ligne_sur_un_million_declenche_quand_meme_le_refus(capsys):
+def test_une_ligne_sur_un_million_declenche_quand_meme_le_refus():
     """`pct == 0.0` ratait 1/1 281 511 (7,8e-5 %, arrondi affiche a "0.0%"),
     donc le garde ne se declenchait pas. MIN_PRESENCE_PCT doit refuser meme
     quand le pourcentage affiche a l'ecran est identique a un vrai zero."""
     total = 1_281_511
     scan = _full_scan(total)
     scan.presence["positioning"] = 1  # une seule ligne sur 1.28M
-    args = SimpleNamespace(days=7, decisions_per_day=None)
 
-    result = _report(scan, args)
-    out = capsys.readouterr().out
+    report = analyze(scan, days=7, target_per_day=None)
 
-    assert result == 1
-    assert "REFUS" in out
-    assert "positioning" in out
+    assert report.refusal is not None
+    assert report.refusal["code"] == "MUTE_AXES"
+    assert "positioning" in report.refusal["title"]
     # Le compte brut doit etre visible a cote du pourcentage : sans lui,
     # "presence=  0.0%" serait indiscernable d'une vraie absence.
-    assert "(1 lignes)" in out
+    positioning = next(a for a in report.axes if a["key"] == "positioning")
+    assert positioning["seen"] == 1
+    assert positioning["mute"] is True
 
 
-def test_un_axe_vraiment_absent_est_toujours_refuse(capsys):
+def test_un_axe_vraiment_absent_est_toujours_refuse():
     total = 100
     scan = _full_scan(total)
     scan.presence["positioning"] = 0
-    args = SimpleNamespace(days=7, decisions_per_day=None)
 
-    result = _report(scan, args)
-    out = capsys.readouterr().out
+    report = analyze(scan, days=7, target_per_day=None)
 
-    assert result == 1
-    assert "positioning" in out
-    assert "(0 lignes)" in out
+    assert report.refusal is not None
+    assert "positioning" in report.refusal["title"]
+    positioning = next(a for a in report.axes if a["key"] == "positioning")
+    assert positioning["seen"] == 0
 
 
-def test_un_axe_au_dessus_du_plancher_ne_declenche_pas_le_refus(capsys):
+def test_un_axe_au_dessus_du_plancher_ne_declenche_pas_le_refus():
     total = 1000
     scan = _full_scan(total)
     scan.presence["positioning"] = 15  # 1.5% > MIN_PRESENCE_PCT=1.0
-    args = SimpleNamespace(days=7, decisions_per_day=None)
+    scan.min_time = datetime(2026, 7, 27, tzinfo=UTC)
+    scan.min_time_with_regime = scan.min_time
 
-    result = _report(scan, args)
-    out = capsys.readouterr().out
+    report = analyze(scan, days=7, target_per_day=None)
 
-    assert result == 0
-    assert "REFUS" not in out
+    assert report.refusal is None
 
 
 # --- DEFAUT 2 : le rapport doit aussi modeliser le plancher de confiance ---
@@ -153,27 +139,27 @@ def test_un_axe_au_dessus_du_plancher_ne_declenche_pas_le_refus(capsys):
 def test_risk_min_confidence_lit_l_env_avec_le_defaut_du_compose_vps():
     """docker-compose.vps.yml:398 fixe RISK_MIN_CONFIDENCE=0.3795 ; le defaut
     code dans RiskConfig.min_confidence (0.506) est perime. En l'absence de
-    la variable d'environnement, le script doit lire celui qui tourne."""
-    assert pytest.approx(0.3795) == _pick_threshold._RISK_MIN_CONFIDENCE
+    la variable d'environnement, le module doit lire celui qui tourne."""
+    assert pytest.approx(0.3795) == ts._RISK_MIN_CONFIDENCE
 
 
-def test_colonne_plancher_de_confiance_apparait_dans_les_sections_de_debit(capsys):
+def test_colonne_plancher_de_confiance_apparait_dans_la_proposition():
     total = 1000
     scan = _full_scan(total)
     scan.score_counts = Counter({90: 10, 80: 10, 70: 10})
     # 70 perd tout a la confiance (typiquement l'axe news retombe sur
     # market_sentiment) ; 90 et 80 en gardent une partie.
     scan.confidence_pass_counts = Counter({90: 4, 80: 2})
-    args = SimpleNamespace(days=1, decisions_per_day=100)
+    scan.min_time = datetime(2026, 7, 27, tzinfo=UTC)
+    scan.min_time_with_regime = scan.min_time
 
-    result = _report(scan, args)
-    out = capsys.readouterr().out
+    report = analyze(scan, days=1, target_per_day=100)
 
-    assert result == 0
-    assert "dont passant le plancher de confiance" in out
+    assert report.refusal is None
+    assert report.proposal is not None
     # threshold=0 ici (cible tres large) -> le debit reel couvre tout, dont
     # confidence_pass_counts totalise 4+2=6 lignes.
-    assert "dont passant le plancher de confiance (RISK_MIN_CONFIDENCE=" in out
+    assert report.proposal["confidence_passing_per_day"] == 6.0
 
 
 # --- DEFAUT 3 : la table RISK_MIN_SCORE ne doit compter que des lignes qui --
@@ -193,7 +179,7 @@ def test_bounded_passing_borne_les_valeurs_sous_le_seuil():
     assert _bounded_passing(counts, 95, threshold) == _counts_ge(counts, 95)
 
 
-def test_risk_min_score_sous_le_seuil_n_affiche_plus_un_nombre_sans_referent(capsys):
+def test_risk_min_score_sous_le_seuil_n_affiche_plus_un_nombre_sans_referent():
     """Reproduit l'exemple de la revue : seuil calibre a 86 (le plus proche de
     85 sur cet histogramme), RISK_MIN_SCORE=70 (le defaut actuel) est sous le
     seuil -- son compte doit etre identique a celui du seuil, pas celui de la
@@ -203,27 +189,27 @@ def test_risk_min_score_sous_le_seuil_n_affiche_plus_un_nombre_sans_referent(cap
     scan.score_counts = Counter(
         {100: 5, 95: 5, 90: 10, 85: 10, 80: 20, 75: 20, 70: 20, 60: 20}
     )
-    args = SimpleNamespace(days=1, decisions_per_day=25)
+    scan.min_time = datetime(2026, 7, 27, tzinfo=UTC)
+    scan.min_time_with_regime = scan.min_time
 
-    result = _report(scan, args)
-    out = capsys.readouterr().out
+    report = analyze(scan, days=1, target_per_day=25)
 
-    assert result == 0
-    assert "DECISION_THRESHOLD propose : 86" in out
-    lines = {ln.strip() for ln in out.splitlines() if "RISK_MIN_SCORE=" in ln}
-    line_70 = next(ln for ln in lines if "RISK_MIN_SCORE= 70" in ln)
-    line_86 = next(ln for ln in lines if "RISK_MIN_SCORE= 86" in ln)
-    # Seul le compte de lignes doit coincider (le marqueur "<-- defaut
-    # actuel" ne s'affiche que sur la ligne 70, ce qui est attendu).
-    assert "20 lignes" in line_70
-    assert "20 lignes" in line_86
+    assert report.refusal is None
+    assert report.proposal["threshold"] == 86
+    rows = {row["value"]: row for row in report.proposal["risk_min_score_effect"]}
+    # Seul le compte de lignes doit coincider (le marqueur "defaut actuel"
+    # ne s'applique qu'a la ligne 70, ce qui est attendu).
+    assert rows[70]["lines"] == 20
+    assert rows[86]["lines"] == 20
+    assert rows[70]["is_default"] is True
+    assert rows[86]["is_default"] is False
 
 
 # --- DEFAUT 4 : un regime partiellement couvert doit etre refuse, pas -----
 # --- seulement un regime totalement absent ---------------------------------
 
 
-def test_regime_partiellement_couvert_est_refuse(capsys):
+def test_regime_partiellement_couvert_est_refuse():
     """Deploiement mardi, fenetre lancee jeudi avec --days 7 : le regime est
     present sur une partie de la fenetre (regime_seen > 0) mais les jours
     anterieurs au deploiement n'en ont pas -- le vieux garde tout-ou-rien
@@ -232,39 +218,38 @@ def test_regime_partiellement_couvert_est_refuse(capsys):
     scan = _full_scan(total)
     scan.min_time = datetime(2026, 7, 27, tzinfo=UTC)
     scan.min_time_with_regime = datetime(2026, 7, 29, tzinfo=UTC)  # +2 jours
-    args = SimpleNamespace(days=7, decisions_per_day=None)
 
-    result = _report(scan, args)
-    out = capsys.readouterr().out
+    report = analyze(
+        scan, days=7, target_per_day=None, now=datetime(2026, 8, 3, tzinfo=UTC)
+    )
 
-    assert result == 1
-    assert "REFUS" in out
-    assert "DEBUT" in out
-    assert "--days" in out
+    assert report.refusal is not None
+    assert report.refusal["code"] == "REGIME_GAP"
+    assert "DEBUT" in report.refusal["detail"]
+    assert "--days" in report.refusal["detail"]
 
 
-def test_regime_couvrant_toute_la_fenetre_ne_declenche_pas_le_refus(capsys):
+def test_regime_couvrant_toute_la_fenetre_ne_declenche_pas_le_refus():
     total = 100
     scan = _full_scan(total)
     t0 = datetime(2026, 7, 27, tzinfo=UTC)
     scan.min_time = t0
     scan.min_time_with_regime = t0  # regime present depuis le tout debut
-    args = SimpleNamespace(days=7, decisions_per_day=None)
 
-    result = _report(scan, args)
-    out = capsys.readouterr().out
+    report = analyze(
+        scan, days=7, target_per_day=None, now=datetime(2026, 8, 3, tzinfo=UTC)
+    )
 
-    assert result == 0
-    assert "REFUS" not in out
+    assert report.refusal is None
 
 
 # --- DEFAUT 5 : AXIS_PROBE est une 4e copie de la liste d'axes, non couverte
 
 
 def test_axis_probe_et_weights_reellement_alignes_a_l_import():
-    """Verifie l'invariant reellement utilise par le script (pas une copie du
+    """Verifie l'invariant reellement utilise par le module (pas une copie du
     test) : si ce test echoue, c'est que quelqu'un a ajoute/retire un axe d'un
-    cote sans l'autre, et l'import du script aurait deja leve."""
+    cote sans l'autre, et l'import du module aurait deja leve."""
     _check_axis_probe_matches_weights(AXIS_PROBE, WEIGHTS)
     assert set(AXIS_PROBE) == set(WEIGHTS)
 
@@ -279,7 +264,7 @@ def test_axis_probe_divergent_de_weights_leve_bruyamment():
 # --- DEFAUT 6 : la fenetre n'est pas homogene, et le rapport doit le montrer
 
 
-def test_lignes_par_jour_signale_jour_vide_et_ecart_fort(capsys):
+def test_lignes_par_jour_signale_jour_vide_et_ecart_fort():
     total = 60_348 + 0 + 45_423
     scan = _full_scan(total)
     since = datetime(2026, 7, 27, tzinfo=UTC)
@@ -289,15 +274,15 @@ def test_lignes_par_jour_signale_jour_vide_et_ecart_fort(capsys):
     scan.by_day["2026-07-27"] = 60_348
     # 2026-07-28 volontairement absent du Counter : jour entierement vide.
     scan.by_day["2026-07-29"] = 45_423
-    args = SimpleNamespace(days=2, decisions_per_day=None)
 
-    # Fige "aujourd'hui" implicitement via since + args.days : le rapport
-    # parcourt since.date() .. date du jour, donc on ne fixe ici que le debut
-    # et on verifie juste la presence des marqueurs, pas la borne de fin.
-    result = _report(scan, args)
-    out = capsys.readouterr().out
+    # Fige "aujourd'hui" a la fin de la fenetre demandee (2 jours depuis
+    # `since`) : l'analyse parcourt since.date() .. now.date().
+    report = analyze(
+        scan, days=2, target_per_day=None, now=datetime(2026, 7, 29, tzinfo=UTC)
+    )
 
-    assert result == 0
-    assert "lignes par jour :" in out
-    assert "2026-07-28 : 0  <-- VIDE" in out
-    assert "2026-07-27" in out and "2026-07-29" in out
+    assert report.refusal is None
+    assert report.window["by_day"]["2026-07-28"] == 0
+    assert "2026-07-27" in report.window["by_day"]
+    assert "2026-07-29" in report.window["by_day"]
+    assert any(w.startswith("2026-07-28 :") and "vide" in w for w in report.warnings)

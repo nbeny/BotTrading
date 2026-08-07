@@ -498,6 +498,28 @@ class DeveloperSnapshot(Base):
     all_repos_archived: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class ThresholdReport(Base):
+    """One threshold-calibration scan, as run by decision-engine.
+
+    A failed scan is stored too (``status="error"``): the panel must be able to
+    say "last scan failed at 14:02" rather than show a stale report as if it
+    were fresh. `payload` is the serialised ThresholdReport dataclass; keeping
+    it opaque here is deliberate — its shape is owned by
+    `decision-engine/app/threshold_scan.py`, and a column per field would have
+    to be migrated every time the report gains a line.
+    """
+
+    __tablename__ = "threshold_reports"
+
+    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    window_days: Mapped[int] = mapped_column(Integer)
+    target_per_day: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16), default="ok")
+    error: Mapped[str | None] = mapped_column(Text, default=None)
+    duration_s: Mapped[float | None] = mapped_column(Float, default=None)
+    payload: Mapped[dict] = mapped_column(JSONB, default=dict)
+
+
 class VenuePair(Base):
     """Which symbols are actually tradable on which venue, and at what minimum.
 

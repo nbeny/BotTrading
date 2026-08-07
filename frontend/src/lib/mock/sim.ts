@@ -16,6 +16,9 @@ import type {
   AnalysisEvent,
   CmiEvent,
   DecisionEvent,
+  DerivativesEvent,
+  DeveloperEvent,
+  FundamentalsEvent,
   OrderExecutedEvent,
   PriceEvent,
   RiskApprovedEvent,
@@ -47,8 +50,25 @@ const RATE: Record<string, number> = {
   decision: 8000,
   chain: 13_000,
   portfolio: 5000,
+  // Slow cadence: the real collectors republish these on hours-long cycles
+  // (funding every 8h, TVL/dev activity daily), not on the tick pace of
+  // price/sentiment. ~1 event per 15 price ticks keeps the feed showing them
+  // without drowning the faster streams.
+  derivatives: 21_000,
+  fundamentals: 21_000,
+  developer: 21_000,
 };
-const sched: Record<string, number> = { price: 0, sentiment: 0, analysis: 0, decision: 0, chain: 0, portfolio: 0 };
+const sched: Record<string, number> = {
+  price: 0,
+  sentiment: 0,
+  analysis: 0,
+  decision: 0,
+  chain: 0,
+  portfolio: 0,
+  derivatives: 0,
+  fundamentals: 0,
+  developer: 0,
+};
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 function drift(sym: string, pct = 0.004): number {
@@ -138,6 +158,53 @@ function emitDecision(atMs: number) {
     ai_validated: Math.random() > 0.3,
   };
   push(e, 'decision.events', atMs);
+}
+
+function emitDerivatives(atMs: number) {
+  const t = pick(UNIVERSE);
+  const funding = round(rand(-0.0003, 0.0003), 6);
+  const e: DerivativesEvent = {
+    ...base('DerivativesEvent', 'binance-futures', t.symbol, atMs),
+    funding_rate_8h: funding,
+    funding_annualized_pct: round(funding * 3 * 365 * 100, 2),
+    open_interest_usd: String(Math.round(rand(5e6, 8e8))),
+    open_interest_change_pct_24h: Math.random() > 0.5 ? round(rand(-15, 15), 2) : null,
+    long_short_account_ratio: round(rand(0.6, 1.8), 2),
+  };
+  push(e, 'market.derivatives.events', atMs);
+}
+
+function emitFundamentals(atMs: number) {
+  const t = pick(UNIVERSE);
+  const hasFees = Math.random() > 0.5;
+  const e: FundamentalsEvent = {
+    ...base('FundamentalsEvent', 'defillama', t.symbol, atMs),
+    coin_id: t.coin_id,
+    tvl_usd: String(Math.round(rand(2e6, 4e9))),
+    tvl_change_pct_7d: round(rand(-12, 18), 2),
+    fees_24h_usd: hasFees ? String(Math.round(rand(1e4, 3e6))) : null,
+    fees_change_pct_7d: hasFees ? round(rand(-20, 25), 2) : null,
+    next_unlock_at: Math.random() > 0.6 ? new Date(atMs + rand(1, 30) * 86_400_000).toISOString() : null,
+    next_unlock_pct_supply: Math.random() > 0.6 ? round(rand(0.1, 4), 2) : null,
+    has_unlock_schedule: Math.random() > 0.4,
+  };
+  push(e, 'market.fundamentals.events', atMs);
+}
+
+function emitDeveloper(atMs: number) {
+  const t = pick(UNIVERSE);
+  const repoCount = Math.floor(rand(1, 40));
+  const e: DeveloperEvent = {
+    ...base('DeveloperEvent', 'github', t.symbol, atMs),
+    coin_id: t.coin_id,
+    repo_count: repoCount,
+    commit_ratio_4w: round(rand(0.2, 2.2), 2),
+    pr_ratio_4w: round(rand(0.1, 2), 2),
+    days_since_push: Math.floor(rand(0, 90)),
+    star_growth_pct_7d: round(rand(-3, 8), 2),
+    all_repos_archived: false,
+  };
+  push(e, 'market.developer.events', atMs);
 }
 
 /**
@@ -252,6 +319,9 @@ const EMIT: Record<string, (atMs: number) => void> = {
   decision: emitDecision,
   portfolio: emitPortfolio,
   chain: emitChain,
+  derivatives: emitDerivatives,
+  fundamentals: emitFundamentals,
+  developer: emitDeveloper,
 };
 
 // ── backfill: instant history on first load ──────────────────────────────────
@@ -267,6 +337,9 @@ function seed() {
     if (ms % 4500 < 1500) emitAnalysis(ms);
     if (ms % 8000 < 1500) emitDecision(ms);
     if (ms % 5000 < 1500) emitPortfolio(ms);
+    if (ms % 21_000 < 1500) emitDerivatives(ms);
+    if (ms % 21_000 < 1500) emitFundamentals(ms);
+    if (ms % 21_000 < 1500) emitDeveloper(ms);
   }
   // a few complete chains so trace-able events already exist
   emitChain(now - 90_000);

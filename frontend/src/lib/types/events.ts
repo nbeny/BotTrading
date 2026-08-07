@@ -20,6 +20,9 @@ export type EventType =
   | 'PriceEvent'
   | 'VolumeEvent'
   | 'DexEvent'
+  | 'DerivativesEvent'
+  | 'FundamentalsEvent'
+  | 'DeveloperEvent'
   | 'NewsEvent'
   | 'SocialEvent'
   | 'SentimentEvent'
@@ -57,6 +60,46 @@ export interface DexEvent extends EventBase {
   price_usd?: string;
   dex?: string;
   pair_address?: string;
+}
+
+/**
+ * market.derivatives.events — perp positioning from Binance futures. Every
+ * field is nullable on purpose (see `DerivativesEvent` in
+ * `cmi_common/events/market.py`): a partial event is the normal case, not a
+ * degraded one.
+ */
+export interface DerivativesEvent extends EventBase {
+  event_type: 'DerivativesEvent';
+  funding_rate_8h: number | null;
+  funding_annualized_pct: number | null;
+  open_interest_usd: string | null;
+  open_interest_change_pct_24h: number | null;
+  long_short_account_ratio: number | null;
+}
+
+/** market.fundamentals.events — protocol TVL/fees and scheduled dilution. */
+export interface FundamentalsEvent extends EventBase {
+  event_type: 'FundamentalsEvent';
+  coin_id: string;
+  tvl_usd: string | null;
+  tvl_change_pct_7d: number | null;
+  fees_24h_usd: string | null;
+  fees_change_pct_7d: number | null;
+  next_unlock_at: string | null;
+  next_unlock_pct_supply: number | null;
+  has_unlock_schedule: boolean;
+}
+
+/** market.developer.events — aggregated developer activity per token. */
+export interface DeveloperEvent extends EventBase {
+  event_type: 'DeveloperEvent';
+  coin_id: string;
+  repo_count: number;
+  commit_ratio_4w: number | null;
+  pr_ratio_4w: number | null;
+  days_since_push: number | null;
+  star_growth_pct_7d: number | null;
+  all_repos_archived: boolean;
 }
 
 /** market.news.events */
@@ -158,6 +201,9 @@ export type CmiEvent =
   | PriceEvent
   | VolumeEvent
   | DexEvent
+  | DerivativesEvent
+  | FundamentalsEvent
+  | DeveloperEvent
   | NewsEvent
   | SocialEvent
   | SentimentEvent

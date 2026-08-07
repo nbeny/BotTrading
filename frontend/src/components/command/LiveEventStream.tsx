@@ -50,6 +50,9 @@ const TYPE_META: Record<string, { label: string; color: ChipColor }> = {
   PriceEvent: { label: 'PRIX', color: 'info' },
   VolumeEvent: { label: 'VOLUME', color: 'info' },
   DexEvent: { label: 'DEX', color: 'info' },
+  DerivativesEvent: { label: 'Dérivés', color: 'info' },
+  FundamentalsEvent: { label: 'Fondamentaux', color: 'default' },
+  DeveloperEvent: { label: 'Dev', color: 'default' },
   NewsEvent: { label: 'NEWS', color: 'default' },
   SocialEvent: { label: 'SOCIAL', color: 'default' },
   SentimentEvent: { label: 'SENTIMENT', color: 'secondary' },
@@ -69,10 +72,20 @@ const TYPE_META: Record<string, { label: string; color: ChipColor }> = {
  * by construction. Offering "trace →" on it is an invitation to a dead click —
  * and at ~1400 rows/24h it is the single most common row in the signal tier.
  *
+ * `DerivativesEvent` / `FundamentalsEvent` / `DeveloperEvent` are likewise
+ * untraceable: they feed the positioning/fundamentals scoring axes through
+ * Redis `features:{SYM}`, but are not archived in `events_market`, so a trace
+ * click on them would find nothing.
+ *
  * Everything else in the feed resolves: raw market and sentiment events are
  * linked to the analysis that consumed them by `/trace/{cid}`.
  */
-const UNTRACEABLE_TYPES = new Set(['AccountSnapshotEvent']);
+const UNTRACEABLE_TYPES = new Set([
+  'AccountSnapshotEvent',
+  'DerivativesEvent',
+  'FundamentalsEvent',
+  'DeveloperEvent',
+]);
 
 interface Filter {
   key: string;
@@ -139,6 +152,16 @@ function summarize(e: ArchivedEvent): string {
     }
     case 'DexEvent':
       return join([text(p.dex), num(p.liquidity_usd) != null ? `liq. ${fmtUsdCompact(num(p.liquidity_usd))}` : null]);
+    case 'DerivativesEvent': {
+      const funding = num(p.funding_rate_8h);
+      return `funding ${fmtPct(funding != null ? funding * 100 : null)}`;
+    }
+    case 'FundamentalsEvent':
+      return `TVL ${fmtUsdCompact(num(p.tvl_usd))}`;
+    case 'DeveloperEvent': {
+      const commitRatio = num(p.commit_ratio_4w);
+      return `commits ×${commitRatio != null ? commitRatio : '—'}`;
+    }
     case 'NewsEvent':
       return clip(text(p.title) ?? '');
     case 'SocialEvent':

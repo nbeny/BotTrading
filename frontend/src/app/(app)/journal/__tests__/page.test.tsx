@@ -1,15 +1,17 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import JournalPage from '../page';
 import { getJournalAttribution, getJournalCalibration, getJournalDecisions } from '@/lib/mock/journal';
+import { getThresholdReport } from '@/lib/mock/threshold';
 
 vi.mock('next/navigation', () => ({
   useRouter: vi.fn(), usePathname: vi.fn(), useSearchParams: vi.fn(),
 }));
 vi.mock('@/lib/api/endpoints', () => ({
-  journalApi: { decisions: vi.fn(), calibration: vi.fn(), attribution: vi.fn() },
+  journalApi: { decisions: vi.fn(), calibration: vi.fn(), attribution: vi.fn(), threshold: vi.fn() },
+  analysisApi: { requestThresholdScan: vi.fn() },
 }));
 
 import { journalApi } from '@/lib/api/endpoints';
@@ -17,6 +19,7 @@ import { journalApi } from '@/lib/api/endpoints';
 const decisionsMock = vi.mocked(journalApi.decisions);
 const calibrationMock = vi.mocked(journalApi.calibration);
 const attributionMock = vi.mocked(journalApi.attribution);
+const thresholdMock = vi.mocked(journalApi.threshold);
 const pushMock = vi.fn();
 
 function setup(decisionsLimit = 50) {
@@ -26,6 +29,7 @@ function setup(decisionsLimit = 50) {
   decisionsMock.mockResolvedValue(getJournalDecisions('30d', decisionsLimit, 0));
   calibrationMock.mockResolvedValue(getJournalCalibration('30d', 70));
   attributionMock.mockResolvedValue(getJournalAttribution('30d'));
+  thresholdMock.mockResolvedValue(getThresholdReport());
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}><JournalPage /></QueryClientProvider>,
@@ -58,9 +62,12 @@ describe('/journal', () => {
     // ligne d'en-tête porte déjà role="row" et satisfait la requête avant que
     // le virtualiseur ait matérialisé les lignes de données au tick suivant
     // — il faut attendre explicitement qu'une deuxième ligne apparaisse.
+    // Scopé sur le grid (role="grid") : la page porte aussi le tableau de
+    // présence par axe du panneau de seuil, qui a ses propres role="row".
     setup(2);
+    const grid = await screen.findByRole('grid');
     const rows = await waitFor(() => {
-      const found = screen.getAllByRole('row');
+      const found = within(grid).getAllByRole('row');
       expect(found.length).toBeGreaterThan(1);
       return found;
     });

@@ -8,6 +8,7 @@ import { SectionCard } from '@/components/systems/common';
 import { JournalTable } from '@/components/journal/JournalTable';
 import { CalibrationPanel } from '@/components/journal/CalibrationPanel';
 import { AttributionPanel } from '@/components/journal/AttributionPanel';
+import { ThresholdReportPanel } from '@/components/journal/ThresholdReportPanel';
 import { journalApi } from '@/lib/api/endpoints';
 import { useDecisionParam } from '@/lib/hooks/useDecisionParam';
 import type { JournalWindow } from '@/lib/types/journal';
@@ -45,6 +46,11 @@ function JournalContent() {
           </ToggleButtonGroup>
         }
       />
+      <Box sx={{ mb: 2 }}>
+        <SectionCard title="Rapport de scan — le seuil est-il calibrable ?">
+          <ThresholdReportPanel />
+        </SectionCard>
+      </Box>
       <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', lg: '2fr 1fr' }, alignItems: 'start' }}>
         <SectionCard
           title="Décisions jugées"

@@ -55,17 +55,23 @@ def _print_axes(axes: list[dict[str, Any]]) -> None:
         )
 
 
-def _print_days(by_day: dict[str, int], warnings: list[str]) -> None:
+#: Marqueur affiche pour chaque code structure de `analyze()::warnings`. Un
+#: code absent d'ici (ou une nouvelle valeur de `code` cote threshold_scan.py)
+#: n'affiche simplement aucun marqueur -- jamais une reformulation devinee
+#: depuis le texte libre, cf. l'incident qui a motive ce changement : un
+#: `"vide" in day_warning` qui aurait mal etiquete tout jour vide des que le
+#: texte de l'avertissement changeait de formulation.
+_DAY_FLAGS = {
+    "EMPTY_DAY": "  <-- VIDE",
+    "DEVIATION": "  <-- ecart fort a la mediane",
+}
+
+
+def _print_days(by_day: dict[str, int], warnings: list[dict[str, Any]]) -> None:
     print("\nlignes par jour :")
+    day_codes = {w["day"]: w["code"] for w in warnings if w.get("day") is not None}
     for day, n in by_day.items():
-        flag = ""
-        day_warning = next((w for w in warnings if w.startswith(f"{day} :")), None)
-        if day_warning is not None:
-            flag = (
-                "  <-- VIDE"
-                if "vide" in day_warning
-                else "  <-- ecart fort a la mediane"
-            )
+        flag = _DAY_FLAGS.get(day_codes.get(day, ""), "")
         print(f"  {day} : {n}{flag}")
 
 
@@ -111,7 +117,7 @@ def _print_report(report: Any) -> int:
         f"  debit reel        : {p['actual_per_day']:.1f} decisions/jour "
         f"(cible {p['target_per_day']})\n"
         f"  dont passant le plancher de confiance (RISK_MIN_CONFIDENCE="
-        f"{ts._RISK_MIN_CONFIDENCE}) : {p['confidence_passing_per_day']:.1f}/jour "
+        f"{report.risk_min_confidence}) : {p['confidence_passing_per_day']:.1f}/jour "
         f"({p['passing_pct']:.1f}% du debit reel)\n"
         f"  symboles distincts : {p['distinct_symbols']:.1f}/jour\n"
         "  Les deux premiers different parce qu'un meme symbole peut franchir "

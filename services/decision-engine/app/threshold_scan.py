@@ -43,6 +43,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from cmi_common.db import DecisionJournal
 
@@ -161,15 +162,15 @@ class Scan:
     #: Lignes portant une lecture de regime. Zero signifie que la fenetre
     #: precede le deploiement qui la journalise, pas qu'il n'y en avait pas.
     regime_seen: int = 0
-    presence: Counter = field(default_factory=Counter)
-    score_counts: Counter = field(default_factory=Counter)
+    presence: Counter[str] = field(default_factory=Counter)
+    score_counts: Counter[int] = field(default_factory=Counter)
     #: Sous-ensemble de score_counts dont la ligne franchit aussi
     #: RISK_MIN_CONFIDENCE -- le risk-engine applique ce plancher *avant*
     #: min_score (services/risk-engine/app/rules.py::evaluate), donc une ligne
     #: qui echoue ici n'atteint jamais le test sur le score.
-    confidence_pass_counts: Counter = field(default_factory=Counter)
-    best_by_symbol_day: dict = field(default_factory=dict)
-    sonnet_scores: list = field(default_factory=list)
+    confidence_pass_counts: Counter[int] = field(default_factory=Counter)
+    best_by_symbol_day: dict[tuple[str, str], int] = field(default_factory=dict)
+    sonnet_scores: list[int] = field(default_factory=list)
     #: Bornes temporelles de la fenetre effectivement lue, pour detecter un
     #: regime partiellement journalise (DEFAUT 4) et batir la liste des jours
     #: (DEFAUT 6). `since` est la borne demandee (`--days`), `min_time` la
@@ -181,7 +182,7 @@ class Scan:
     min_time_with_regime: datetime | None = None
     #: Lignes par jour (cle = date ISO). Borne par construction: au plus
     #: quelques dizaines d'entrees, une par jour de la fenetre `--days`.
-    by_day: Counter = field(default_factory=Counter)
+    by_day: Counter[str] = field(default_factory=Counter)
 
 
 def _threshold_for(counts: Counter, target_per_day: int, days: int) -> int:
@@ -234,7 +235,7 @@ def _bounded_passing(counts: Counter, v: int, threshold: int) -> int:
     return _counts_ge(counts, max(v, threshold))
 
 
-async def scan_window(session: Any, days: int) -> Scan:
+async def scan_window(session: AsyncSession, days: int) -> Scan:
     """Rejoue la fenetre des `days` derniers jours sur une session ouverte par
     l'appelant.
 
@@ -288,6 +289,33 @@ async def scan_window(session: Any, days: int) -> Scan:
     return scan
 
 
+def _empty_distribution() -> dict[str, Any]:
+    """Forme stable du champ `distribution` quand l'analyse n'y arrive pas.
+
+    `{}` forcerait tout consommateur (`payload["distribution"]["p50"]`) a
+    lever une KeyError sur un refus ; ici chaque cle existe toujours, a
+    `None` -- "pas mesure", jamais un zero silencieux ni une absence de cle.
+    """
+    return {
+        "scored": None,
+        "p50": None,
+        "p90": None,
+        "p99": None,
+        "p999": None,
+        "max": None,
+    }
+
+
+def _empty_sonnet() -> dict[str, Any]:
+    """Meme garantie de forme que `_empty_distribution`, pour `sonnet`.
+
+    `n: None` ("pas mesure") reste distinct de `n: 0` (mesure, et la fenetre
+    n'a reellement aucune ligne Sonnet) -- cf. la regle du projet sur
+    None vs zero mesure.
+    """
+    return {"n": None, "p50": None, "max": None, "warning": None}
+
+
 @dataclass
 class ThresholdReport:
     """Ce que le CLI imprime et ce que le service persiste, une seule fois.
@@ -295,6 +323,11 @@ class ThresholdReport:
     `refusal` porte le verdict ET son texte : c'est la partie qui a de la
     valeur. Un refus reduit a un booleen priverait l'operateur de ce qui
     distingue une collecte cassee d'un axe legitimement rare.
+
+    `risk_min_confidence`/`min_presence_pct` voyagent avec le rapport plutot
+    que d'etre relus depuis les constantes du module par le CLI : l'UI (et le
+    CLI) doivent pouvoir enoncer quels planchers ont produit le verdict sans
+    un acces prive cross-module (`ts._RISK_MIN_CONFIDENCE`).
     """
 
     window: dict[str, Any]
@@ -302,8 +335,10 @@ class ThresholdReport:
     refusal: dict[str, Any] | None
     distribution: dict[str, Any]
     proposal: dict[str, Any] | None
-    warnings: list[str]
+    warnings: list[dict[str, Any]]
     sonnet: dict[str, Any]
+    risk_min_confidence: float
+    min_presence_pct: float
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -314,6 +349,8 @@ class ThresholdReport:
             "proposal": self.proposal,
             "warnings": self.warnings,
             "sonnet": self.sonnet,
+            "risk_min_confidence": self.risk_min_confidence,
+            "min_presence_pct": self.min_presence_pct,
         }
 
 
@@ -333,7 +370,7 @@ def analyze(
     du CLI et, plus tard, du job.
     """
     now = now or datetime.now(tz=UTC)
-    warnings: list[str] = []
+    warnings: list[dict[str, Any]] = []
 
     # 1. Presence par axe, triee par poids decroissant, marqueur sur tout axe
     # sous MIN_PRESENCE_PCT.
@@ -365,19 +402,75 @@ def analyze(
         "min_time": scan.min_time.isoformat() if scan.min_time else None,
         "total": scan.total,
         "no_evidence": scan.no_evidence,
-        "by_day": dict(scan.by_day),
+        "by_day": {},
     }
-    distribution: dict[str, Any] = {}
-    proposal: dict[str, Any] | None = None
-    sonnet: dict[str, Any] = {}
 
-    def _refuse(refusal: dict[str, Any]) -> ThresholdReport:
+    # 5 (deplace avant les refus : pur, ne depend d'aucun d'eux). Volume par
+    # jour, zero-rempli sur toute la fenetre demandee. Une cible "decisions
+    # par jour" moyennee sur une fenetre non homogene n'a pas le sens qu'on
+    # lui prete -- mesure en prod, le volume journalier varie d'un facteur 15
+    # et deux jours sont a zero. Avertissement, pas un refus : c'est a
+    # l'operateur de juger si sa fenetre est representative. Calcule avant
+    # tout refus pour qu'un rapport refuse montre quand meme les jours vides
+    # -- c'est la seule chose que `by_day` existe pour montrer, et un refus
+    # ne doit pas l'escamoter.
+    if scan.since is not None and scan.min_time is not None:
+        start_day = scan.since.date()
+        end_day = now.date()
+        n_days = (end_day - start_day).days
+        days_covered = [
+            (start_day + timedelta(days=i)).isoformat() for i in range(n_days + 1)
+        ]
+    else:
+        days_covered = sorted(scan.by_day)
+    counts_per_day = [scan.by_day[d] for d in days_covered]
+    median_day = statistics.median(counts_per_day) if counts_per_day else 0.0
+    by_day_filled: dict[str, int] = {}
+    for d in days_covered:
+        n = scan.by_day[d]
+        by_day_filled[d] = n
+        if n == 0:
+            warnings.append(
+                {
+                    "code": "EMPTY_DAY",
+                    "day": d,
+                    "text": f"{d} : aucune ligne (jour vide)",
+                }
+            )
+        elif median_day and abs(n - median_day) / median_day > _DAY_VOLUME_WARN_RATIO:
+            warnings.append(
+                {
+                    "code": "DEVIATION",
+                    "day": d,
+                    "text": (
+                        f"{d} : {n} lignes, ecart fort a la mediane de la "
+                        f"fenetre ({median_day:.0f})"
+                    ),
+                }
+            )
+    window["by_day"] = by_day_filled
+
+    distribution: dict[str, Any] = _empty_distribution()
+    proposal: dict[str, Any] | None = None
+    sonnet: dict[str, Any] = _empty_sonnet()
+
+    def _finish(refusal: dict[str, Any] | None) -> ThresholdReport:
         # Capture par nom, pas par valeur : appelee immediatement apres avoir
         # pose `refusal`, avant que `distribution`/`sonnet` ne soient
         # remplies -- exactement ce que les anciens retours anticipes de
-        # `_report` emettaient.
+        # `_report` emettaient. `window`/`warnings` portent deja le volume
+        # par jour (cf. plus haut) : un refus ne les prive plus de cette
+        # information.
         return ThresholdReport(
-            window, axes, refusal, distribution, proposal, warnings, sonnet
+            window,
+            axes,
+            refusal,
+            distribution,
+            proposal,
+            warnings,
+            sonnet,
+            _RISK_MIN_CONFIDENCE,
+            MIN_PRESENCE_PCT,
         )
 
     # 2. Refus si un axe est sous MIN_PRESENCE_PCT.
@@ -413,7 +506,7 @@ def analyze(
                 "commentaire de la constante)."
             ),
         }
-        return _refuse(refusal)
+        return _finish(refusal)
 
     # 3. Refus si aucune lecture de regime, ou si la fenetre couvre des jours
     # anterieurs au deploiement qui le journalise -- un regime PARTIELLEMENT
@@ -433,7 +526,7 @@ def analyze(
                 "depassent le TTL d'une heure -- ce n'est pas ce garde-la.)"
             ),
         }
-        return _refuse(refusal)
+        return _finish(refusal)
 
     if scan.min_time is not None and scan.min_time_with_regime is not None:
         gap = scan.min_time_with_regime - scan.min_time
@@ -461,39 +554,10 @@ def analyze(
                 ),
                 "suggested_days": suggested_days,
             }
-            return _refuse(refusal)
+            return _finish(refusal)
 
     # 4. Lignes ecartees par _MIN_PRESENT_WEIGHT, lignes scorees.
     scored = sum(scan.score_counts.values())
-
-    # 5. Volume par jour. Une cible "decisions par jour" moyennee sur une
-    # fenetre non homogene n'a pas le sens qu'on lui prete -- mesure en prod,
-    # le volume journalier varie d'un facteur 15 et deux jours sont a zero.
-    # Avertissement, pas un refus : c'est a l'operateur de juger si sa fenetre
-    # est representative.
-    if scan.since is not None and scan.min_time is not None:
-        start_day = scan.since.date()
-        end_day = now.date()
-        n_days = (end_day - start_day).days
-        days_covered = [
-            (start_day + timedelta(days=i)).isoformat() for i in range(n_days + 1)
-        ]
-    else:
-        days_covered = sorted(scan.by_day)
-    counts_per_day = [scan.by_day[d] for d in days_covered]
-    median_day = statistics.median(counts_per_day) if counts_per_day else 0.0
-    by_day_filled: dict[str, int] = {}
-    for d in days_covered:
-        n = scan.by_day[d]
-        by_day_filled[d] = n
-        if n == 0:
-            warnings.append(f"{d} : aucune ligne (jour vide)")
-        elif median_day and abs(n - median_day) / median_day > _DAY_VOLUME_WARN_RATIO:
-            warnings.append(
-                f"{d} : {n} lignes, ecart fort a la mediane de la fenetre "
-                f"({median_day:.0f})"
-            )
-    window["by_day"] = by_day_filled
 
     # 6. Distribution.
     p50 = _percentile(scan.score_counts, 50)
@@ -531,11 +595,12 @@ def analyze(
     else:
         sonnet = {"n": 0, "p50": None, "max": None, "warning": None}
 
-    # 7. Rapport seul si pas de cible.
+    # 7. Rapport seul si pas de cible. Reutilise `_finish` (nom trompeur ici,
+    # mais meme forme : `distribution`/`sonnet` sont deja calcules a ce point,
+    # seul `refusal` reste None) pour ne pas dupliquer la construction du
+    # rapport et ses deux nouveaux planchers.
     if target_per_day is None:
-        return ThresholdReport(
-            window, axes, None, distribution, proposal, warnings, sonnet
-        )
+        return _finish(None)
 
     # 8. Seuil, debit reel, symboles distincts, part passant le plancher de
     # confiance du risk-engine (RISK_MIN_CONFIDENCE, applique AVANT
@@ -596,4 +661,4 @@ def analyze(
         "risk_min_score_effect": risk_min_score_effect,
     }
 
-    return ThresholdReport(window, axes, None, distribution, proposal, warnings, sonnet)
+    return _finish(None)

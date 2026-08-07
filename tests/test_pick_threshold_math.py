@@ -285,4 +285,6 @@ def test_lignes_par_jour_signale_jour_vide_et_ecart_fort():
     assert report.window["by_day"]["2026-07-28"] == 0
     assert "2026-07-27" in report.window["by_day"]
     assert "2026-07-29" in report.window["by_day"]
-    assert any(w.startswith("2026-07-28 :") and "vide" in w for w in report.warnings)
+    assert any(
+        w["code"] == "EMPTY_DAY" and w["day"] == "2026-07-28" for w in report.warnings
+    )

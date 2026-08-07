@@ -367,9 +367,26 @@ services:
   decision-engine:
     <<: *service-defaults
     build: { context: ., dockerfile: docker/Dockerfile, args: { SERVICE_PATH: services/decision-engine } }
+    # `depends_on` remplace la carte fusionnee par l'ancre au lieu de l'etendre :
+    # les trois sont re-listes parce que ce service lit desormais Postgres
+    # (scan de calibration + ecriture de threshold_reports), en plus de Kafka
+    # et Redis.
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
       <<: *common-env
       DECISION_THRESHOLD: ${DECISION_THRESHOLD:-70}
+      # Scan de calibration du seuil. 0 desactive le periodique et ne laisse
+      # que la demande via /analysis/threshold-scan -- l'echappatoire si le VPS
+      # souffre : le scan rejoue ~1,3 M lignes sur 2 vCPU.
+      THRESHOLD_SCAN_INTERVAL_H: ${THRESHOLD_SCAN_INTERVAL_H:-6}
+      THRESHOLD_SCAN_DAYS: ${THRESHOLD_SCAN_DAYS:-7}
+      THRESHOLD_SCAN_TARGET_PER_DAY: ${THRESHOLD_SCAN_TARGET_PER_DAY:-200}
 
   risk-engine:
     <<: *service-defaults

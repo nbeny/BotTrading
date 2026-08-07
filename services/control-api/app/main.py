@@ -10,6 +10,7 @@ from cmi_common.db import Database
 from cmi_common.kafka import EventProducer
 
 from .commands import CommandPublisher
+from .routers import analysis as analysis_router
 from .routers import auth as auth_router
 from .routers import collectors as collectors_router
 from .routers import opportunities as opportunities_router
@@ -35,6 +36,7 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
         publisher, reader
     )
     app.state.orders_service = orders_router.OrdersService(publisher)
+    app.state.analysis_service = analysis_router.AnalysisService(publisher)
     app.state.publisher = publisher
     app.state.reader = reader
 
@@ -52,3 +54,4 @@ app.include_router(settings_router.router)
 app.include_router(positions_router.router)
 app.include_router(opportunities_router.router)
 app.include_router(orders_router.router)
+app.include_router(analysis_router.router)

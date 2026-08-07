@@ -105,7 +105,10 @@ def candle_event(c: OhlcCandle) -> CandleEvent:
         high=c.high,
         low=c.low,
         close=c.close,
-        vwap=c.vwap or None,
+        # `> 0`, pas une verite : un vwap negatif serait une donnee aberrante a
+        # laisser remonter, pas un « non mesure » a taire. La forme `or None`
+        # ressemble en outre au `or 0` que la revue null-vs-zero traque.
+        vwap=c.vwap if c.vwap > 0 else None,
         volume=c.volume,
         trades=c.trades,
     )

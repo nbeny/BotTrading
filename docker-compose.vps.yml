@@ -235,6 +235,11 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      # `depends_on` remplace la carte fusionnee par l'ancre au lieu de
+      # l'etendre : sans cette ligne le collecteur demarre avant le broker et
+      # crash-loope depuis qu'il publie ses bougies sur Kafka.
+      kafka:
+        condition: service_healthy
     environment:
       <<: *common-env
       KRAKEN_BROAD_CADENCE: ${KRAKEN_BROAD_CADENCE:-900}

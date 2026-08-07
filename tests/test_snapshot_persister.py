@@ -114,4 +114,9 @@ async def test_candle_event_upserts() -> None:
     )
     assert session.committed and len(session.executed) == 1
     sql = str(session.executed[0])
-    assert "ON CONFLICT" in sql and "DO UPDATE" in sql  # bougie en formation réécrite
+    # Cible du conflit ET colonnes mises a jour : un ON CONFLICT (time, symbol)
+    # sans `interval` fusionnerait silencieusement les series 1h et 15m en une
+    # seule ligne, et une colonne oubliee figerait la bougie en formation.
+    assert "ON CONFLICT (time, symbol, interval) DO UPDATE" in sql
+    for column in ("open", "high", "low", "close", "vwap", "volume", "trades"):
+        assert f"{column} = excluded.{column}" in sql

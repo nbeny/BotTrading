@@ -60,7 +60,7 @@ class CandleSweeper:
             await self._client.asset_pairs(), min_mentions=self._min_mentions
         )
         specs = majors if self._majors_only else universe
-        stored = 0
+        published = 0
         for spec in specs:
             if not await self._cache.allow(self._client.name, max_calls, window):
                 await self._sleep(window)
@@ -75,19 +75,19 @@ class CandleSweeper:
                 EVENTS_PRODUCED.labels(
                     SERVICE, Topic.CANDLES.value, event.event_type
                 ).inc()
-            stored += len(candles)
+            published += len(candles)
             if self._with_depth:
                 snapshot = parse_depth(
                     await self._client.depth(spec.pair), symbol=spec.symbol
                 )
                 if snapshot is not None:
                     await self._store.save_depth(snapshot)
-        return stored
+        return published
 
     async def run(self) -> None:
         while True:
             try:
-                stored = await self._sweep_once()
+                published = await self._sweep_once()
             except StopAsyncIteration:
                 # The test harness's sleep stub uses this to break the loop.
                 raise
@@ -102,6 +102,12 @@ class CandleSweeper:
             # Freshness goes to service_health, which /systems/overview already
             # reads: a dead collector must show up red in the terminal rather
             # than let every reader keep computing on frozen candles.
-            await self._store.report_health(interval=self._interval, candles=stored)
-            logger.info("%s sweep stored %d candles", self._interval, stored)
+            #
+            # Ce compte est celui des bougies *publiees*, plus celui des lignes
+            # ecrites : depuis la bascule Kafka c'est le persister qui ecrit.
+            # Un persister mort laisse donc ce collecteur vert avec un compte
+            # sain pendant que la table `candles` gele -- surveiller le lag du
+            # groupe api-gateway-persister, pas seulement cette metrique.
+            await self._store.report_health(interval=self._interval, candles=published)
+            logger.info("%s sweep published %d candles", self._interval, published)
             await self._sleep(self._cadence)

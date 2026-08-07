@@ -77,8 +77,10 @@ const TYPE_META: Record<string, { label: string; color: ChipColor }> = {
  * untraceable: they feed the positioning/fundamentals scoring axes through
  * Redis `features:{SYM}`, but are not archived in `events_market`, so a trace
  * click on them would find nothing. `CandleEvent` is the same shape of gap:
- * it upserts into `candles`, not `events_market`, and carries no
- * `correlation_id` (there is no decision lineage for a raw OHLC tick).
+ * it upserts into `candles`, not `events_market`. (It *does* carry a
+ * `correlation_id` — `BaseEvent` mints one for every event — but a raw tick's
+ * id is its own, linked to nothing downstream: see
+ * `memory/correlation-ids-are-downstream-only.md`.)
  *
  * Everything else in the feed resolves: raw market and sentiment events are
  * linked to the analysis that consumed them by `/trace/{cid}`.

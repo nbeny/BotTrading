@@ -18,8 +18,14 @@ ts = load_service_module("decision-engine", "threshold_scan")
 NOW = datetime(2026, 8, 8, 12, 0, tzinfo=UTC)
 
 
-def _full_scan(total: int = 1000) -> "ts.Scan":
-    """Un scan où les huit axes sont largement présents et le régime lu."""
+def _full_scan(total: int = 10_000) -> "ts.Scan":
+    """Un scan où les huit axes sont largement présents et le régime lu.
+
+    `total` doit dépasser le budget de la cible (target_per_day * days),
+    sinon aucun seuil n'est nécessaire : `_threshold_for` rend 0, ce qui
+    est correct mais ne teste rien. À 10 000 lignes contre un budget de
+    1 400, la vanne doit réellement se fermer.
+    """
     scan = ts.Scan(since=NOW - timedelta(days=7))
     scan.total = total
     scan.regime_seen = total
@@ -38,7 +44,9 @@ def test_full_scan_proposes_a_threshold() -> None:
     report = ts.analyze(_full_scan(), days=7, target_per_day=200, now=NOW)
     assert report.refusal is None
     assert report.proposal is not None
-    assert report.proposal["threshold"] > 0
+    # Budget = 200/j x 7j = 1400. Les 5000 lignes a 80 le depassent des le
+    # premier palier atteint, donc le seuil remonte juste au-dessus : 81.
+    assert report.proposal["threshold"] == 81
     assert len(report.axes) == len(ts.AXIS_PROBE)
     assert all(not a["mute"] for a in report.axes)
 

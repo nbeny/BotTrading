@@ -37,8 +37,8 @@ autorisation. Toute utilisation requiert un accord écrit préalable.
  Binance Fut. ─► collector-binance-futures ─► market.derivatives.events ──┤
  DefiLlama    ─► collector-defillama       ─► market.fundamentals.events ─┤
  GitHub       ─► collector-github          ─► market.developer.events ────┤
- Kraken       ─► collector-kraken          ─► market.candle.events ──────────┤
-                                            (carnet : Postgres direct, cf. §4)
+ Kraken       ─► collector-kraken          ─► market.candle.events ───────┤
+                                              (carnet : SQL direct) │
                                                                     │
  Bluesky/Reddit/Mastodon/4chan/                                     │
  Farcaster/YouTube/Lens  ─► collector-social ─┐                     │
@@ -67,10 +67,11 @@ autorisation. Toute utilisation requiert un accord écrit préalable.
  ┌──────────────── PLAN DE CONTRÔLE / EXÉCUTION ──────────┼───────────────────┐
  │                                                        ▼                    │
  │  control-api ─► control.commands ─►  trading-engine  ─► execution.events    │
- │  (JWT, écritures)                    (Kraken Futures,        │              │
+ │  (JWT, écritures)         └───────►  decision-engine                        │
+ │                                      (Kraken Futures,        │              │
  │        ▲                              dry_run/demo/live)     │              │
  │        │ REST /trading/*                     │ Redis trading:*│             │
- │   web-terminal (Next.js)  ◄── WS ── websocket-gateway ◄──────┴─ 10 topics   │
+ │   web-terminal (Next.js)  ◄── WS ── websocket-gateway ◄──────┴─ 14 topics   │
  │        │ REST /portfolio,/market,/journal (lecture)                         │
  │        └──────────► api-gateway (READ-ONLY, Kafka→Postgres, Redis RO)       │
  └────────────────────────────────────────────────────────────────────────────┘
@@ -173,18 +174,23 @@ Trois surfaces backend sont posées devant le frontend. **Ne pas mélanger lectu
 
 | Service              | Hôte Traefik / port          | Rôle                                   |
 | -------------------- | ---------------------------- | -------------------------------------- |
-| **api-gateway**      | `api.cmi.localhost`          | REST **lecture seule** ; persiste Kafka→Postgres (Signal/Decision/Trade) et lit Redis `features:*`/`market:regime` (RO). Sert tout le plan de lecture du terminal : `/portfolio*`, `/market/*` (dont `/market/regime`), `/decisions/{id}/explain`, `/systems/journal/{summary,decisions,calibration,attribution}`, `/trace/{cid}`, `/systems/*`, plus `GET /api/v1/{opportunities,decisions,trades}` |
+| **api-gateway**      | `api.cmi.localhost`          | REST **lecture seule** ; persiste Kafka→Postgres (Signal/Decision/Trade) et lit Redis `features:*`/`market:regime` (RO). Sert tout le plan de lecture du terminal : `/portfolio*`, `/market/*` (dont `/market/regime`), `/decisions/{id}/explain`, `/systems/journal/{summary,decisions,calibration,attribution,threshold}`, `/trace/{cid}`, `/systems/*`, plus `GET /api/v1/{opportunities,decisions,trades}` |
 | **control-api**      | `control.cmi.localhost` (dev `:8001`) | **plan d'écriture/contrôle** + `/auth/login` (JWT). Publie `ControlCommandEvent` sur `control.commands`, lit Redis `trading:*` |
 | **trading-engine**   | *(background)*               | **cœur d'exécution**, trade Kraken Futures. Consomme `risk.approved.events` + `control.commands`, produit `execution.events`, RW Redis `trading:*` |
 | **websocket-gateway**| `ws.cmi.localhost` (dev `:8080`) | diffuse 14 topics marché/décision/exécution → WS `/ws?token=` |
 
 - **control-api possède toute action bot** : `/trading/{mode,kill,auto,caps,orders}`,
-  `/trading/positions/{id}/{close,sltp}`, `/trading/opportunities/{id}/{approve,reject}` —
-  chaque endpoint publie un `ControlCommandEvent`. Il n'écrit rien directement : le
-  trading-engine applique la commande et mute Redis (human-in-the-loop).
+  `/trading/positions/{id}/{close,sltp}`, `/trading/opportunities/{id}/{approve,reject}`,
+  et `/analysis/threshold-scan` — chaque endpoint publie un `ControlCommandEvent`. Il n'écrit
+  rien directement : le service concerné applique la commande (trading-engine pour le trading,
+  decision-engine pour le scan de calibration) et mute l'état (human-in-the-loop).
 - **trading-engine** — modes `dry_run` (défaut compose) / `demo` / `live`. Garde-fous :
   `MAX_ORDER_USD`, `MAX_LEVERAGE`, `MAX_ORDERS_PER_HOUR`. État runtime dans Redis
   `trading:runtime` / `trading:positions*` / `trading:pending*`.
+- **decision-engine** — au-delà du scoring, il porte le **scan de calibration du seuil** :
+  périodique (`THRESHOLD_SCAN_INTERVAL_H`, défaut 6 h, `0` désactive) ou à la demande via
+  `control.commands`. Un verrou Redis interdit deux scans simultanés et sert d'état de job ;
+  le résultat est persisté en `threshold_reports` et servi par api-gateway.
 - **workers IA** — transport `cli` par défaut : chaque appel spawn `claude -p` sous votre
   abonnement OAuth (credentials montés en lecture seule dans le conteneur), au lieu de
   facturer au token via le SDK Anthropic. `ANTHROPIC_TRANSPORT=api` bascule sur le SDK.
@@ -291,4 +297,5 @@ pre-commit install
 | 8 | docker-compose + Traefik    | racine + `traefik/`                           |
 | 9 | Stratégie de scaling        | `docs/scaling.md`                             |
 | 10| Terminal web                | `frontend/` + `frontend/README.md`            |
-```
+| 11| Cockpit quant (vague 1)     | `docs/superpowers/specs/2026-08-06-quant-cockpit-design.md` |
+| 12| Calibration du seuil        | §7 + `services/decision-engine/app/threshold_scan.py` + `scripts/pick_threshold.py` |

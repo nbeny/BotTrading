@@ -157,7 +157,7 @@ Le framework partagé est dans [`libs/cmi_common/cmi_common/sources/`](libs/cmi_
 | `decision.events`         | ai-worker-sonnet, decision-engine | risk-engine, api-gateway                 |
 | `risk.approved.events`    | risk-engine                       | trading-engine                           |
 | `execution.events`        | trading-engine                    | api-gateway, websocket-gateway           |
-| `control.commands`        | control-api                       | trading-engine                           |
+| `control.commands`        | control-api                       | trading-engine, decision-engine (scan de calibration) |
 | `journal.entries`         | ai-worker-sonnet                  | api-gateway (→ `decision_journal`)       |
 | `market.news.events` / `market.social.events` | *(réservés)*  | *legacy — l'ingestion sociale/news passe désormais par Postgres `raw_content`* |
 
@@ -253,6 +253,14 @@ brutes), **inspecteur de décision** global ouvrable par `?decision=<id>` depuis
 quelle page (axes de scoring, triage Haiku, verdict risque, contrefactuel, timeline), et
 page **`/journal`** (décisions jugées, calibration de seuil par simulation, attribution par
 facteur). Spec : `docs/superpowers/specs/2026-08-06-quant-cockpit-design.md`.
+
+`/journal` porte aussi le **rapport de calibration du seuil**, en tête de page : présence réelle de
+chacun des huit axes sur la fenêtre, et le seuil proposé pour un débit donné — ou le refus motivé
+quand un axe est muet, parce qu'un axe absent est *exclu* du dénominateur de renormalisation et non
+noté zéro : un seuil calibré dans ces conditions vaudrait pour un modèle amputé. Le scan tourne
+toutes les 6 h dans `decision-engine` (`THRESHOLD_SCAN_INTERVAL_H`, `0` désactive) et se relance à
+la demande depuis le bouton, qui publie une commande sur `control.commands`. En ligne de commande,
+le même rapport sort de `python scripts/pick_threshold.py --days 7`.
 
 Chaque service expose `/health` (liveness/readiness) et `/metrics` (Prometheus).
 

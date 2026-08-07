@@ -121,6 +121,26 @@ cache in `journal_api.py` since the threshold is applied in pure Python), and at
 nearly none at threshold 101). `RISK_MIN_SCORE` is now passed to api-gateway in both compose files so
 the "current threshold" bucket can render; unset → `null` → « — », never a silent default.
 
+**Le rapport de calibration est un service, plus un script SSH (2026-08-08).** `pick_threshold.py`
+répondait à la question la plus importante du projet — les huit axes sont-ils réellement présents,
+et quel seuil laisse passer un débit donné — mais n'étant accessible qu'en SSH, il n'était pas
+lancé. Son analyse vit désormais dans `decision-engine/app/threshold_scan.py` (`analyze()`, **pure**),
+le CLI en est le formateur texte et le service la persiste : **une seule logique, deux faces**, avec
+un test qui compare les deux sorties. Le scan tourne dans decision-engine parce que c'est le seul
+service autorisé à importer `scoring.py` ; il rejoue `score(features_from(...))` sur ~1,3 M lignes
+(368 Mo de JSONB pour 2 Go de RAM), donc en flux `yield_per=5000`, jamais en réponse HTTP synchrone.
+Déclencheurs : tâche périodique (`THRESHOLD_SCAN_INTERVAL_H`, **0 = désactivé**) ou commande
+`RUN_THRESHOLD_SCAN` sur `control.commands`. **Le scan déclenché par commande est détaché en tâche**
+— l'attendre dans le handler Kafka dépassait `max_poll_interval_ms` (5 min), le consumer quittait le
+groupe et le `commit()` tuait la tâche : le premier clic marchait, tous les suivants disparaissaient
+en silence. Un verrou Redis `lock:threshold-scan` empêche deux scans simultanés **et sert d'état de
+job** : `GET /systems/journal/threshold` lit son existence pour `running`, il n'y a pas de second
+état à maintenir. Un scan échoué **écrit une ligne `status="error"`** — le panneau dit « dernier scan
+échoué à 14h02 » au lieu de présenter un rapport périmé comme frais. Et les **paragraphes de refus
+voyagent avec le verdict** : ce sont eux qui distinguent « la collecte est cassée » d'« l'axe est
+légitimement rare » (repère mesuré : `fundamentals` tourne à 3,6 % et fonctionne), donc un refus
+réduit à un booléen détruirait la valeur de l'outil.
+
 **`/market` is a scan surface, not a stream.** The token table is bounded (15 rows, search + sort,
 never `autoHeight` — it once grew to ~124 rows and pushed every other panel six screens down), and
 everything token-specific lives in a right-hand drawer driven by `?token=SYMBOL` in the URL. One

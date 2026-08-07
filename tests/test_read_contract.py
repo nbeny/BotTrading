@@ -363,6 +363,9 @@ class _FakeCacheClient:
     async def mget(self, keys):
         return [None] * len(keys)
 
+    async def exists(self, _key):
+        return 0
+
 
 class _FakeCache:
     client = _FakeCacheClient()
@@ -459,6 +462,17 @@ async def test_journal_attribution_contract() -> None:
     _assert_exact_keys("systems/journal/attribution", resp)
     for f in resp["factors"]:
         _assert_exact_keys("systems/journal/attribution.factors[]", f)
+
+
+async def test_journal_threshold_contract() -> None:
+    resp = await journal_api.journal_threshold(
+        session=_FakeSession(1), cache=_FakeCache()
+    )
+    _assert_exact_keys("systems/journal/threshold", resp)
+    # Aucun rapport en base : tout est null, jamais un rapport vide qui
+    # passerait pour un scan réussi.
+    assert resp["report"] is None and resp["computed_at"] is None
+    assert resp["running"] is False
 
 
 # ── manifest coverage ─────────────────────────────────────────────────────────

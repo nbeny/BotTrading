@@ -296,4 +296,14 @@ CONTRACT: dict[str, set[str]] = {
         "factors",
     },
     "systems/journal/attribution.factors[]": {"key", "n", "correlation"},
+    "systems/journal/threshold": {
+        "report",
+        "status",
+        "error",
+        "computed_at",
+        "window_days",
+        "target_per_day",
+        "duration_s",
+        "running",
+    },
 }

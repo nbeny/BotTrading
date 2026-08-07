@@ -14,8 +14,11 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from cmi_common.cache import Cache
+from cmi_common.db import ThresholdReport
 
 from .journal_calibration import MIN_N, TRIAGE_FACTORS, attribution, calibrate
 from .journal_query import (
@@ -27,6 +30,7 @@ from .journal_query import (
     utcnow,
 )
 from .journal_sim import simulate_path
+from .regime_api import get_cache_dep
 from .routers import get_session_dep
 
 logger = logging.getLogger(__name__)
@@ -351,4 +355,45 @@ async def journal_attribution(
         "min_n": MIN_N,
         "sufficient": n >= MIN_N,
         "factors": attribution(rows, factor_keys=TRIAGE_FACTORS, field=_PNL_FIELD),
+    }
+
+
+@router.get("/systems/journal/threshold")
+async def journal_threshold(
+    session: AsyncSession = Depends(get_session_dep),
+    cache: Cache = Depends(get_cache_dep),
+) -> dict[str, Any]:
+    """Dernier rapport de calibration, et si un scan tourne.
+
+    `running` est lu depuis l'existence du verrou Redis plutôt que depuis un
+    état persisté : le verrou est la seule source de vérité sur ce point, et
+    un second état dériverait du premier au premier processus tué.
+    """
+    row = (
+        (
+            await session.execute(
+                select(ThresholdReport).order_by(ThresholdReport.time.desc()).limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    running = False
+    try:
+        # threshold_job.py acquires `lock:{LOCK_NAME}` via cache.client.lock(...)
+        # (redis-py's raw API, not the Cache facade) — same "lock:" prefix here.
+        running = bool(await cache.client.exists("lock:threshold-scan"))
+    except Exception:
+        # A probe failure must not 500 the panel: report "not running" and log,
+        # rather than take the whole endpoint down over a Redis hiccup.
+        logger.exception("threshold lock probe failed")
+    return {
+        "report": (row.payload or None) if row and row.status == "ok" else None,
+        "status": row.status if row else None,
+        "error": row.error if row else None,
+        "computed_at": row.time.isoformat() if row else None,
+        "window_days": row.window_days if row else None,
+        "target_per_day": row.target_per_day if row else None,
+        "duration_s": row.duration_s if row else None,
+        "running": running,
     }

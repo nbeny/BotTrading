@@ -33,6 +33,7 @@ import type {
   SentimentEvent,
 } from '@/lib/types/events';
 import type { FunnelStats, StageDetail, SystemsSnapshot, SystemsWindow } from '@/lib/types/systems';
+import type { ThresholdReportResponse } from '@/lib/types/threshold';
 
 // ── Portfolio ───────────────────────────────────────────────────────────────
 export const portfolioApi = {
@@ -266,4 +267,14 @@ export const journalApi = {
     api
       .get<JournalAttribution>('/systems/journal/attribution', { params: { window } })
       .then((r) => r.data),
+  threshold: () =>
+    api.get<ThresholdReportResponse>('/systems/journal/threshold').then((r) => r.data),
+};
+
+// ── Analysis (write) ──────────────────────────────────────────────────────────
+// Triggers, never reads: requesting a rescan is a control-plane action, so it
+// goes on `control` (publishes ControlCommand.RUN_THRESHOLD_SCAN), not `api`.
+export const analysisApi = {
+  requestThresholdScan: () =>
+    control.post<{ ok: boolean }>('/analysis/threshold-scan').then((r) => r.data),
 };

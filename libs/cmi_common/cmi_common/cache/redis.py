@@ -13,6 +13,12 @@ from redis.asyncio.lock import Lock
 from ..config import RedisSettings
 
 
+class LockNotAcquiredError(RuntimeError):
+    """Raised by :meth:`Cache.lock` when a non-blocking acquire found the lock
+    already held. Callers that treat "someone else is doing it" as a normal
+    outcome catch this; callers that block never see it."""
+
+
 class Cache:
     """Small async facade over redis-py used by every service."""
 
@@ -61,9 +67,19 @@ class Cache:
     async def lock(
         self, name: str, timeout: float = 30.0, blocking: bool = True
     ) -> AsyncIterator[Lock]:
-        """Cluster-wide lock, e.g. to ensure a single collector poll runs."""
+        """Cluster-wide lock, e.g. to ensure a single collector poll runs.
+
+        Raises ``LockNotAcquiredError`` when ``blocking=False`` and someone else
+        holds it. This used to ``yield`` regardless of what ``acquire()``
+        returned, so a caller asking for mutual exclusion got the body executed
+        anyway -- a lock that does not lock, silently. redis-py returns False
+        rather than raising in that case, which is exactly the shape of failure
+        this codebase treats as the worst kind: plausible, and wrong.
+        """
         lock = self._redis.lock(f"lock:{name}", timeout=timeout, blocking=blocking)
         acquired = await lock.acquire()
+        if not acquired:
+            raise LockNotAcquiredError(name)
         try:
             yield lock
         finally:

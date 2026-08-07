@@ -614,7 +614,9 @@ class GithubRepoSnapshot(Base):
     __table_args__ = (Index("ix_github_snapshot_repo", "owner", "repo", "observed_at"),)
 
 
-# Tables that become Timescale hypertables (time-partitioned).
+# Hypertables whose chunk intervals the initial migrations set explicitly --
+# NOT an exhaustive registry of hypertables (candles, market_depth and the
+# snapshot tables are managed by their own migrations).
 # raw_content is deliberately excluded: its dedup needs UNIQUE(source, external_id)
 # and Timescale requires the partitioning column in every unique index.
 HYPERTABLES = {

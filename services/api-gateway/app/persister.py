@@ -15,6 +15,9 @@ from cmi_common.db import (
     Database,
     Decision,
     DecisionJournal,
+    DerivativesSnapshot,
+    DeveloperSnapshot,
+    FundamentalsSnapshot,
     PipelineRejection,
     Price,
     Signal,
@@ -32,6 +35,11 @@ from cmi_common.events.account import AccountSnapshotEvent
 from cmi_common.events.base import Source
 from cmi_common.events.execution import ExecutionEvent
 from cmi_common.events.journal import JournalEntryEvent
+from cmi_common.events.market import (
+    DerivativesEvent,
+    DeveloperEvent,
+    FundamentalsEvent,
+)
 from cmi_common.events.risk import RiskRejectedEvent
 from cmi_common.kafka import Topic
 from cmi_common.observability import EVENTS_CONSUMED
@@ -115,6 +123,12 @@ class Persister:
             await self._update_trade(event)
         elif isinstance(event, AccountSnapshotEvent):
             await self._save_account_snapshot(event)
+        elif isinstance(event, DerivativesEvent):
+            await self._save_derivatives(event)
+        elif isinstance(event, FundamentalsEvent):
+            await self._save_fundamentals(event)
+        elif isinstance(event, DeveloperEvent):
+            await self._save_developer(event)
 
     async def _save_price(self, e: PriceEvent) -> None:
         EVENTS_CONSUMED.labels(SERVICE, Topic.PRICE.value, event_type_of(e)).inc()
@@ -335,3 +349,68 @@ class Persister:
             realized_pnl=e.pnl,
         )
         logger.info("updated trade %s -> %s", e.risk_event_id, e.kind)
+
+    async def _save_derivatives(self, e: DerivativesEvent) -> None:
+        EVENTS_CONSUMED.labels(SERVICE, Topic.DERIVATIVES.value, event_type_of(e)).inc()
+        async with self._db._sessionmaker() as s:
+            await s.execute(
+                insert(DerivativesSnapshot)
+                .values(
+                    time=e.occurred_at,
+                    symbol=e.symbol,
+                    # DerivativesEvent does not carry a venue yet -- the only
+                    # producer today is collector-binance-futures. Kraken
+                    # Futures execution (spec pending) will add a real field.
+                    venue="binance",
+                    funding_rate_8h=e.funding_rate_8h,
+                    funding_annualized_pct=e.funding_annualized_pct,
+                    open_interest_usd=e.open_interest_usd,
+                    open_interest_change_pct_24h=e.open_interest_change_pct_24h,
+                    long_short_account_ratio=e.long_short_account_ratio,
+                )
+                .on_conflict_do_nothing()
+            )
+            await s.commit()
+
+    async def _save_fundamentals(self, e: FundamentalsEvent) -> None:
+        EVENTS_CONSUMED.labels(
+            SERVICE, Topic.FUNDAMENTALS.value, event_type_of(e)
+        ).inc()
+        async with self._db._sessionmaker() as s:
+            await s.execute(
+                insert(FundamentalsSnapshot)
+                .values(
+                    time=e.occurred_at,
+                    symbol=e.symbol,
+                    coin_id=e.coin_id,
+                    tvl_usd=e.tvl_usd,
+                    tvl_change_pct_7d=e.tvl_change_pct_7d,
+                    fees_24h_usd=e.fees_24h_usd,
+                    fees_change_pct_7d=e.fees_change_pct_7d,
+                    next_unlock_at=e.next_unlock_at,
+                    next_unlock_pct_supply=e.next_unlock_pct_supply,
+                    has_unlock_schedule=e.has_unlock_schedule,
+                )
+                .on_conflict_do_nothing()
+            )
+            await s.commit()
+
+    async def _save_developer(self, e: DeveloperEvent) -> None:
+        EVENTS_CONSUMED.labels(SERVICE, Topic.DEVELOPER.value, event_type_of(e)).inc()
+        async with self._db._sessionmaker() as s:
+            await s.execute(
+                insert(DeveloperSnapshot)
+                .values(
+                    time=e.occurred_at,
+                    symbol=e.symbol,
+                    coin_id=e.coin_id,
+                    repo_count=e.repo_count,
+                    commit_ratio_4w=e.commit_ratio_4w,
+                    pr_ratio_4w=e.pr_ratio_4w,
+                    days_since_push=e.days_since_push,
+                    star_growth_pct_7d=e.star_growth_pct_7d,
+                    all_repos_archived=e.all_repos_archived,
+                )
+                .on_conflict_do_nothing()
+            )
+            await s.commit()

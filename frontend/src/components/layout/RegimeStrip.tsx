@@ -1,11 +1,12 @@
 'use client';
 
-import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Box, ButtonBase, Chip, Popover, Stack, Typography } from '@mui/material';
 import { regimeApi, tradingApi } from '@/lib/api/endpoints';
 import { DRIVER_LABELS, REGIME_LABELS, type DriverKey, type DriverState, type RegimeDriver } from '@/lib/types/regime';
 import { fmtRelative } from '@/lib/format';
+import { useEventSubscription } from '@/lib/ws/WebSocketProvider';
 
 const STATE_COLOR: Record<DriverState, string> = {
   bullish: 'success.main',
@@ -34,6 +35,24 @@ export function RegimeStrip() {
   const regime = useQuery({ queryKey: ['market', 'regime'], queryFn: regimeApi.get, refetchInterval: 30_000 });
   const status = useQuery({ queryKey: ['trading', 'status'], queryFn: tradingApi.status, refetchInterval: 15_000 });
   const [anchor, setAnchor] = useState<{ el: HTMLElement; key: DriverKey } | null>(null);
+
+  const queryClient = useQueryClient();
+  // Push accélère, le poll 30s reste le filet : une rafale de republication
+  // (~200 symboles d'un coup) ne doit produire qu'une invalidation.
+  const invalidateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEventSubscription(['DerivativesEvent'], () => {
+    if (invalidateTimer.current) return;
+    invalidateTimer.current = setTimeout(() => {
+      invalidateTimer.current = null;
+      queryClient.invalidateQueries({ queryKey: ['market', 'regime'] });
+    }, 2000);
+  });
+  useEffect(
+    () => () => {
+      if (invalidateTimer.current) clearTimeout(invalidateTimer.current);
+    },
+    [],
+  );
 
   const data = regime.data;
   // Derived live from the latest fetch, never frozen at click time — a 30s

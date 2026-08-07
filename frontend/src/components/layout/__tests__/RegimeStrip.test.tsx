@@ -9,6 +9,13 @@ vi.mock('@/lib/api/endpoints', () => ({
   tradingApi: { status: vi.fn() },
 }));
 
+const subscriptionHandlers: Array<(e: unknown, m: unknown) => void> = [];
+vi.mock('@/lib/ws/WebSocketProvider', () => ({
+  useEventSubscription: vi.fn((_types: string[], handler: (e: unknown, m: unknown) => void) => {
+    subscriptionHandlers.push(handler);
+  }),
+}));
+
 import { regimeApi, tradingApi } from '@/lib/api/endpoints';
 
 const regimeGet = vi.mocked(regimeApi.get);
@@ -23,7 +30,10 @@ function renderStrip() {
   );
 }
 
-afterEach(() => vi.clearAllMocks());
+afterEach(() => {
+  vi.clearAllMocks();
+  subscriptionHandlers.length = 0;
+});
 
 describe('RegimeStrip', () => {
   it('affiche le régime, les drivers et « — » pour un driver non mesuré', async () => {
@@ -78,5 +88,19 @@ describe('RegimeStrip', () => {
     regimeGet.mockResolvedValue(getRegime());
     renderStrip();
     expect(await screen.findByText('kill:—')).toBeInTheDocument();
+  });
+
+  it('invalide la query regime à la réception d’un événement dérivés (débounce)', async () => {
+    vi.useFakeTimers();
+    regimeGet.mockResolvedValue(getRegime());
+    statusGet.mockResolvedValue({ mode: 'dry_run', trading_enabled: true, auto_trading_enabled: false });
+    renderStrip();
+    await vi.waitFor(() => expect(regimeGet).toHaveBeenCalledTimes(1));
+    // deux événements en rafale → une seule invalidation après le débounce
+    subscriptionHandlers.forEach((h) => h({ event_type: 'DerivativesEvent' }, {}));
+    subscriptionHandlers.forEach((h) => h({ event_type: 'DerivativesEvent' }, {}));
+    await vi.advanceTimersByTimeAsync(2100);
+    await vi.waitFor(() => expect(regimeGet).toHaveBeenCalledTimes(2));
+    vi.useRealTimers();
   });
 });

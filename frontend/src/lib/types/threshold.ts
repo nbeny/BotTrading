@@ -92,9 +92,14 @@ export interface ThresholdReportPayload {
   min_presence_pct: number;
 }
 
-/** Enveloppe de GET /systems/journal/threshold (journal_api.py::journal_threshold). */
+/** Enveloppe de GET /systems/journal/threshold (journal_api.py::journal_threshold).
+ *  `report`/`report_computed_at` portent le dernier scan RÉUSSI ; `status`/
+ *  `error`/`computed_at` portent la tentative la plus RÉCENTE — sur un scan
+ *  en échec les deux sont peuplés en même temps : il faut afficher l'erreur
+ *  SANS faire disparaître le dernier rapport valide. */
 export interface ThresholdReportResponse {
   report: ThresholdReportPayload | null;
+  report_computed_at: string | null;
   status: 'ok' | 'error' | null;
   error: string | null;
   computed_at: string | null;

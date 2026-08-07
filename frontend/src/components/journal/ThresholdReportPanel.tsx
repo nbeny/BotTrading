@@ -39,8 +39,14 @@ function AgeLabel({ computedAt, now }: { computedAt: string | null; now: number 
   );
 }
 
+/** Ms after which a lost/dropped "Relancer" command stops blocking the
+ *  button — the measured chain to `running: true` in Redis is 0.3–2 s, so
+ *  20 s is generous slack, not the expected case. */
+const PENDING_TIMEOUT_MS = 20_000;
+
 export function ThresholdReportPanel() {
   const [now, setNow] = useState(() => Date.now());
+  const [pending, setPending] = useState(false);
   const queryClient = useQueryClient();
 
   useEffect(() => {
@@ -51,12 +57,27 @@ export function ThresholdReportPanel() {
   const { data } = useQuery({
     queryKey: ['journal', 'threshold'],
     queryFn: journalApi.threshold,
-    refetchInterval: (q) => (q.state.data?.running ? 5_000 : 60_000),
+    refetchInterval: (q) => (pending || q.state.data?.running ? 5_000 : 60_000),
   });
 
   const running = data?.running ?? false;
 
+  // Redis confirms the scan started — the local "request sent" guess is no
+  // longer needed, the real signal took over.
+  useEffect(() => {
+    if (running) setPending(false);
+  }, [running]);
+
+  // A command can be lost (Kafka hiccup, consumer down) — don't disable the
+  // button forever waiting for a signal that will never come.
+  useEffect(() => {
+    if (!pending) return;
+    const id = setTimeout(() => setPending(false), PENDING_TIMEOUT_MS);
+    return () => clearTimeout(id);
+  }, [pending]);
+
   async function relancer() {
+    setPending(true);
     await analysisApi.requestThresholdScan();
     await queryClient.invalidateQueries({ queryKey: ['journal', 'threshold'] });
   }
@@ -64,17 +85,19 @@ export function ThresholdReportPanel() {
   const header = (
     <Stack direction="row" spacing={2} alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
       <Stack direction="row" spacing={1.5} alignItems="center">
-        <Typography variant="body2" sx={{ opacity: 0.7 }}>Dernier scan</Typography>
-        <AgeLabel computedAt={data?.computed_at ?? null} now={now} />
-        {running && (
+        <Typography variant="body2" sx={{ opacity: 0.7 }}>Dernier rapport</Typography>
+        <AgeLabel computedAt={data?.report_computed_at ?? null} now={now} />
+        {running ? (
           <Chip label="calcul en cours…" size="small" color="info" variant="outlined" />
-        )}
+        ) : pending ? (
+          <Chip label="demande envoyée…" size="small" color="info" variant="outlined" />
+        ) : null}
       </Stack>
       <Button
         variant="outlined"
         size="small"
         startIcon={<ReplayIcon fontSize="small" />}
-        disabled={running}
+        disabled={running || pending}
         onClick={relancer}
       >
         Relancer
@@ -82,23 +105,19 @@ export function ThresholdReportPanel() {
     </Stack>
   );
 
-  // Last scan failed — say so rather than showing a stale report as fresh.
-  if (data && data.status === 'error') {
-    return (
-      <Box>
-        {header}
-        <Alert severity="error">
-          Dernier scan échoué le {fmtRelative(data.computed_at, now)} : {data.error ?? '—'}
-        </Alert>
-      </Box>
-    );
-  }
-
   const report = data?.report ?? null;
 
   return (
     <Box>
       {header}
+      {/* The newest attempt can fail while a still-valid earlier report
+       *  exists — say so without hiding that report (it's the last thing
+       *  we know), never an early return. */}
+      {data && data.status === 'error' && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          Dernier scan échoué le {fmtRelative(data.computed_at, now)} : {data.error ?? '—'}
+        </Alert>
+      )}
       {report === null ? (
         // Either the query hasn't landed yet, or no scan has ever run —
         // both render the same honest "nothing to show" state.
@@ -144,8 +163,8 @@ export function ThresholdReportPanel() {
                 Seuil proposé : {report.proposal.threshold}
               </Typography>
               <Typography variant="body2">
-                {report.proposal.actual_per_day}/{report.proposal.target_per_day} décisions par jour ·{' '}
-                {report.proposal.distinct_symbols} symboles distincts · {report.proposal.passing_pct.toFixed(1)}% passant
+                {report.proposal.actual_per_day.toFixed(1)}/{report.proposal.target_per_day} décisions par jour ·{' '}
+                {report.proposal.distinct_symbols.toFixed(1)} symboles distincts · {report.proposal.passing_pct.toFixed(1)}% passant
               </Typography>
             </Alert>
           ) : (

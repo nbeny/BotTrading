@@ -49,7 +49,7 @@ describe('ThresholdReportPanel', () => {
 
   it('état vide honnête quand aucun scan n’a tourné', async () => {
     thresholdGet.mockResolvedValue({
-      report: null, status: null, error: null, computed_at: null,
+      report: null, report_computed_at: null, status: null, error: null, computed_at: null,
       window_days: null, target_per_day: null, duration_s: null, running: false,
     });
     renderPanel();
@@ -58,13 +58,29 @@ describe('ThresholdReportPanel', () => {
 
   it('dit qu’un scan a échoué plutôt que d’afficher un rapport périmé', async () => {
     thresholdGet.mockResolvedValue({
-      report: null, status: 'error', error: 'RuntimeError: stream died',
+      report: null, report_computed_at: null, status: 'error', error: 'RuntimeError: stream died',
       computed_at: '2026-08-08T12:00:00+00:00', window_days: 7,
       target_per_day: 200, duration_s: 3.2, running: false,
     });
     renderPanel();
     expect(await screen.findByText(/échoué/i)).toBeInTheDocument();
     expect(screen.getByText(/stream died/)).toBeInTheDocument();
+  });
+
+  it('garde le dernier rapport valide visible quand le scan le plus récent a échoué', async () => {
+    thresholdGet.mockResolvedValue({
+      ...getThresholdReport(),
+      status: 'error',
+      error: 'RuntimeError: stream died',
+      computed_at: '2026-08-08T12:00:00+00:00',
+    });
+    renderPanel();
+    // Le message d'échec ET le rapport (table des axes) doivent être rendus
+    // ensemble — plus d'early return qui masquerait le dernier bon rapport.
+    expect(await screen.findByText(/échoué/i)).toBeInTheDocument();
+    expect(screen.getByText(/stream died/)).toBeInTheDocument();
+    expect(await screen.findByTestId('threshold-refusal')).toBeInTheDocument();
+    expect(screen.getByText('volume_growth')).toBeInTheDocument();
   });
 
   it('désactive le bouton et le dit pendant un scan', async () => {

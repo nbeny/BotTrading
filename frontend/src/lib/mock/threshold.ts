@@ -121,6 +121,7 @@ export function getThresholdReportPayload(): ThresholdReportPayload {
 export function getThresholdReport(): ThresholdReportResponse {
   return {
     report: getThresholdReportPayload(),
+    report_computed_at: '2026-08-04T14:32:07+00:00',
     status: 'ok',
     error: null,
     computed_at: '2026-08-04T14:32:07+00:00',

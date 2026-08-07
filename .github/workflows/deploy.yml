@@ -1,9 +1,14 @@
 name: deploy
 
 # CI on every push/PR. Build + deploy are MANUAL (`workflow_dispatch`) since
-# 2026-08-07: the market-data-on-Kafka wave ships migration 0019, and the
-# api-gateway persister writes tables that migration creates. An auto-deploy on
-# push would start the persister against a schema that does not exist yet.
+# 2026-08-07, by operator choice: a push to master publishes code, it does not
+# ship it. Deploying is a decision one takes, not a side effect of merging.
+#
+# NB -- schema ordering is NOT the reason: `scripts/deploy-vps.sh` already runs
+# `compose run --rm migrate` (alembic upgrade head) before `up -d`, so a
+# migration always lands ahead of the services that need it. An earlier version
+# of this comment claimed otherwise; it was wrong.
+#
 # Re-arming auto-deploy = restore `github.event_name == 'push'` on the two jobs
 # below; deploying now = "Run workflow" on the deploy action, master branch.
 on:

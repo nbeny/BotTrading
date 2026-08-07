@@ -1,6 +1,11 @@
 name: deploy
 
-# CI on every push/PR; build + auto-deploy to the VPS only on push to master.
+# CI on every push/PR. Build + deploy are MANUAL (`workflow_dispatch`) since
+# 2026-08-07: the market-data-on-Kafka wave ships migration 0019, and the
+# api-gateway persister writes tables that migration creates. An auto-deploy on
+# push would start the persister against a schema that does not exist yet.
+# Re-arming auto-deploy = restore `github.event_name == 'push'` on the two jobs
+# below; deploying now = "Run workflow" on the deploy action, master branch.
 on:
   push:
     branches: [master]
@@ -79,7 +84,7 @@ jobs:
   # -------------------------------------------------------------- images
   images:
     needs: test
-    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -140,7 +145,7 @@ jobs:
   # -------------------------------------------------------------- deploy
   deploy:
     needs: images
-    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment: production
     permissions:

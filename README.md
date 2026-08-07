@@ -37,7 +37,8 @@ autorisation. Toute utilisation requiert un accord écrit préalable.
  Binance Fut. ─► collector-binance-futures ─► market.derivatives.events ──┤
  DefiLlama    ─► collector-defillama       ─► market.fundamentals.events ─┤
  GitHub       ─► collector-github          ─► market.developer.events ────┤
- Kraken       ─► collector-kraken          ─► Postgres candles/depth (pas de Kafka)
+ Kraken       ─► collector-kraken          ─► market.candle.events ──────────┤
+                                            (carnet : Postgres direct, cf. §4)
                                                                     │
  Bluesky/Reddit/Mastodon/4chan/                                     │
  Farcaster/YouTube/Lens  ─► collector-social ─┐                     │
@@ -148,9 +149,10 @@ Le framework partagé est dans [`libs/cmi_common/cmi_common/sources/`](libs/cmi_
 | `market.volume.events`    | collector-coingecko               | decision-engine, ai-worker-haiku         |
 | `market.dex.events`       | collector-dexscreener             | decision-engine, ai-worker-haiku         |
 | `market.sentiment.events` | sentiment-service                 | decision-engine, ai-worker-haiku         |
-| `market.derivatives.events` | collector-binance-futures       | ai-worker-haiku (FeatureStore)           |
-| `market.fundamentals.events` | collector-defillama            | ai-worker-haiku (FeatureStore)           |
-| `market.developer.events` | collector-github                  | ai-worker-haiku (FeatureStore)           |
+| `market.derivatives.events` | collector-binance-futures       | ai-worker-haiku (FeatureStore), api-gateway (→ `derivatives_snapshots`), websocket-gateway |
+| `market.fundamentals.events` | collector-defillama            | ai-worker-haiku (FeatureStore), api-gateway (→ `fundamentals_snapshots`), websocket-gateway |
+| `market.developer.events` | collector-github                  | ai-worker-haiku (FeatureStore), api-gateway (→ `developer_snapshots`), websocket-gateway |
+| `market.candle.events`    | collector-kraken                  | api-gateway (upsert → `candles`), websocket-gateway |
 | `market.analysis.events`  | ai-worker-haiku                   | ai-worker-sonnet, decision-engine, api-gateway |
 | `decision.events`         | ai-worker-sonnet, decision-engine | risk-engine, api-gateway                 |
 | `risk.approved.events`    | risk-engine                       | trading-engine                           |
@@ -174,7 +176,7 @@ Trois surfaces backend sont posées devant le frontend. **Ne pas mélanger lectu
 | **api-gateway**      | `api.cmi.localhost`          | REST **lecture seule** ; persiste Kafka→Postgres (Signal/Decision/Trade) et lit Redis `features:*`/`market:regime` (RO). Sert tout le plan de lecture du terminal : `/portfolio*`, `/market/*` (dont `/market/regime`), `/decisions/{id}/explain`, `/systems/journal/{summary,decisions,calibration,attribution}`, `/trace/{cid}`, `/systems/*`, plus `GET /api/v1/{opportunities,decisions,trades}` |
 | **control-api**      | `control.cmi.localhost` (dev `:8001`) | **plan d'écriture/contrôle** + `/auth/login` (JWT). Publie `ControlCommandEvent` sur `control.commands`, lit Redis `trading:*` |
 | **trading-engine**   | *(background)*               | **cœur d'exécution**, trade Kraken Futures. Consomme `risk.approved.events` + `control.commands`, produit `execution.events`, RW Redis `trading:*` |
-| **websocket-gateway**| `ws.cmi.localhost` (dev `:8080`) | diffuse 10 topics marché/décision/exécution → WS `/ws?token=` |
+| **websocket-gateway**| `ws.cmi.localhost` (dev `:8080`) | diffuse 14 topics marché/décision/exécution → WS `/ws?token=` |
 
 - **control-api possède toute action bot** : `/trading/{mode,kill,auto,caps,orders}`,
   `/trading/positions/{id}/{close,sltp}`, `/trading/opportunities/{id}/{approve,reject}` —

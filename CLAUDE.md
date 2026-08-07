@@ -55,7 +55,7 @@ Three backend surfaces sit in front of the frontend. **Keep the read vs. write s
 | **api-gateway** | `api.cmi.localhost` :8000 | **READ-ONLY** REST | analysis, decision, risk, execution | — | persists → Postgres; lit Redis features:*/market:regime (RO) |
 | **control-api** | `control.cmi.localhost` :8000 | **WRITE / control plane** + `/auth/login` (JWT) | — | `control.commands` | reads Redis `trading:*` |
 | **trading-engine** | none (background) | **execution core**, trades **Kraken Futures** | `risk.approved.events`, `control.commands` | `execution.events` | RW Redis `trading:*` |
-| **websocket-gateway** | `ws.cmi.localhost` :8000, host :8080 | broadcast 10 market/decision/exec topics → WS `/ws?token=` | 10 topics | — | — |
+| **websocket-gateway** | `ws.cmi.localhost` :8000, host :8080 | broadcast 14 market/decision/exec topics → WS `/ws?token=` | 14 topics | — | — |
 
 Key rules:
 - **api-gateway never writes.** It's a Kafka→Postgres persister with GET endpoints only.
@@ -140,6 +140,21 @@ renders as words.** Conflating the two is what made the graph read as a dead pip
 so "not measured" was served as a confident `0`. Metric names are now shared constants in
 `cmi_common.observability`. Aggregates sit behind a 30s TTL cache; a failed query reports stale or
 unknown, never zero.
+
+**Market data unifiée sur Kafka (2026-08-07).** Chaque événement de marché suit désormais le même
+chemin : collecteur → Kafka → persister api-gateway → Postgres, et websocket-gateway → front.
+`derivatives`/`fundamentals`/`developer` s'évaporaient (Redis TTL 900 s uniquement) ; ils atterrissent
+maintenant dans trois hypertables d'instantanés (`*_snapshots`, migration 0019, rétention 90 j,
+colonnes de mesure nullables — un instantané partiel est le cas normal) et sont diffusés au front.
+Dividende : `max(time)` de `derivatives_snapshots` fournit un `as_of` réel aux drivers funding/ΔOI
+du bandeau régime, qui affichaient « fraîcheur inconnue » faute d'horodatage dans `features:{SYM}`.
+`collector-kraken` publie ses bougies sur `market.candle.events` au lieu d'écrire Postgres — le
+persister **upsert** (`ON CONFLICT DO UPDATE` : la bougie en formation est réécrite à chaque sweep)
+et le curseur de balayage continue de lire `Candle.time`, l'upsert absorbant le retard du persister.
+**Le carnet de profondeur reste en écriture SQL directe** : donnée la plus lourde et la plus
+périssable, sans consommateur temps réel, et destinée à l'« étage rapide » de trading-engine au plus
+près de `send_order`. Le `RegimeStrip` invalide sa query sur `DerivativesEvent` (débounce 2 s) tout
+en gardant son poll 30 s en filet. Spec : `docs/superpowers/specs/2026-08-07-market-data-kafka-unification-design.md`.
 
 **Positioning & fundamentals (`collector-binance-futures`, `collector-defillama`).** Two keyless
 sources feed two new scoring axes: `positioning` (funding, open interest, long/short — contrarian

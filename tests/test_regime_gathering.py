@@ -1,5 +1,7 @@
 """Parse-guards of regime_api's Redis gathering — pure fakes, no I/O."""
 
+from datetime import UTC, datetime
+
 from service_modules import load_service_module
 
 regime_api = load_service_module("api-gateway", "regime_api")
@@ -47,3 +49,32 @@ def test_floats_rejects_bools_and_non_numbers() -> None:
         {"x": 2},
     ]
     assert regime_api._floats(rows, "x") == [0.5, 2.0]
+
+
+class _Row:
+    def __init__(self, value):
+        self._value = value
+
+    def first(self):
+        return self._value
+
+
+class _DerivSession:
+    """One canned result for `select(func.max(DerivativesSnapshot.time))`."""
+
+    def __init__(self, value):
+        self._value = value
+
+    async def execute(self, _stmt):
+        return _Row(self._value)
+
+
+async def test_derivatives_as_of_present() -> None:
+    at = datetime(2026, 8, 7, 12, 0, tzinfo=UTC)
+    session = _DerivSession([at])
+    assert await regime_api._derivatives_as_of(session) == at.isoformat()
+
+
+async def test_derivatives_as_of_empty_table() -> None:
+    session = _DerivSession(None)
+    assert await regime_api._derivatives_as_of(session) is None

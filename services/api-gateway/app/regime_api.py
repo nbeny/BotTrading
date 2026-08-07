@@ -29,7 +29,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cmi_common.cache import Cache
-from cmi_common.db import Price
+from cmi_common.db import DerivativesSnapshot, Price
 from cmi_common.db.models import ContentSentimentAgg
 from cmi_common.db.universe import priced_symbols
 
@@ -170,6 +170,14 @@ async def _dominance_at(
     return round(100 * btc / total, 2), _iso(max(t for _, _, t in rows))
 
 
+async def _derivatives_as_of(session: AsyncSession) -> str | None:
+    """max(time) of derivatives_snapshots — real freshness for funding/ΔOI,
+    replacing 'fraîcheur inconnue' once the table has rows."""
+    stmt = select(func.max(DerivativesSnapshot.time))
+    row = (await session.execute(stmt)).first()
+    return _iso(row[0]) if row and row[0] else None
+
+
 async def _breadth(
     session: AsyncSession,
 ) -> tuple[float | None, int, str | None]:
@@ -251,12 +259,22 @@ async def market_regime(
         await _rollback_quietly(session)
         logger.exception("regime: breadth unavailable")
 
+    deriv_as_of: str | None = None
+    try:
+        deriv_as_of = await _derivatives_as_of(session)
+    except Exception:
+        await _rollback_quietly(session)
+        logger.exception("regime: derivatives as_of unavailable")
+
     btc_change = btc_feat.get("price_change_pct_24h")
     drivers = [
-        regime.funding_driver(_median(_floats(feats, "funding_rate_8h"))),
+        regime.funding_driver(
+            _median(_floats(feats, "funding_rate_8h")), as_of=deriv_as_of
+        ),
         regime.oi_delta_driver(
             _median(_floats(feats, "open_interest_change_pct_24h")),
             float(btc_change) if _is_num(btc_change) else None,
+            as_of=deriv_as_of,
         ),
         regime.sentiment_driver(sent_value, sent_as_of),
         regime.dominance_driver(dom_now, dom_week, dom_as_of),

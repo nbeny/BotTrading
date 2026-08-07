@@ -435,6 +435,69 @@ class MarketDepth(Base):
     source: Mapped[str] = mapped_column(String(32), default="kraken")
 
 
+class DerivativesSnapshot(Base):
+    """Perp positioning snapshot, one row per DerivativesEvent republication.
+
+    Every measurement column is nullable: a partial event is the normal case
+    (funding for the broad tier, OI/ratio for majors only). History is the
+    point — successive identical snapshots are two dated rows, not a bug.
+    """
+
+    __tablename__ = "derivatives_snapshots"
+
+    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    #: The event carries no venue yet; the persister stamps its source. When
+    #: collector-kraken-futures lands (2026-08-06 spec), the event's own venue
+    #: flows through here unchanged.
+    venue: Mapped[str] = mapped_column(String(16), default="binance")
+    funding_rate_8h: Mapped[float | None] = mapped_column(Float, default=None)
+    funding_annualized_pct: Mapped[float | None] = mapped_column(Float, default=None)
+    open_interest_usd: Mapped[Decimal | None] = mapped_column(
+        Numeric(38, 2), default=None
+    )
+    open_interest_change_pct_24h: Mapped[float | None] = mapped_column(
+        Float, default=None
+    )
+    long_short_account_ratio: Mapped[float | None] = mapped_column(Float, default=None)
+
+
+class FundamentalsSnapshot(Base):
+    """Protocol fundamentals snapshot, one row per FundamentalsEvent."""
+
+    __tablename__ = "fundamentals_snapshots"
+
+    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    coin_id: Mapped[str] = mapped_column(String(64))
+    tvl_usd: Mapped[Decimal | None] = mapped_column(Numeric(38, 2), default=None)
+    tvl_change_pct_7d: Mapped[float | None] = mapped_column(Float, default=None)
+    fees_24h_usd: Mapped[Decimal | None] = mapped_column(Numeric(38, 2), default=None)
+    fees_change_pct_7d: Mapped[float | None] = mapped_column(Float, default=None)
+    next_unlock_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    next_unlock_pct_supply: Mapped[float | None] = mapped_column(Float, default=None)
+    #: Keeps "no unlock coming" distinct from "DefiLlama does not track this".
+    has_unlock_schedule: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class DeveloperSnapshot(Base):
+    """Developer activity snapshot, one row per DeveloperEvent."""
+
+    __tablename__ = "developer_snapshots"
+
+    time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    coin_id: Mapped[str] = mapped_column(String(64))
+    repo_count: Mapped[int] = mapped_column(Integer)
+    commit_ratio_4w: Mapped[float | None] = mapped_column(Float, default=None)
+    pr_ratio_4w: Mapped[float | None] = mapped_column(Float, default=None)
+    days_since_push: Mapped[int | None] = mapped_column(Integer, default=None)
+    star_growth_pct_7d: Mapped[float | None] = mapped_column(Float, default=None)
+    all_repos_archived: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 class VenuePair(Base):
     """Which symbols are actually tradable on which venue, and at what minimum.
 

@@ -41,6 +41,7 @@ class AdaptivePollLoop:
         poll_interval: float,
         service: str,
         error_backoff: float = 120.0,
+        restart_delay: float = 5.0,
         sleep: Sleep | None = None,
         normalizer: Normalizer | None = None,
     ) -> None:
@@ -50,8 +51,35 @@ class AdaptivePollLoop:
         self._interval = poll_interval
         self._service = service
         self._error_backoff = error_backoff
+        self._restart_delay = restart_delay
         self._sleep = sleep or asyncio.sleep
         self._normalizer = normalizer
+
+    async def run_forever(self) -> None:
+        """Drive `run()` and bring it back if it ever ends on an exception.
+
+        This is the layer that was missing on 2026-08-07, when one failed Redis
+        call escaped `run()` at 23:35 and every HTTP source stopped ingesting
+        for twelve hours. Nothing logged it: the collectors hold their tasks in
+        `app.state.tasks`, so the strong reference suppressed even asyncio's
+        "Task exception was never retrieved", and uvicorn kept answering
+        /health with 200 — Docker reported `healthy` for a dead collector.
+
+        `run()` guards its own cycle, so reaching this handler means an
+        unforeseen failure above the try. A dead source must be loud and must
+        come back, never silent and never gone.
+        """
+        while True:
+            try:
+                await self.run()
+                return  # `run()` loops forever; returning means a deliberate stop.
+            except Exception:
+                logger.exception(
+                    "%s loop died unexpectedly; restarting in %ss",
+                    self._provider.name,
+                    self._restart_delay,
+                )
+                await self._sleep(self._restart_delay)
 
     async def run(self) -> None:
         max_calls, window = self._provider.rate_limit
@@ -73,7 +101,23 @@ class AdaptivePollLoop:
                 logger.debug("%s disabled by operator; skipping cycle", name)
                 await self._sleep(self._interval)
                 continue
-            if not await self._cache.allow(name, max_calls, window):
+            # Guarded because `Cache.allow` issues a bare `redis.incr` with no
+            # error handling of its own, and this call sits above the try that
+            # protects the rest of the cycle. One Redis blip here used to end
+            # `run()` outright -- see `run_forever`. Unlike `is_enabled`, which
+            # is deliberately fail-open, an unknown budget must fail *closed*:
+            # polling a rate-limited API on an unverified quota is how a source
+            # gets banned rather than throttled.
+            try:
+                allowed = await self._cache.allow(name, max_calls, window)
+            except Exception:
+                UPSTREAM_REQUESTS.labels(self._service, name, "error").inc()
+                logger.warning(
+                    "%s quota check failed; backing off", name, exc_info=True
+                )
+                await self._sleep(self._error_backoff)
+                continue
+            if not allowed:
                 logger.debug("%s budget spent; waiting %ss", name, window)
                 await self._sleep(window)
                 continue

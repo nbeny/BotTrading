@@ -154,7 +154,11 @@ async def _startup(app: FastAPI, settings: Settings) -> None:
     app.state.cache = cache
     app.state.db = db
     app.state.loops = loops
-    app.state.tasks = [asyncio.create_task(loop.run()) for loop in loops]
+    # `run_forever`, not `run`: these tasks are held here for the whole life of
+    # the process, so a strong reference suppresses asyncio's "Task exception
+    # was never retrieved" and a loop that ends on an exception disappears
+    # without a single log line while /health keeps answering 200.
+    app.state.tasks = [asyncio.create_task(loop.run_forever()) for loop in loops]
 
 
 async def _shutdown(app: FastAPI, settings: Settings) -> None:

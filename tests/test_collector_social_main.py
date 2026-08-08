@@ -116,6 +116,10 @@ class _StubLoop:
     async def run(self) -> None:
         return None
 
+    async def run_forever(self) -> None:
+        # What `_startup` actually schedules — the supervised wrapper.
+        return None
+
     async def close(self) -> None:
         self.closed = True
 

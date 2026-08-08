@@ -144,6 +144,80 @@ async def test_persist_error_backs_off_and_does_not_kill_loop() -> None:
     assert sleeps.calls == [120]  # backed off on the persist failure, loop survived
 
 
+class RaisingCache:
+    """A cache whose quota check fails (simulates a Redis blip).
+
+    `Cache.allow` issues a bare `redis.incr` and has no error handling of its
+    own, so a Redis hiccup surfaces here as a raw exception.
+    """
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def allow(self, *_a) -> bool:
+        self.calls += 1
+        raise RuntimeError("redis unavailable")
+
+
+async def test_quota_check_error_backs_off_and_does_not_kill_loop() -> None:
+    # The defect that stopped ingestion for 12h on 2026-08-07: the quota check
+    # sat *outside* the try, so one failed `redis.incr` during a memory squeeze
+    # ended `run()`, the task died with nobody holding its exception, and the
+    # container went on answering /health with 200 for half a day.
+    repo = FakeContentRepository()
+    provider = StubProvider(
+        items=[RawItem(source="stub", kind="social", external_id="1")]
+    )
+    cache = RaisingCache()
+    sleeps = Sleeps(stop_after=1)
+    loop = AdaptivePollLoop(
+        provider,
+        repo,
+        cache,
+        poll_interval=300,
+        service="collector-social",
+        error_backoff=120,
+        sleep=sleeps,
+    )
+    await _run(loop)
+    assert cache.calls == 1  # the quota check ran and blew up
+    assert provider.calls == 0  # fail *closed*: never poll on an unknown budget
+    assert sleeps.calls == [120]  # backed off like any other error, loop survived
+
+
+class DyingLoop(AdaptivePollLoop):
+    """A loop whose `run()` dies `deaths` times before returning normally."""
+
+    def __init__(self, *a, deaths: int, **kw) -> None:
+        super().__init__(*a, **kw)
+        self._deaths = deaths
+        self.runs = 0
+
+    async def run(self) -> None:
+        self.runs += 1
+        if self.runs <= self._deaths:
+            raise RuntimeError("boom")
+
+
+async def test_run_forever_restarts_a_loop_that_died_unexpectedly() -> None:
+    # Defence in depth behind the fix above: whatever escapes `run()` in the
+    # future must be loud and must come back, not end ingestion in silence.
+    sleeps = Sleeps(stop_after=99)
+    loop = DyingLoop(
+        StubProvider(),
+        FakeContentRepository(),
+        FakeCache(),
+        poll_interval=300,
+        service="collector-social",
+        restart_delay=5,
+        sleep=sleeps,
+        deaths=2,
+    )
+    await loop.run_forever()
+    assert loop.runs == 3  # died twice, restarted twice, then ran clean
+    assert sleeps.calls == [5, 5]  # waited the restart delay between attempts
+
+
 class DroppingNormalizer:
     """Normalizer stand-in: keeps nothing, records what it was handed."""
 
